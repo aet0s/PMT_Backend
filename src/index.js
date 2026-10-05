@@ -218,9 +218,30 @@ if (fs.existsSync(clientDist)) {
 }
 
 const { assertEnv } = require('./config/env');
+const { checkProdEnv } = require('./scripts/checkProdEnv');
 
 async function start() {
   assertEnv();
+
+  // K-A.8.11: Automatically enforce full production security pre-flight checks on boot
+  if (process.env.NODE_ENV === 'production') {
+    const { errors, warnings } = checkProdEnv(process.env);
+    if (warnings.length > 0) {
+      console.log('\n⚠️  PRODUCTION PRE-FLIGHT WARNINGS:');
+      for (const w of warnings) {
+        console.warn(`  - ${w}`);
+      }
+    }
+    if (errors.length > 0) {
+      console.error('\n❌ PRODUCTION BOOT ABORTED: check:prod-env verification failed:');
+      for (const err of errors) {
+        console.error(`  ✖ ${err}`);
+      }
+      console.error('\nAborting startup. Correct these environment variables before deploying to production.\n');
+      process.exit(1);
+    }
+  }
+
   await db.ensureRuntimeSchema();
   initSocket(server);
   initReminderCron();
