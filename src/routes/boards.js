@@ -5,7 +5,10 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission } = require('../middleware/permissions');
 const { broadcastBoardEvent, sendUserEvent } = require('../socket');
-const { notify } = require('../services/notify');
+const path = require('path');
+const fs = require('fs');
+const { queueFileCleanupRetry } = require('../utils/fileCleanupQueue');
+const { logAuthEvent } = require('../services/authAudit');
 
 const router = express.Router();
 
@@ -400,41 +403,75 @@ router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), vali
 router.delete('/:id', requireAuth, requirePermission('board.delete'), async (req, res, next) => {
   const boardId = Number(req.params.id);
 
+  // 1. Resolve board and verify existence
+  const [board] = await req.db.query('SELECT id, name, workspace_id FROM boards WHERE id = ?', [boardId]);
+  if (!board) {
+    return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+  }
+
+  // 2. Fetch all attachment file paths belonging to this board (excluding external link attachments)
+  const attachments = await req.db.query(
+    `SELECT a.id, a.file_name, a.file_url, a.file_type FROM attachments a
+     JOIN cards c ON a.card_id = c.id
+     JOIN lists l ON c.list_id = l.id
+     WHERE l.board_id = ? AND a.file_type != 'link'`,
+    [boardId]
+  );
+
+  // 3. Execute database deletion in a transaction FIRST
   try {
-    const board = await req.db.query('SELECT id, name FROM boards WHERE id = ?', [boardId]);
-    if (board.length === 0) {
-      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
-    }
+    await req.db.query('START TRANSACTION');
 
-    // 1. Gather all file paths from card attachments on this board to unlink from disk
-    const attachments = await req.db.query(
-      `SELECT a.file_path FROM attachments a
-       JOIN cards c ON a.card_id = c.id
-       JOIN lists l ON c.list_id = l.id
-       WHERE l.board_id = ? AND a.file_path IS NOT NULL`,
-      [boardId]
-    );
+    // Record audit event in tenant database before cascade delete
+    await logAuthEvent(req.db, {
+      userId: req.user.id,
+      email: req.user.email,
+      eventType: 'BOARD_DELETED',
+      req,
+      metadata: { boardId, boardName: board.name, workspaceId: board.workspace_id, filesCount: attachments.length }
+    });
 
-    // 2. Perform cascade delete of board (database foreign keys cascade to lists, cards, comments, checklists, labels, board_members, etc.)
+    // Execute cascade delete
     await req.db.execute('DELETE FROM boards WHERE id = ?', [boardId]);
 
-    // 3. Remove physical files from disk asynchronously
-    const fs = require('fs');
-    const path = require('path');
-    for (const att of attachments) {
-      if (att.file_path) {
-        const fullPath = path.isAbsolute(att.file_path) ? att.file_path : path.join(process.cwd(), att.file_path);
-        fs.promises.unlink(fullPath).catch(() => {});
+    // Commit transaction
+    await req.db.query('COMMIT');
+  } catch (dbErr) {
+    try {
+      await req.db.query('ROLLBACK');
+    } catch (rbErr) {}
+    return next(dbErr);
+  }
+
+  // 4. AFTER COMMIT: Remove files from disk (rejecting path traversal)
+  const tenantUploadDir = path.resolve(process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads'));
+  for (const att of attachments) {
+    if (att.file_url && att.file_type !== 'link') {
+      const relativeKey = att.file_url.startsWith('/api/files/')
+        ? att.file_url.substring('/api/files/'.length)
+        : (att.file_url.startsWith('/uploads/') ? att.file_url.substring('/uploads/'.length) : att.file_url);
+
+      const resolvedPath = path.resolve(tenantUploadDir, relativeKey);
+      // Strictly verify path is within tenant upload directory (no directory traversal)
+      if (!resolvedPath.startsWith(tenantUploadDir + path.sep) && resolvedPath !== tenantUploadDir) {
+        console.error(`[SECURITY] Path traversal rejected during file cleanup for board ${boardId}: '${att.file_url}'`);
+        continue;
+      }
+      try {
+        if (fs.existsSync(resolvedPath)) {
+          await fs.promises.unlink(resolvedPath);
+        }
+      } catch (unlinkErr) {
+        console.error(`[FILE_CLEANUP] Failed to unlink file ${resolvedPath}:`, unlinkErr.message);
+        queueFileCleanupRetry(resolvedPath);
       }
     }
-
-    // 4. Broadcast board deletion to all connected clients
-    broadcastBoardEvent(boardId, 'board:deleted', { boardId }, req.headers['x-origin-id'], req.tenant?.id);
-
-    return res.json({ message: 'Board deleted successfully', boardId });
-  } catch (err) {
-    next(err);
   }
+
+  // 5. Broadcast deletion over socket to other connected users
+  broadcastBoardEvent(boardId, 'board:deleted', { boardId }, req.headers['x-origin-id'], req.tenant?.id);
+
+  return res.json({ message: 'Board deleted successfully', boardId });
 });
 
 // GET /api/boards/:id/workspace-members (List workspace members and their access status to this board)
