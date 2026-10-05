@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
 const { isOwnerRole } = require('../utils/roleRank');
+const { broadcastWorkspaceEvent } = require('../socket');
 
 const router = express.Router();
 
@@ -93,8 +94,13 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     const updatedRole = updatedRoleRes[0];
     const keys = updatedRole.permission_keys_str ? updatedRole.permission_keys_str.split(',') : [];
+    const rolePayload = { ...updatedRole, permission_keys: keys };
 
-    return res.json({ role: { ...updatedRole, permission_keys: keys } });
+    if (workspaceId) {
+      broadcastWorkspaceEvent(workspaceId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
+    }
+
+    return res.json({ role: rolePayload });
   } catch (err) {
     next(err);
   }
@@ -145,6 +151,11 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     }
 
     await req.db.execute('DELETE FROM roles WHERE id = ?', [roleId]);
+
+    if (workspaceId) {
+      broadcastWorkspaceEvent(workspaceId, 'workspace:role_deleted', { roleId }, req.headers['x-origin-id'], req.tenant?.id);
+    }
+
     return res.json({ message: 'Custom role deleted successfully', id: roleId });
   } catch (err) {
     next(err);

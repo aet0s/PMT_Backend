@@ -6,6 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { notify } = require('../services/notify');
 const { userHasPermission } = require('../middleware/permissions');
+const { broadcastWorkspaceEvent } = require('../socket');
 
 const router = express.Router();
 
@@ -258,6 +259,9 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
     const inviteUrl = `${clientBase}/register?invite_token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
 
     if (existingUserRes.length === 0) {
+      broadcastWorkspaceEvent(workspace_id, 'workspace:invitation_created', {
+        invitation: { id: invitationId, email: normalizedEmail, workspace_id, token, expires_at: expiresAt }
+      }, req.headers['x-origin-id'], req.tenant?.id);
       return res.status(202).json({
         requires_registration: true,
         invite_token: token,
@@ -323,17 +327,21 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
       meta: { workspaceName: wsName }
     });
 
+    const memberPayload = {
+      id: targetUser.id,
+      name: targetUser.name,
+      email: targetUser.email,
+      role: 'member',
+      workspace_id,
+      board_ids
+    };
+
+    broadcastWorkspaceEvent(workspace_id, 'workspace:member_added', { member: memberPayload }, req.headers['x-origin-id'], req.tenant?.id);
+
     return res.json({
       invite_token: token,
       invite_url: inviteUrl,
-      member: {
-        id: targetUser.id,
-        name: targetUser.name,
-        email: targetUser.email,
-        role: 'member',
-        workspace_id,
-        board_ids
-      }
+      member: memberPayload
     });
   } catch (err) {
     next(err);
@@ -451,6 +459,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     }
 
     await req.db.execute('DELETE FROM pending_invitations WHERE id = ?', [inviteId]);
+    broadcastWorkspaceEvent(inviteRes[0].workspace_id, 'workspace:invitation_revoked', { invitationId: inviteId }, req.headers['x-origin-id'], req.tenant?.id);
     return res.json({ message: 'Invitation revoked successfully' });
   } catch (err) {
     next(err);

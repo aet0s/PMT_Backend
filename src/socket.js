@@ -30,6 +30,10 @@ function getUserRoom(userId, tenantId) {
   return tenantId ? `t:${tenantId}:user:${userId}` : `user:${userId}`;
 }
 
+function getWorkspaceRoom(workspaceId, tenantId) {
+  return tenantId ? `t:${tenantId}:workspace:${workspaceId}` : `workspace:${workspaceId}`;
+}
+
 function getAllowedOrigins() {
   const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (process.env.CLIENT_URL) {
@@ -108,6 +112,29 @@ function initSocket(server) {
     if (!socket.tenantId) {
       socket.join(`user:${socket.userId}`);
     }
+
+    // Join workspace room with tenant isolation
+    socket.on('join_workspace', ({ workspaceId, tenantId }) => {
+      if (!workspaceId) return;
+      const wsId = Number(workspaceId);
+      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
+      const room = getWorkspaceRoom(wsId, effectiveTenantId);
+      socket.join(room);
+      if (process.env.DEV_SINGLE_TENANT === '1') {
+        socket.join(`workspace:${wsId}`);
+      }
+    });
+
+    socket.on('leave_workspace', ({ workspaceId, tenantId }) => {
+      if (!workspaceId) return;
+      const wsId = Number(workspaceId);
+      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
+      const room = getWorkspaceRoom(wsId, effectiveTenantId);
+      socket.leave(room);
+      if (process.env.DEV_SINGLE_TENANT === '1') {
+        socket.leave(`workspace:${wsId}`);
+      }
+    });
 
     // Join board room with tenant isolation
     socket.on('join_board', async ({ boardId, tenantId }) => {
@@ -295,6 +322,26 @@ function broadcastBoardEvent(boardId, eventName, payload, originId, tenantId = n
   }
 }
 
+function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = null, tenantId = null) {
+  if (!io || !workspaceId) return;
+  const wsId = Number(workspaceId);
+  const data = {
+    ...payload,
+    originId: originId || null,
+    workspaceId: wsId,
+    timestamp: new Date().toISOString()
+  };
+
+  if (tenantId && process.env.DEV_SINGLE_TENANT !== '1') {
+    io.to(`t:${tenantId}:workspace:${wsId}`).emit(eventName, data);
+  } else {
+    io.to(`workspace:${wsId}`).emit(eventName, data);
+    if (tenantId) {
+      io.to(`t:${tenantId}:workspace:${wsId}`).emit(eventName, data);
+    }
+  }
+}
+
 function sendUserNotification(userId, notification, tenantId = null) {
   if (!io || !userId) return;
   if (tenantId) {
@@ -357,10 +404,12 @@ module.exports = {
   initSocket,
   getIO,
   broadcastBoardEvent,
+  broadcastWorkspaceEvent,
   sendUserNotification,
   sendUserEvent,
   disconnectUserSockets,
   disconnectTenantSockets,
   getBoardRoom,
+  getWorkspaceRoom,
   getUserRoom
 };

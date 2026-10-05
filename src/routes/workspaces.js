@@ -11,7 +11,7 @@ const {
   countSuperAdmins,
   countOwners
 } = require('../middleware/permissions');
-const { sendUserEvent, disconnectUserSockets } = require('../socket');
+const { sendUserEvent, disconnectUserSockets, broadcastWorkspaceEvent } = require('../socket');
 const { notify } = require('../services/notify');
 const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
@@ -181,7 +181,9 @@ router.patch('/:id', requireAuth, requirePermission('workspace.edit_settings'), 
     }
 
     const [updatedWs] = await req.db.query('SELECT id, name, is_archived, require_2fa_for_admins, created_at FROM workspaces WHERE id = ?', [workspaceId]);
-    return res.json({ workspace: { ...updatedWs, require_2fa_for_admins: !!updatedWs.require_2fa_for_admins } });
+    const wsPayload = { ...updatedWs, require_2fa_for_admins: !!updatedWs.require_2fa_for_admins };
+    broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
+    return res.json({ workspace: wsPayload });
   } catch (err) {
     next(err);
   }
@@ -300,13 +302,13 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
       }
     }
 
-    return res.status(201).json({
-      role: {
-        ...role,
-        member_count: 0,
-        permission_keys: permission_keys || []
-      }
-    });
+    const createdRole = {
+      ...role,
+      member_count: 0,
+      permission_keys: permission_keys || []
+    };
+    broadcastWorkspaceEvent(workspaceId, 'workspace:role_created', { role: createdRole }, req.headers['x-origin-id'], req.tenant?.id);
+    return res.status(201).json({ role: createdRole });
   } catch (err) {
     next(err);
   }
@@ -589,6 +591,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
       await revokeAllSessions(req.db, targetUserId, 'ROLE_CHANGE', req);
     }
 
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', { workspaceId, targetUserId, roleId: role_id }, req.headers['x-origin-id'], req.tenant?.id);
     return res.json({ message: 'Member role and permissions updated successfully' });
   } catch (err) {
     next(err);
@@ -664,6 +667,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
     // Revoke all sessions for removed member
     await revokeAllSessions(req.db, targetUserId, 'MEMBER_REMOVED', req);
 
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_removed', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
     return res.json({ message: 'Member removed from workspace' });
   } catch (err) {
     next(err);
