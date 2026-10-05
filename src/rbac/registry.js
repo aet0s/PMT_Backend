@@ -235,7 +235,9 @@ const LEGACY_PERMISSION_ALIASES = {
   'card.comment': 'comment.create',
   'card.manage_attachments': 'attachment.upload',
   'card.assign_members': 'task.assign',
-  'member.view_all': 'member.view'
+  'member.view_all': 'member.view',
+  'workspace.invite_members': 'member.invite',
+  'workspace.manage_members': 'member.assign_role'
 };
 
 // Reverse map

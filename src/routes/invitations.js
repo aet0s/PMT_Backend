@@ -254,10 +254,14 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
       );
     }
 
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+    const inviteUrl = `${clientBase}/register?invite_token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
+
     if (existingUserRes.length === 0) {
       return res.status(202).json({
         requires_registration: true,
         invite_token: token,
+        invite_url: inviteUrl,
         message: 'Invitation link generated! Copy and share the registration link below with the user to test signup.'
       });
     }
@@ -321,6 +325,7 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
 
     return res.json({
       invite_token: token,
+      invite_url: inviteUrl,
       member: {
         id: targetUser.id,
         name: targetUser.name,

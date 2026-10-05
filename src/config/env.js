@@ -29,6 +29,9 @@ function validateEnv(env = process.env) {
     if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {
       errors.push('JWT_SECRET is required and must be at least 32 characters in production');
     }
+    if (!env.CLIENT_URL || !env.CLIENT_URL.startsWith('https://')) {
+      errors.push('CLIENT_URL is required and must start with https:// in production (e.g. https://pmt.solarman.in)');
+    }
   } else {
     if (!env.JWT_SECRET) {
       errors.push('JWT_SECRET is required');
