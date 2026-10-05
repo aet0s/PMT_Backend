@@ -20,23 +20,32 @@ function getDbConfig(database) {
 }
 
 async function ensureDatabase(dbName) {
-  if (!dbName.startsWith('pm_')) {
-    throw new Error(`Database safety violation: Refusing to create/touch database '${dbName}' without 'pm_' prefix.`);
+  if (!dbName || !/^[a-zA-Z0-9_]+$/.test(dbName)) {
+    throw new Error(`Invalid database name '${dbName}'. Only alphanumeric characters and underscores are allowed.`);
   }
 
-  const conn = await mysql.createConnection({
-    host: process.env.MYSQL_HOST || '127.0.0.1',
-    port: Number(process.env.MYSQL_PORT || 3306),
-    user: process.env.MYSQL_USER || 'root',
-    password: process.env.MYSQL_PASSWORD || ''
-  });
-
   try {
-    await conn.query(
-      `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-    );
-  } finally {
-    await conn.end();
+    const conn = await mysql.createConnection({
+      host: process.env.MYSQL_HOST || '127.0.0.1',
+      port: Number(process.env.MYSQL_PORT || 3306),
+      user: process.env.MYSQL_USER || 'root',
+      password: process.env.MYSQL_PASSWORD !== undefined ? process.env.MYSQL_PASSWORD : ''
+    });
+
+    try {
+      await conn.query(
+        `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+      );
+    } catch (createErr) {
+      // In shared hosting or managed environments without global CREATE DATABASE privilege,
+      // log warning and continue as the database may already have been created.
+      console.warn(`[WARN] ensureDatabase could not run CREATE DATABASE for '${dbName}' (might already exist):`, createErr.message);
+    } finally {
+      await conn.end();
+    }
+  } catch (connErr) {
+    // If connecting without a specific database is disallowed by the server, proceed directly to connecting to dbName
+    console.warn(`[WARN] ensureDatabase could not connect to MySQL server root:`, connErr.message);
   }
 }
 

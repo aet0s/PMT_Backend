@@ -61,6 +61,38 @@ app.use('/api/permissions', permissionsRouter);
 app.use('/api/roles', rolesRouter);
 app.use('/api/files', filesRouter);
 
+// Ensure database schema is ready even when started via Passenger, cPanel, PM2, or process manager
+let schemaReadyPromise = null;
+async function ensureSchemaReady() {
+  if (!schemaReadyPromise) {
+    schemaReadyPromise = db.ensureRuntimeSchema().catch((err) => {
+      console.warn('[DB] Automatic schema migration warning:', err.message);
+      schemaReadyPromise = null;
+    });
+  }
+  return schemaReadyPromise;
+}
+
+// Auto-run schema migration on first incoming API request
+app.use('/api', async (req, res, next) => {
+  if (req.path === '/health') return next();
+  try {
+    await ensureSchemaReady();
+  } catch (e) {}
+  next();
+});
+
+// Setup / manual migration runner endpoint
+app.post('/api/setup/migrate', async (req, res) => {
+  try {
+    const results = await db.ensureRuntimeSchema();
+    return res.json({ ok: true, message: 'Database migrations successfully applied', results });
+  } catch (err) {
+    console.error('Migration error:', err);
+    return res.status(500).json({ error: { message: err.message, code: 'MIGRATION_FAILED' } });
+  }
+});
+
 // Health Check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

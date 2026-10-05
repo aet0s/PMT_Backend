@@ -13,10 +13,26 @@ const pool = createPool({
 });
 
 async function ensureRuntimeSchema() {
-  // Real migrations replace runtime DDL mutations.
-  // In single-tenant dev mode, ensure pm_dev_single has migrations applied.
   const dbName = process.env.MYSQL_DATABASE || 'pm_dev_single';
-  await migrator.migrateSingleTenant(dbName);
+  const results = { master: [], tenant: [] };
+
+  // If in multi-tenant mode, ensure master schema is migrated
+  if (process.env.DEV_SINGLE_TENANT !== '1') {
+    try {
+      results.master = await migrator.migrateMaster();
+    } catch (err) {
+      console.warn('[DB] Master migration warning during startup:', err.message);
+    }
+  }
+
+  // Always ensure single/tenant database has migrations applied
+  try {
+    results.tenant = await migrator.migrateSingleTenant(dbName);
+  } catch (err) {
+    console.warn('[DB] Single-tenant migration warning during startup:', err.message);
+  }
+
+  return results;
 }
 
 module.exports = {

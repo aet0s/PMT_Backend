@@ -276,13 +276,13 @@ function runAudit() {
   console.log(`- Test Route Count:       ${testResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodResult.count !== 85) {
-    console.error(`[AUDIT FAILED] Expected exactly 85 routes in production mode, got ${prodResult.count}`);
+  if (prodResult.count !== 86) {
+    console.error(`[AUDIT FAILED] Expected exactly 86 routes in production mode, got ${prodResult.count}`);
     process.exit(1);
   }
 
-  if (testResult.count !== 86) {
-    console.error(`[AUDIT FAILED] Expected exactly 86 routes in test mode, got ${testResult.count}`);
+  if (testResult.count !== 87) {
+    console.error(`[AUDIT FAILED] Expected exactly 87 routes in test mode, got ${testResult.count}`);
     process.exit(1);
   }
 
