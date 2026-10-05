@@ -90,7 +90,12 @@ async function runTests() {
 
     const generalCorpRes = await fetch(`${baseUrl}/api/health`);
     assert.strictEqual(generalCorpRes.headers.get('cross-origin-resource-policy'), 'same-origin');
-    console.log('✓ CORP is cross-origin for files/uploads and same-origin for general routes.');
+
+    const uploadsCorpRes = await fetch(`${baseUrl}/uploads/test.png`);
+    assert.strictEqual(uploadsCorpRes.status, 404);
+    assert.strictEqual(uploadsCorpRes.headers.get('content-type')?.includes('application/json'), true);
+    assert.notStrictEqual(uploadsCorpRes.headers.get('cross-origin-resource-policy'), 'cross-origin');
+    console.log('✓ CORP is cross-origin ONLY for authenticated /api/files; /uploads returns 404 JSON.');
 
     // 7. Unknown /api route returns JSON 404
     console.log('7. Testing unknown /api routes return JSON 404...');

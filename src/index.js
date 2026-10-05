@@ -58,8 +58,8 @@ app.use(
   })
 );
 
-// Allow cross-origin embedding for files and uploaded media (avatars, attachments, logos)
-app.use(['/api/files', '/uploads'], (req, res, next) => {
+// Allow cross-origin embedding ONLY for authenticated tenant file route /api/files
+app.use('/api/files', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
 });
@@ -97,9 +97,15 @@ app.use(csrfProtection(getAllowedOrigins));
 app.use(cookieParser());
 app.use(express.json());
 
-// Secure tenant-isolated file serving (requires authentication, prevents cross-tenant access and path traversal)
-app.use('/uploads', (req, res, next) => {
-  filesRouter(req, res, next);
+// Direct access to /uploads is strictly prohibited in all environments.
+// Files must only be accessed through the authenticated /api/files route with permission checks.
+app.all(['/uploads', '/uploads/*'], (req, res) => {
+  res.status(404).json({
+    error: {
+      message: 'Direct static access to /uploads is disabled. Files are only accessible via authenticated /api/files endpoints.',
+      code: 'NOT_FOUND'
+    }
+  });
 });
 
 // API Routes
