@@ -1,0 +1,4 @@
+-- Note: Schema definitions have migrated to versioned migrations:
+-- Master DB: server/src/db/migrations/master/
+-- Tenant DB: server/src/db/migrations/tenant/
+-- See 0001_baseline.sql for full MySQL / MariaDB baseline schema.

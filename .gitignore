@@ -13,10 +13,14 @@ server/public/uploads/
 
 # Backups and database dumps
 backups/
-*.sql
 *.dump
 *.zip
 *.tar.gz
+
+# Never ignore migration scripts or schema definitions
+!src/db/migrations/
+!src/db/migrations/**/*.sql
+!src/db/schema.sql
 
 # Logs
 logs/
