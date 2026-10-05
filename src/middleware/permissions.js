@@ -5,10 +5,16 @@ const { getTenantDb, getDevSingleDb } = require('../services/tenantPools');
 const { expandPermissionKeys } = require('../rbac/registry');
 
 function getActiveDb(reqOrDb) {
-  if (!reqOrDb) return getDevSingleDb();
-  if (reqOrDb.db) return reqOrDb.db;
-  if (typeof reqOrDb.query === 'function') return reqOrDb;
-  return getDevSingleDb();
+  if (reqOrDb && reqOrDb.db && typeof reqOrDb.db.query === 'function') {
+    return reqOrDb.db;
+  }
+  if (reqOrDb && typeof reqOrDb.query === 'function') {
+    return reqOrDb;
+  }
+  if (process.env.DEV_SINGLE_TENANT === '1') {
+    return getDevSingleDb();
+  }
+  throw new Error('Tenant database instance is required outside single-tenant development mode (getActiveDb)');
 }
 
 /**
@@ -363,6 +369,7 @@ async function countOwners(workspaceId, dbInstance = null) {
 }
 
 module.exports = {
+  getActiveDb,
   resolveWorkspaceId,
   userHasPermission,
   getUserPermissions,

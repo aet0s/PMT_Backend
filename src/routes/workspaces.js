@@ -209,7 +209,7 @@ router.get('/:id/my-permissions', requireAuth, async (req, res, next) => {
   const workspaceId = Number(req.params.id);
 
   try {
-    const permData = await getUserPermissions(req.user.id, workspaceId);
+    const permData = await getUserPermissions(req.user.id, workspaceId, req.db);
     return res.json(permData);
   } catch (err) {
     next(err);
