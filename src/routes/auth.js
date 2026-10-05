@@ -41,6 +41,36 @@ const BCRYPT_ROUNDS = 12;
 const usedChallengeTokens = new Set();
 const challengeFailedAttempts = new Map();
 
+// Reserved company slugs that cannot be registered
+const RESERVED_SLUGS = new Set([
+  'admin', 'administrator', 'api', 'app', 'assets', 'auth', 'billing', 'config',
+  'dashboard', 'dev', 'docs', 'help', 'internal', 'login', 'mail', 'master',
+  'pmt', 'portal', 'private', 'public', 'register', 'root', 'secure', 'settings',
+  'setup', 'static', 'status', 'support', 'system', 'tenant', 'test', 'user', 'www'
+]);
+
+// Registration abuse prevention: per-IP tracking and provisioning concurrency
+const registrationIpTracker = new Map();
+let activeTenantProvisionings = 0;
+
+function checkRegistrationIpLimit(ip) {
+  const windowMs = 60 * 60 * 1000; // 1 hour
+  const max = Number(process.env.REGISTRATION_RATE_LIMIT_PER_HOUR || 3);
+  const now = Date.now();
+  const timestamps = (registrationIpTracker.get(ip) || []).filter((t) => now - t < windowMs);
+  if (timestamps.length >= max) {
+    return false;
+  }
+  timestamps.push(now);
+  registrationIpTracker.set(ip, timestamps);
+  return true;
+}
+
+function resetRegistrationLimitsForTest() {
+  registrationIpTracker.clear();
+  activeTenantProvisionings = 0;
+}
+
 // Dummy bcrypt hash for constant-time simulated comparisons when email does not exist
 const DUMMY_HASH = '$2b$12$e8r0.sA8uU1qR09rVpGqf.rT7a7b8c9d0e1f2g3h4i5j6k7l8m9n0';
 
@@ -127,7 +157,18 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
   const password = req.body.password || req.body.admin_password;
   const { slug, phone } = req.body;
 
-  // Validate Password Policy (min 10 chars, mixed classes)
+  // 1. IP rate limiting (configurable, default 3 per hour)
+  const clientIp = req.ip || '127.0.0.1';
+  if (!checkRegistrationIpLimit(clientIp)) {
+    return res.status(429).json({
+      error: {
+        message: 'Too many registration requests from this IP address. Please try again later.',
+        code: 'REGISTRATION_RATE_LIMIT_EXCEEDED'
+      }
+    });
+  }
+
+  // 2. Validate Password Policy (min 10 chars, mixed classes)
   const passwordCheck = validatePassword(password);
   if (!passwordCheck.isValid) {
     return res.status(400).json({
@@ -137,9 +178,68 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
 
   const normalizedEmail = normalizeEmail(email);
   const normalizedSlug = slugify(slug || companyName);
+
+  // 3. Format validation for slug and email
+  const slugRegex = /^[a-z0-9](?:[a-z0-9-_]{1,61}[a-z0-9])?$/;
+  if (!slugRegex.test(normalizedSlug) || normalizedSlug.length < 3) {
+    return res.status(400).json({
+      error: {
+        message: 'Company URL / slug must be between 3 and 63 lowercase alphanumeric characters, underscores, and hyphens, and cannot start or end with a hyphen or underscore.',
+        code: 'INVALID_SLUG_FORMAT'
+      }
+    });
+  }
+
+  // 4. Reserved slug check
+  if (RESERVED_SLUGS.has(normalizedSlug)) {
+    return res.status(400).json({
+      error: {
+        message: `Company URL / slug "${normalizedSlug}" is reserved for system use.`,
+        code: 'SLUG_RESERVED'
+      }
+    });
+  }
+
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  if (!emailRegex.test(normalizedEmail)) {
+    return res.status(400).json({
+      error: { message: 'Invalid email address format.', code: 'INVALID_EMAIL_FORMAT' }
+    });
+  }
+
+  // 5. Artificial CPU Cost: Compute bcrypt hash upfront BEFORE any database operations
+  // This imposes computational work (cost 12) on callers, preventing unauthenticated callers from spamming cheap DB queries
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+  // 6. Concurrency limit on active provisioning jobs (max 2 at a time)
+  const maxConcurrency = Number(process.env.MAX_CONCURRENT_PROVISIONINGS || 2);
+  if (activeTenantProvisionings >= maxConcurrency) {
+    return res.status(429).json({
+      error: {
+        message: 'Server is currently busy provisioning new accounts. Please retry in a few moments.',
+        code: 'PROVISIONING_BUSY'
+      }
+    });
+  }
+
   const masterDb = getMasterDb();
 
   try {
+    // 7. Global daily cap on new tenants (configurable, default 20)
+    const dailyCap = Number(process.env.REGISTRATION_DAILY_CAP || 20);
+    const capRows = await masterDb.query(
+      "SELECT COUNT(*) as count FROM tenants WHERE created_at >= NOW() - INTERVAL 1 DAY"
+    );
+    const recentTenantsCount = capRows && capRows[0] ? Number(capRows[0].count) : 0;
+    if (recentTenantsCount >= dailyCap) {
+      return res.status(429).json({
+        error: {
+          message: 'Daily company registration limit reached. Please contact support.',
+          code: 'DAILY_REGISTRATION_CAP_REACHED'
+        }
+      });
+    }
+
     // Check slug availability in master tenants (Item 8: deleted slug stays reserved for 30 days)
     const existingTenant = await masterDb.query(
       "SELECT id, slug, status, deleted_at, updated_at FROM tenants WHERE slug = ?",
@@ -179,15 +279,20 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
 
     // If verification mode is OFF (default), provision immediately without OTP
     if (verificationMode !== 'on') {
-      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      const provisionResult = await provisionTenant({
-        companyName: companyName.trim(),
-        slug: normalizedSlug,
-        ownerEmail: normalizedEmail,
-        ownerPasswordHash: passwordHash,
-        ownerName: name.trim(),
-        phone: phone || null
-      });
+      activeTenantProvisionings++;
+      let provisionResult;
+      try {
+        provisionResult = await provisionTenant({
+          companyName: companyName.trim(),
+          slug: normalizedSlug,
+          ownerEmail: normalizedEmail,
+          ownerPasswordHash: passwordHash,
+          ownerName: name.trim(),
+          phone: phone || null
+        });
+      } finally {
+        activeTenantProvisionings--;
+      }
 
       const { tenant, owner, workspace } = provisionResult;
       const tenantDb = await getTenantDb(tenant.id);
@@ -219,7 +324,6 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
     // Verification mode is ON: Keep existing OTP & pending registration flow
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -1550,5 +1654,8 @@ const handlePasswordChange = async (req, res, next) => {
 router.put('/password', requireAuth, handlePasswordChange);
 router.post('/password', requireAuth, handlePasswordChange);
 router.post('/change-password', requireAuth, handlePasswordChange);
+
+router.resetRegistrationLimitsForTest = resetRegistrationLimitsForTest;
+router.RESERVED_SLUGS = RESERVED_SLUGS;
 
 module.exports = router;

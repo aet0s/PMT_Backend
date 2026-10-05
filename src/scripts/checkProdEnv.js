@@ -86,20 +86,42 @@ function checkProdEnv(env = process.env) {
     }
   }
 
-  // 7. Open Registration & Verification Mode Guard
+  // 8. Built-in HTTPS check (Nginx must terminate TLS in production)
+  if (env.HTTPS === 'true') {
+    addError(
+      'HTTPS',
+      "Built-in Node.js HTTPS server (HTTPS=true) is prohibited in production",
+      "Remove HTTPS=true or set HTTPS=false. Nginx reverse proxy must terminate TLS and forward to backend"
+    );
+  }
+
+  // 9. Host Listen Address & Trust Proxy Check
+  const host = env.HOST || '0.0.0.0';
+  if (host === '0.0.0.0') {
+    warnings.push(
+      `HOST is set to 0.0.0.0 while 'trust proxy' is enabled. In production, bind Express to 127.0.0.1 (HOST=127.0.0.1) or enforce strict firewall rules so clients cannot reach Node.js directly and spoof IP addresses.`
+    );
+  }
+
+  // 10. Open Registration & Verification Mode Guard
   const registrationEnabled = env.REGISTRATION_ENABLED !== 'false' && env.REGISTRATION_ENABLED !== '0';
   const verificationMode = (env.VERIFICATION_MODE || 'off').toLowerCase();
 
-  if (registrationEnabled && verificationMode === 'off') {
+  if (registrationEnabled) {
     warnings.push(
-      `Open registration is enabled without email/phone verification (VERIFICATION_MODE=off). Ensure ALLOW_OPEN_REGISTRATION=true is intentional.`
+      `⚠️  OPEN REGISTRATION IS ACTIVE (REGISTRATION_ENABLED=true). Ensure REGISTRATION_RATE_LIMIT_PER_HOUR and REGISTRATION_DAILY_CAP are monitored.`
     );
-    if (env.ALLOW_OPEN_REGISTRATION !== 'true') {
-      addError('ALLOW_OPEN_REGISTRATION', 'Unverified open registration is enabled without explicit acknowledgement', "Set ALLOW_OPEN_REGISTRATION=true or configure VERIFICATION_MODE=otp");
+    if (verificationMode === 'off') {
+      warnings.push(
+        `Open registration is enabled without email/phone verification (VERIFICATION_MODE=off). Ensure ALLOW_OPEN_REGISTRATION=true is intentional.`
+      );
+      if (env.ALLOW_OPEN_REGISTRATION !== 'true') {
+        addError('ALLOW_OPEN_REGISTRATION', 'Unverified open registration is enabled without explicit acknowledgement', "Set ALLOW_OPEN_REGISTRATION=true or configure VERIFICATION_MODE=otp");
+      }
     }
   }
 
-  // 8. Uploads Directory Outside Web Root
+  // 11. Uploads Directory Outside Web Root
   const uploadsDir = path.resolve(env.UPLOADS_DIR || path.join(__dirname, '../../uploads'));
   const publicDir = path.resolve(__dirname, '../../public');
   const clientDist = path.resolve(__dirname, '../../../client/dist');
@@ -108,7 +130,7 @@ function checkProdEnv(env = process.env) {
     addError('UPLOADS_DIR', `Uploads path (${uploadsDir}) resides inside public web root`, "Configure UPLOADS_DIR to a private directory outside the document root");
   }
 
-  // 9. Backup Job Configuration
+  // 12. Backup Job Configuration
   const backupConfigured = env.BACKUP_JOB_CONFIGURED === 'true' || env.BACKUP_DIR;
   if (!backupConfigured) {
     addError('BACKUP_JOB_CONFIGURED', 'Automated backup job is not confirmed', "Configure daily cron backup ('npm run backup') and set BACKUP_JOB_CONFIGURED=true");

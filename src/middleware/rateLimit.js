@@ -4,11 +4,9 @@
 const ipBuckets = new Map();
 
 function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || '127.0.0.1';
+  // Rely strictly on Express req.ip (configured with app.set('trust proxy', ...))
+  // Never read raw X-Forwarded-For headers directly from req.headers to prevent spoofing
+  return req.ip || '127.0.0.1';
 }
 
 function createRateLimiter({

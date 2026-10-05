@@ -13,6 +13,12 @@ if (process.env.NODE_ENV === 'production' && process.env.DISABLE_RATE_LIMIT) {
   process.exit(1);
 }
 
+// Safety check: Refuse to boot with built-in HTTPS in production (Nginx reverse proxy must terminate TLS)
+if (process.env.NODE_ENV === 'production' && process.env.HTTPS === 'true') {
+  console.error('[FATAL] Server boot refused: Built-in HTTPS server (HTTPS=true) is prohibited in production. Nginx reverse proxy must terminate TLS.');
+  process.exit(1);
+}
+
 const db = require('./db');
 const { initSocket } = require('./socket');
 const { initReminderCron } = require('./cron/reminders');
@@ -137,9 +143,11 @@ app.use('/api/permissions', permissionsRouter);
 app.use('/api/roles', rolesRouter);
 app.use('/api/files', filesRouter);
 
-// Health Check
+const { getSystemHealthStatus } = require('./db/migrator');
+
+// Health Check (Non-sensitive status: ok / migrating / degraded; no versions or names)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: getSystemHealthStatus(), timestamp: new Date().toISOString() });
 });
 
 // Dev/Test helper - ONLY registered when NODE_ENV === 'test'
@@ -227,7 +235,14 @@ async function start() {
     }
   }
 
-  await db.ensureRuntimeSchema();
+  try {
+    await db.ensureRuntimeSchema();
+  } catch (migErr) {
+    console.error('\n❌ [FATAL] Boot schema migration failed. Aborting startup to prevent serving traffic on an unmigrated or corrupted schema:');
+    console.error(`  ✖ ${migErr.message}\n`);
+    process.exit(1);
+  }
+
   initSocket(server);
   initReminderCron();
   const { startCleanupWorker } = require('./utils/fileCleanupQueue');
