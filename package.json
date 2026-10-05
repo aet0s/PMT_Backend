@@ -26,7 +26,10 @@
     "rbac:audit": "node src/scripts/rbacAudit.js",
     "admin:reset-password": "node src/scripts/adminResetPassword.js",
     "admin:reset-2fa": "node src/scripts/adminReset2fa.js",
-    "db:clean-test": "node src/scripts/cleanTestDatabases.js"
+    "db:clean-test": "node src/scripts/cleanTestDatabases.js",
+    "check:prod-env": "node src/scripts/checkProdEnv.js",
+    "backup": "node src/scripts/backup.js",
+    "backup:restore": "node src/scripts/restoreBackup.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
