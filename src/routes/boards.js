@@ -401,13 +401,37 @@ router.delete('/:id', requireAuth, requirePermission('board.delete'), async (req
   const boardId = Number(req.params.id);
 
   try {
-    const board = await req.db.query('SELECT id FROM boards WHERE id = ?', [boardId]);
+    const board = await req.db.query('SELECT id, name FROM boards WHERE id = ?', [boardId]);
     if (board.length === 0) {
       return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
     }
 
+    // 1. Gather all file paths from card attachments on this board to unlink from disk
+    const attachments = await req.db.query(
+      `SELECT a.file_path FROM attachments a
+       JOIN cards c ON a.card_id = c.id
+       JOIN lists l ON c.list_id = l.id
+       WHERE l.board_id = ? AND a.file_path IS NOT NULL`,
+      [boardId]
+    );
+
+    // 2. Perform cascade delete of board (database foreign keys cascade to lists, cards, comments, checklists, labels, board_members, etc.)
     await req.db.execute('DELETE FROM boards WHERE id = ?', [boardId]);
-    return res.json({ message: 'Board deleted successfully' });
+
+    // 3. Remove physical files from disk asynchronously
+    const fs = require('fs');
+    const path = require('path');
+    for (const att of attachments) {
+      if (att.file_path) {
+        const fullPath = path.isAbsolute(att.file_path) ? att.file_path : path.join(process.cwd(), att.file_path);
+        fs.promises.unlink(fullPath).catch(() => {});
+      }
+    }
+
+    // 4. Broadcast board deletion to all connected clients
+    broadcastBoardEvent(boardId, 'board:deleted', { boardId }, req.headers['x-origin-id'], req.tenant?.id);
+
+    return res.json({ message: 'Board deleted successfully', boardId });
   } catch (err) {
     next(err);
   }

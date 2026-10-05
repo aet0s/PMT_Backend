@@ -30,10 +30,29 @@ function getUserRoom(userId, tenantId) {
   return tenantId ? `t:${tenantId}:user:${userId}` : `user:${userId}`;
 }
 
+function getAllowedOrigins() {
+  const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (process.env.CLIENT_URL) {
+    const cUrl = process.env.CLIENT_URL.trim();
+    if (!list.includes(cUrl)) list.push(cUrl);
+  }
+  if (list.length === 0) {
+    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  }
+  return list;
+}
+
 function initSocket(server) {
+  const allowedOrigins = getAllowedOrigins();
   io = new Server(server, {
     cors: {
-      origin: process.env.CLIENT_URL || 'http://localhost:5173',
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error(`Socket CORS origin not allowed: ${origin}`), false);
+      },
       credentials: true
     }
   });

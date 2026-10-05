@@ -28,15 +28,59 @@ const permissionsRouter = require('./routes/permissions');
 const rolesRouter = require('./routes/roles');
 const filesRouter = require('./routes/files');
 
+const helmet = require('helmet');
+
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
-// CORS setup for credentials (cookies)
+// Trust reverse proxy (nginx) for real client IP, protocol, and Secure cookies
+app.set('trust proxy', 1);
+
+function getAllowedOrigins() {
+  const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (process.env.CLIENT_URL) {
+    const cUrl = process.env.CLIENT_URL.trim();
+    if (!list.includes(cUrl)) list.push(cUrl);
+  }
+  if (list.length === 0) {
+    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  }
+  return list;
+}
+
+// Helmet Security Headers with cross-origin CORP for file and media serving
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false
+  })
+);
+
+// CORS setup for cross-subdomain credentials (cookies) and all frontend mutation headers
+const allowedOrigins = getAllowedOrigins();
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    credentials: true
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-origin-id',
+      'x-client-mutation-id',
+      'X-Requested-With',
+      'Accept',
+      'Origin',
+      'Cache-Control'
+    ],
+    maxAge: 86400
   })
 );
 
