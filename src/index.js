@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
@@ -31,7 +32,16 @@ const filesRouter = require('./routes/files');
 const helmet = require('helmet');
 
 const app = express();
-const server = http.createServer(app);
+const isHttps = process.env.HTTPS === 'true' && process.env.SSL_CERT && fs.existsSync(process.env.SSL_CERT);
+const server = isHttps
+  ? https.createServer(
+      {
+        cert: fs.readFileSync(process.env.SSL_CERT),
+        key: fs.readFileSync(process.env.SSL_KEY)
+      },
+      app
+    )
+  : http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
 // Trust reverse proxy (nginx) for real client IP, protocol, and Secure cookies
@@ -89,7 +99,8 @@ app.use(
       'Accept',
       'Origin',
       'Cache-Control',
-      'X-Request-Id'
+      'X-Request-Id',
+      'X-Forwarded-For'
     ],
     exposedHeaders: ['X-Request-Id'],
     maxAge: 86400
