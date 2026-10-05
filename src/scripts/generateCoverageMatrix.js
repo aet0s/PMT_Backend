@@ -112,7 +112,7 @@ function generateMatrix() {
 
     // Cell (e): Cross-tenant isolation (colliding IDs return 404)
     let cellE = '✓ Covered';
-    if (isPublic || r.path === '/api/health' || r.path === '/api/permissions' || r.path === '/api/setup/migrate') {
+    if (isPublic || r.path === '/api/health' || r.path === '/api/permissions') {
       cellE = recordExemption('E-E1', 'System/public endpoint; does not query tenant-scoped relational resources.');
     } else {
       coveredCells++;
@@ -120,7 +120,7 @@ function generateMatrix() {
 
     // Cell (f): IDOR inside tenant (resource in project user is not a member of)
     let cellF = '✓ Covered';
-    if (isPublic || isSelf || r.path === '/api/workspaces' || r.path === '/api/health' || r.path === '/api/permissions' || r.path === '/api/setup/migrate') {
+    if (isPublic || isSelf || r.path === '/api/workspaces' || r.path === '/api/health' || r.path === '/api/permissions') {
       cellF = recordExemption('E-F1', 'Workspace-level, user-level self-scope, or system metadata endpoint; no sub-project IDOR boundary.');
     } else {
       coveredCells++;

@@ -7,6 +7,49 @@ const path = require('path');
 const { ROUTE_PERMISSIONS } = require('../rbac/routePermissions');
 const { PERMISSIONS, SYSTEM_ROLES } = require('../rbac/registry');
 
+// Explicit allow-list of public routes with justification (login, register-company, refresh, logout where applicable, invitation verify, health, public config if any)
+const ALLOWED_PUBLIC_ROUTES = new Map([
+  ['POST /api/auth/register-company', {
+    category: 'registration',
+    justification: 'Company registration flow — unauthenticated tenant onboarding'
+  }],
+  ['POST /api/auth/verify-registration', {
+    category: 'registration',
+    justification: 'Registration verification flow — OTP confirmation for new tenant admin'
+  }],
+  ['POST /api/auth/register', {
+    category: 'registration',
+    justification: 'User registration flow — onboarding via cryptographically signed invite token'
+  }],
+  ['POST /api/auth/login', {
+    category: 'login/session',
+    justification: 'Credential login flow — primary password authentication step 1'
+  }],
+  ['POST /api/auth/2fa/verify-login', {
+    category: 'login/session',
+    justification: 'Login verification flow — TOTP or recovery code challenge before session issuance'
+  }],
+  ['POST /api/auth/refresh', {
+    category: 'login/session',
+    justification: 'Session refresh flow — rotating refresh-token exchange'
+  }],
+  ['GET /api/invitations/verify', {
+    category: 'invitation verify',
+    justification: 'Public invitation token verification — read-only signed token validation'
+  }],
+  ['GET /api/health', {
+    category: 'health',
+    justification: 'Public infrastructure and liveness health check — read-only probe'
+  }],
+  ['POST /api/dev/reset-rate-limit', {
+    category: 'test-only',
+    justification: 'Test environment in-memory rate limit reset helper (only registered in NODE_ENV=test)'
+  }]
+]);
+
+// Categories permitted to write to the database in public routes
+const DB_WRITE_ALLOWED_PUBLIC_CATEGORIES = new Set(['registration', 'login/session']);
+
 function clearServerCache() {
   for (const k of Object.keys(require.cache)) {
     if (k.includes('server')) {
@@ -209,6 +252,8 @@ function auditMode(modeName, devSingleTenant = '0') {
   const liveRouteSet = new Set(liveRoutes.map((r) => `${r.method} ${r.path}`));
   const unregisteredRoutes = [];
   const missingCoverage = [];
+  const unallowedPublicRoutes = [];
+  const unauthorizedPublicDbWriters = [];
 
   // 1. DIRECTION 1: Every live Express route MUST exist in registry with valid metadata
   for (const r of liveRoutes) {
@@ -219,6 +264,20 @@ function auditMode(modeName, devSingleTenant = '0') {
       unregisteredRoutes.push(r);
     } else if (!decl.permission && !decl.publicReason && !decl.selfScoped) {
       missingCoverage.push(r);
+    } else if (decl.publicReason) {
+      // Must appear in explicit ALLOWED_PUBLIC_ROUTES allow-list
+      const allowed = ALLOWED_PUBLIC_ROUTES.get(key);
+      if (!allowed) {
+        unallowedPublicRoutes.push({ key, reason: decl.publicReason });
+      } else {
+        // Enforce DB write rule: no public route may write to the database except login/session/registration flows
+        if (!DB_WRITE_ALLOWED_PUBLIC_CATEGORIES.has(allowed.category)) {
+          // Mutating HTTP methods on public non-auth routes are strictly prohibited
+          if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method) && allowed.category !== 'test-only') {
+            unauthorizedPublicDbWriters.push({ key, category: allowed.category, method: r.method });
+          }
+        }
+      }
     }
   }
 
@@ -244,6 +303,18 @@ function auditMode(modeName, devSingleTenant = '0') {
   if (missingCoverage.length > 0) {
     console.error(`[AUDIT FAILED] Direction 1 failure: ${missingCoverage.length} route(s) lack permission, publicReason, and selfScoped:`);
     missingCoverage.forEach((r) => console.error(`  - ${r.method} ${r.path}`));
+    failed = true;
+  }
+
+  if (unallowedPublicRoutes.length > 0) {
+    console.error(`[AUDIT FAILED] Security rule failure: ${unallowedPublicRoutes.length} public route(s) are NOT in explicit ALLOWED_PUBLIC_ROUTES allow-list:`);
+    unallowedPublicRoutes.forEach((r) => console.error(`  - ${r.key} (Reason: ${r.reason})`));
+    failed = true;
+  }
+
+  if (unauthorizedPublicDbWriters.length > 0) {
+    console.error(`[AUDIT FAILED] Security rule failure: ${unauthorizedPublicDbWriters.length} public route(s) have mutating methods outside login/session/registration:`);
+    unauthorizedPublicDbWriters.forEach((r) => console.error(`  - ${r.key} [Category: ${r.category}, Method: ${r.method}]`));
     failed = true;
   }
 
@@ -282,13 +353,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 87 || prodSingleResult.count !== 87) {
-    console.error(`[AUDIT FAILED] Expected exactly 87 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 86 || prodSingleResult.count !== 86) {
+    console.error(`[AUDIT FAILED] Expected exactly 86 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 88 || testSingleResult.count !== 88) {
-    console.error(`[AUDIT FAILED] Expected exactly 88 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 87 || testSingleResult.count !== 87) {
+    console.error(`[AUDIT FAILED] Expected exactly 87 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -308,4 +379,4 @@ if (require.main === module) {
   runAudit();
 }
 
-module.exports = { runAudit };
+module.exports = { runAudit, ALLOWED_PUBLIC_ROUTES, DB_WRITE_ALLOWED_PUBLIC_CATEGORIES };

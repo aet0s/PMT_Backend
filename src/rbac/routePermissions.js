@@ -149,9 +149,8 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/files/avatar',  { selfScoped: 'User uploads their own avatar',                                                                           scope: 'company' }],
   ['GET /api/files/:tenantId/*', { selfScoped: 'file.view — tenant isolation + inline per-attachment authorization in handler',                        scope: 'project' }],
 
-  // ─── System Health & Setup ────────────────────────────────────────────────
+  // ─── System Health ────────────────────────────────────────────────────────
   ['GET /api/health', { publicReason: 'Public infrastructure health check', scope: 'company' }],
-  ['POST /api/setup/migrate', { publicReason: 'Deployment schema migration initialization runner', scope: 'company' }],
 
   // ─── Test / Dev Only Endpoints ────────────────────────────────────────────
   ['POST /api/dev/reset-rate-limit', { publicReason: 'Test environment rate limit reset helper', scope: 'company', testOnly: true }],
