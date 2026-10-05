@@ -1327,6 +1327,68 @@ router.get('/2fa/status', requireAuth, async (req, res, next) => {
 });
 
 // -------------------------------------------------------------
+// GET /api/auth/activity
+// Current user's recent security and auth events (paginated)
+// -------------------------------------------------------------
+router.get('/activity', requireAuth, async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    let rows = [];
+    let total = 0;
+
+    if (req.db) {
+      const countRes = await req.db.query(
+        'SELECT COUNT(*) as total FROM auth_audit_log WHERE user_id = ? OR email = ?',
+        [req.user.id, req.user.email]
+      );
+      total = Number(countRes[0]?.total || 0);
+
+      rows = await req.db.query(
+        `SELECT id, event_type, ip_address, user_agent, metadata, created_at
+         FROM auth_audit_log
+         WHERE user_id = ? OR email = ?
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?`,
+        [req.user.id, req.user.email, limit, offset]
+      );
+    }
+
+    const events = rows.map((r) => {
+      let meta = null;
+      try {
+        if (r.metadata) meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata;
+      } catch (e) {
+        meta = null;
+      }
+      return {
+        id: r.id,
+        action: r.event_type ? r.event_type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Security Event',
+        event_type: r.event_type,
+        ip: r.ip_address || '127.0.0.1',
+        user_agent: r.user_agent || null,
+        metadata: meta,
+        created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+      };
+    });
+
+    return res.json({
+      events,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// -------------------------------------------------------------
 // GET /api/auth/me
 // -------------------------------------------------------------
 router.get('/me', requireAuth, async (req, res, next) => {
