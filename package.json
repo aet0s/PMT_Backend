@@ -1,0 +1,51 @@
+{
+  "name": "trello-server",
+  "version": "1.0.0",
+  "description": "Backend server for Trello-style project management app",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node src/db/migrator.js single",
+    "migrate:master": "node src/db/migrator.js master",
+    "migrate:tenants": "node src/db/migrator.js tenants",
+    "tenants:list": "node src/scripts/tenantsList.js",
+    "tenants:reconcile": "node src/scripts/tenantsReconcile.js",
+    "db:status": "node src/db/migrator.js status",
+    "seed": "node src/db/seed.js",
+    "test": "node src/test_backend.js",
+    "test:multitenant": "node src/test_phase2_multitenant.js",
+    "test:part-a": "node src/test_part_a.js",
+    "test:part-b": "node src/test_part_b.js",
+    "test:part-c": "node src/test_part_c.js",
+    "test:part-c5": "node src/test_part_c5.js",
+    "test:part-e": "node src/test_part_e_rbac.js",
+    "test:rate-limit": "node src/test_rate_limit_env.js",
+    "test:prod-rate-limit": "node src/test_prod_rate_limit.js",
+    "test:all": "node src/test_backend.js && node src/test_phase2_multitenant.js && node src/test_part_a.js && node src/test_part_b.js && node src/test_part_c.js && node src/test_part_c5.js && node src/test_part_e_rbac.js && node src/test_rate_limit_env.js && node src/test_prod_rate_limit.js",
+    "rbac:audit": "node src/scripts/rbacAudit.js",
+    "admin:reset-password": "node src/scripts/adminResetPassword.js",
+    "admin:reset-2fa": "node src/scripts/adminReset2fa.js",
+    "db:clean-test": "node src/scripts/cleanTestDatabases.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
+    "mysql2": "^3.24.5",
+    "node-cron": "^4.6.0",
+    "otplib": "^13.5.0",
+    "qrcode": "^1.5.4",
+    "sanitize-html": "^2.17.6",
+    "socket.io": "^4.8.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "pg": "^8.12.0",
+    "socket.io-client": "^4.8.4"
+  }
+}

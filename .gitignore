@@ -1,0 +1,52 @@
+# Dependency directories
+node_modules/
+
+# Environment and secret files
+.env
+.env.*
+!.env.example
+
+# File uploads and user media
+uploads/
+public/uploads/
+server/public/uploads/
+
+# Backups and database dumps
+backups/
+*.sql
+*.dump
+*.zip
+*.tar.gz
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Test output and coverage
+coverage/
+.nyc_output/
+
+# Temporary and scratch files
+scratch/
+tmp/
+temp/
+
+# IDE and Editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Operating System files
+.DS_Store
+Thumbs.db
