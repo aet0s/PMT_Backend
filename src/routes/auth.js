@@ -104,19 +104,26 @@ function normalizeEmail(email) {
   return (email || '').trim().toLowerCase();
 }
 
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  maxAge: 15 * 60 * 1000 // 15 minutes for access token cookie
-};
+function getCookieOptions(maxAgeMs) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const sameSite = process.env.COOKIE_SAME_SITE || (isProd ? 'none' : 'lax');
+  const secure = process.env.COOKIE_SECURE !== undefined ? process.env.COOKIE_SECURE === 'true' : isProd;
 
-const REFRESH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days for refresh token cookie
-};
+  const opts = {
+    httpOnly: true,
+    secure,
+    sameSite,
+    path: '/',
+    maxAge: maxAgeMs
+  };
+  if (process.env.COOKIE_DOMAIN) {
+    opts.domain = process.env.COOKIE_DOMAIN;
+  }
+  return opts;
+}
+
+const COOKIE_OPTIONS = getCookieOptions(15 * 60 * 1000); // 15 minutes
+const REFRESH_COOKIE_OPTIONS = getCookieOptions(30 * 24 * 60 * 60 * 1000); // 30 days
 
 // -------------------------------------------------------------
 // POST /api/auth/register-company

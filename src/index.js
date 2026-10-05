@@ -49,13 +49,20 @@ function getAllowedOrigins() {
   return list;
 }
 
-// Helmet Security Headers with cross-origin CORP for file and media serving
+// Helmet Security Headers with strict same-origin default and HSTS in production
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-    contentSecurityPolicy: false
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+    contentSecurityPolicy: false,
+    hsts: process.env.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true, preload: true } : false
   })
 );
+
+// Allow cross-origin embedding for files and uploaded media (avatars, attachments, logos)
+app.use(['/api/files', '/uploads'], (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
 
 // CORS setup for cross-subdomain credentials (cookies) and all frontend mutation headers
 const allowedOrigins = getAllowedOrigins();
@@ -83,6 +90,9 @@ app.use(
     maxAge: 86400
   })
 );
+
+const { csrfProtection } = require('./middleware/csrf');
+app.use(csrfProtection(getAllowedOrigins));
 
 app.use(cookieParser());
 app.use(express.json());
@@ -150,6 +160,16 @@ if (process.env.NODE_ENV === 'test') {
     res.json({ ok: true });
   });
 }
+
+// Unknown /api route catch-all returns JSON 404
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: {
+      message: `Endpoint ${req.method} ${req.path} not found`,
+      code: 'NOT_FOUND'
+    }
+  });
+});
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {
