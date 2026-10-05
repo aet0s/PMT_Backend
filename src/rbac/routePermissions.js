@@ -41,6 +41,7 @@ const ROUTE_PERMISSIONS = new Map([
 
   // ─── Profile / password (self-scoped) ─────────────────────────────────────
   ['GET /api/auth/me',                      { selfScoped: 'Authenticated user reads their own profile',                            scope: 'company' }],
+  ['GET /api/auth/activity',                { selfScoped: 'Authenticated user reads their own security and auth activity',         scope: 'company' }],
   ['PUT /api/auth/profile',                 { selfScoped: 'Authenticated user updates their own profile',                          scope: 'company' }],
   ['PUT /api/auth/password',                { selfScoped: 'Authenticated user changes their own password',                         scope: 'company' }],
   ['POST /api/auth/password',               { selfScoped: 'Alias: authenticated user changes their own password',                  scope: 'company' }],

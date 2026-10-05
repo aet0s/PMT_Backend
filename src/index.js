@@ -99,7 +99,7 @@ app.use(express.json());
 
 // Direct access to /uploads is strictly prohibited in all environments.
 // Files must only be accessed through the authenticated /api/files route with permission checks.
-app.all(['/uploads', '/uploads/*'], (req, res) => {
+app.use('/uploads', (req, res) => {
   res.status(404).json({
     error: {
       message: 'Direct static access to /uploads is disabled. Files are only accessible via authenticated /api/files endpoints.',
@@ -168,10 +168,10 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 // Unknown /api route catch-all returns JSON 404
-app.all('/api/*', (req, res) => {
+app.use('/api', (req, res) => {
   res.status(404).json({
     error: {
-      message: `Endpoint ${req.method} ${req.path} not found`,
+      message: `Endpoint ${req.method} ${req.originalUrl || req.path} not found`,
       code: 'NOT_FOUND'
     }
   });

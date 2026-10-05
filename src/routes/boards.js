@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const { queueFileCleanupRetry } = require('../utils/fileCleanupQueue');
 const { logAuthEvent } = require('../services/authAudit');
+const { notify } = require('../services/notify');
 
 const router = express.Router();
 
