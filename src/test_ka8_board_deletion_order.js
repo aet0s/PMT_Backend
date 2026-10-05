@@ -62,6 +62,7 @@ async function runTests() {
   // 2. Connect second client to Socket.IO and listen for board:deleted
   const secondClientSocket = ioClient(baseUrl, {
     transports: ['websocket'],
+    extraHeaders: { origin: 'https://pmt.solarman.in' },
     auth: { token }
   });
 

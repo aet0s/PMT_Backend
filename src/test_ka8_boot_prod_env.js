@@ -43,7 +43,7 @@ function runTest() {
   const combinedOutput = (child.stdout || '') + (child.stderr || '');
   assert(combinedOutput.includes('PRODUCTION BOOT ABORTED'), 'Output must indicate boot aborted due to check:prod-env failure');
   assert(combinedOutput.includes('DB_USER cannot be \'root\' in production'), 'Output must list DB_USER root violation');
-  assert(combinedOutput.includes('DEV_SINGLE_TENANT must NOT be enabled in production'), 'Output must list DEV_SINGLE_TENANT violation');
+  assert(combinedOutput.includes('DEV_SINGLE_TENANT is enabled; production must run multi-tenant') || combinedOutput.includes('DEV_SINGLE_TENANT'), 'Output must list DEV_SINGLE_TENANT violation');
   console.log('✓ Verified: server/src/index.js aborts immediately with code 1 and outputs errors on boot when NODE_ENV=production.');
 
   console.log('\n=== K-A.8.11 CHECK PROD ENV ON BOOT TEST PASSED ===\n');

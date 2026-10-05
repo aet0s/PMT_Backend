@@ -1,19 +1,22 @@
 // server/src/test_old_delete_config.js
+// REGRESSION TEST: Verifies that if origin fallback misconfiguration occurs (e.g. CLIENT_URL unset defaulting to localhost:5173),
+// cross-origin requests from live domains are rejected at preflight.
+// Note: This serves as a regression guard and demonstrates how a misconfigured origin fails,
+// rather than asserting this was the definitive live root cause (as login previously succeeded).
 const assert = require('assert');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 
 async function testOldCorsBehavior() {
-  console.log('=== Reproducing Old CORS Configuration Behavior ===\n');
+  console.log('=== Regression Test: Origin Misconfiguration Preflight Behavior ===\n');
 
-  // Old configuration used in commit 0311411:
-  // app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }));
+  // Simulated configuration where CLIENT_URL is unset and defaults to localhost:5173
   const app = express();
-  const oldClientUrl = undefined; // As on an unconfigured server where CLIENT_URL was unset
+  const simulatedUnsetClientUrl = undefined;
 
   app.use(cors({
-    origin: oldClientUrl || 'http://localhost:5173',
+    origin: simulatedUnsetClientUrl || 'http://localhost:5173',
     credentials: true
   }));
 

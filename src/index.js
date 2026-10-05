@@ -49,6 +49,9 @@ function getAllowedOrigins() {
   return list;
 }
 
+const { requestIdMiddleware } = require('./middleware/requestId');
+app.use(requestIdMiddleware);
+
 // Helmet Security Headers with strict same-origin default and HSTS in production
 app.use(
   helmet({
@@ -85,8 +88,10 @@ app.use(
       'X-Requested-With',
       'Accept',
       'Origin',
-      'Cache-Control'
+      'Cache-Control',
+      'X-Request-Id'
     ],
+    exposedHeaders: ['X-Request-Id'],
     maxAge: 86400
   })
 );
@@ -172,20 +177,21 @@ app.use('/api', (req, res) => {
   res.status(404).json({
     error: {
       message: `Endpoint ${req.method} ${req.originalUrl || req.path} not found`,
-      code: 'NOT_FOUND'
+      code: 'NOT_FOUND',
+      requestId: req.id
     }
   });
 });
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error('Unhandled Server Error:', err);
+  console.error(`[${req.id || 'NO_REQ_ID'}] Unhandled Server Error:`, err);
   const status = err.status || 400;
   const message = err.message || 'Internal Server Error';
   const code = err.code || 'BAD_REQUEST';
 
   res.status(status).json({
-    error: { message, code }
+    error: { message, code, requestId: req.id }
   });
 });
 
@@ -245,6 +251,8 @@ async function start() {
   await db.ensureRuntimeSchema();
   initSocket(server);
   initReminderCron();
+  const { startCleanupWorker } = require('./utils/fileCleanupQueue');
+  startCleanupWorker();
 
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

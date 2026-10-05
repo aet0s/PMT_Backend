@@ -351,7 +351,8 @@ async function runRegressionTests() {
     await new Promise((resolve, reject) => {
       clientSocket = ClientSocket(baseUrl, {
         auth: { token: rawToken },
-        transports: ['websocket']
+        transports: ['websocket'],
+        extraHeaders: { origin: 'http://localhost:5173' }
       });
 
       const timer = setTimeout(() => {

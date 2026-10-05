@@ -51,13 +51,35 @@ function initSocket(server) {
   io = new Server(server, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
+        if (!origin) return callback(null, false);
         if (allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
-        return callback(new Error(`Socket CORS origin not allowed: ${origin}`), false);
+        return callback(null, false);
       },
       credentials: true
+    },
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+
+      // 1. Missing Origin header (non-browser or stripped): reject
+      if (!origin) {
+        return callback('ORIGIN_REQUIRED: WebSocket handshake requires a valid Origin header.', false);
+      }
+
+      // 2. Null origin: reject
+      if (origin === 'null') {
+        return callback('ORIGIN_NOT_ALLOWED: Null origin is rejected.', false);
+      }
+
+      // 3. Foreign / disallowed origin: reject
+      const currentAllowed = getAllowedOrigins();
+      if (!currentAllowed.includes(origin)) {
+        return callback(`ORIGIN_NOT_ALLOWED: Origin '${origin}' is not authorized.`, false);
+      }
+
+      // Allowed
+      return callback(null, true);
     }
   });
 

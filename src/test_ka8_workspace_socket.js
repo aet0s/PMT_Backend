@@ -28,8 +28,8 @@ async function runTest() {
   const token1 = jwt.sign({ userId: 1, sub: '1', email: 'u1@example.com' }, getJwtSecret(), { expiresIn: '1h' });
   const token2 = jwt.sign({ userId: 2, sub: '2', email: 'u2@example.com' }, getJwtSecret(), { expiresIn: '1h' });
 
-  const client1 = Client(serverUrl, { transports: ['websocket'], auth: { token: token1 } });
-  const client2 = Client(serverUrl, { transports: ['websocket'], auth: { token: token2 } });
+  const client1 = Client(serverUrl, { transports: ['websocket'], extraHeaders: { origin: 'http://localhost:5173' }, auth: { token: token1 } });
+  const client2 = Client(serverUrl, { transports: ['websocket'], extraHeaders: { origin: 'http://localhost:5173' }, auth: { token: token2 } });
 
   await new Promise((resolve) => {
     let connected = 0;

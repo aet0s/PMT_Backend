@@ -541,7 +541,8 @@ async function runPhase2Tests() {
     const socketClientA = ClientSocket(baseUrl, {
       auth: { token: tokenA },
       transports: ['websocket'],
-      forceNew: true
+      forceNew: true,
+      extraHeaders: { origin: 'http://localhost:5173' }
     });
 
     await new Promise((resolve, reject) => {
@@ -554,7 +555,8 @@ async function runPhase2Tests() {
     const socketClientB = ClientSocket(baseUrl, {
       auth: { token: tokenB },
       transports: ['websocket'],
-      forceNew: true
+      forceNew: true,
+      extraHeaders: { origin: 'http://localhost:5173' }
     });
 
     await new Promise((resolve, reject) => {
