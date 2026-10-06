@@ -1,6 +1,6 @@
 const { getDevSingleDb } = require('./tenantPools');
 const { NOTIFICATION_EVENTS } = require('./notificationEvents');
-const { checkPermission } = require('../middleware/permissions');
+const { userHasPermission } = require('../middleware/permissions');
 
 /**
  * Resolves recipient user IDs for a given notification event.
@@ -35,6 +35,20 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
             [ctx.cardId]
           );
           userIds = res.map((r) => r.user_id);
+          // If no members are assigned to this card, fallback to board members so updates are not lost
+          if (userIds.length === 0 && ctx.boardId) {
+            const bRes = await db.query(
+              'SELECT user_id FROM board_members WHERE board_id = ?',
+              [ctx.boardId]
+            );
+            userIds = bRes.map((r) => r.user_id);
+          }
+        } else if (ctx.boardId) {
+          const bRes = await db.query(
+            'SELECT user_id FROM board_members WHERE board_id = ?',
+            [ctx.boardId]
+          );
+          userIds = bRes.map((r) => r.user_id);
         }
         break;
       }
@@ -51,6 +65,24 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
 
           const res = await db.query(query, params);
           userIds = res.map((r) => r.user_id);
+
+          // If no card members assigned, notify all board members (excluding mentioned)
+          if (userIds.length === 0 && ctx.boardId) {
+            let bQuery = 'SELECT user_id FROM board_members WHERE board_id = ?';
+            const bParams = [ctx.boardId];
+            if (mentioned.length > 0) {
+              bQuery += ' AND user_id NOT IN (?)';
+              bParams.push(mentioned);
+            }
+            const bRes = await db.query(bQuery, bParams);
+            userIds = bRes.map((r) => r.user_id);
+          }
+        } else if (ctx.boardId) {
+          const bRes = await db.query(
+            'SELECT user_id FROM board_members WHERE board_id = ?',
+            [ctx.boardId]
+          );
+          userIds = bRes.map((r) => r.user_id);
         }
         break;
       }
@@ -109,8 +141,8 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
     }
 
     // 2. Board Authorization Guard: If event is board or card scoped, user must have access to that board
-    // (Workspace Admin, Owner, or direct board_member). Exclude board.member_removed and card.assigned so assigned user gets notice.
-    if (ctx.boardId && ctx.workspaceId && cleanIds.length > 0 && eventType !== 'board.member_removed' && eventType !== 'card.assigned') {
+    // (Workspace Admin, Owner, or direct board_member). Exclude board.member_removed, board.member_added, and card.assigned so assigned user gets notice.
+    if (ctx.boardId && ctx.workspaceId && cleanIds.length > 0 && eventType !== 'board.member_removed' && eventType !== 'board.member_added' && eventType !== 'card.assigned') {
       const authorizedBoardUsers = await db.query(
         `SELECT wm.user_id
          FROM workspace_members wm
@@ -136,7 +168,7 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
     if (eventConfig.requiredPermission && ctx.workspaceId && cleanIds.length > 0) {
       const permittedIds = [];
       for (const id of cleanIds) {
-        const hasPerm = await checkPermission(id, eventConfig.requiredPermission, ctx.workspaceId, db, ctx.boardId);
+        const hasPerm = await userHasPermission(id, ctx.workspaceId, eventConfig.requiredPermission, db, ctx.boardId);
         if (hasPerm) {
           permittedIds.push(id);
         }

@@ -317,10 +317,11 @@ function broadcastBoardEvent(boardId, eventName, payload, originId, tenantId = n
     timestamp: new Date().toISOString()
   };
 
+  let emitter = io;
   if (tenantId) {
-    io.to(`t:${tenantId}:board:${bId}`).emit(eventName, data);
+    emitter = emitter.to(`t:${tenantId}:board:${bId}`);
   }
-  io.to(`board:${bId}`).emit(eventName, data);
+  emitter.to(`board:${bId}`).emit(eventName, data);
 }
 
 function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = null, tenantId = null) {
@@ -333,30 +334,29 @@ function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = nul
     timestamp: new Date().toISOString()
   };
 
-  if (tenantId && process.env.DEV_SINGLE_TENANT !== '1') {
-    io.to(`t:${tenantId}:workspace:${wsId}`).emit(eventName, data);
-  } else {
-    io.to(`workspace:${wsId}`).emit(eventName, data);
-    if (tenantId) {
-      io.to(`t:${tenantId}:workspace:${wsId}`).emit(eventName, data);
-    }
+  let emitter = io;
+  if (tenantId) {
+    emitter = emitter.to(`t:${tenantId}:workspace:${wsId}`);
   }
+  emitter.to(`workspace:${wsId}`).emit(eventName, data);
 }
 
 function sendUserNotification(userId, notification, tenantId = null) {
   if (!io || !userId) return;
+  let emitter = io;
   if (tenantId) {
-    io.to(`t:${tenantId}:user:${userId}`).emit('notification:new', notification);
+    emitter = emitter.to(`t:${tenantId}:user:${userId}`);
   }
-  io.to(`user:${userId}`).emit('notification:new', notification);
+  emitter.to(`user:${userId}`).emit('notification:new', notification);
 }
 
 function sendUserEvent(userId, eventName, payload, tenantId = null) {
   if (!io || !userId) return;
+  let emitter = io;
   if (tenantId) {
-    io.to(`t:${tenantId}:user:${userId}`).emit(eventName, payload);
+    emitter = emitter.to(`t:${tenantId}:user:${userId}`);
   }
-  io.to(`user:${userId}`).emit(eventName, payload);
+  emitter.to(`user:${userId}`).emit(eventName, payload);
 }
 
 /**

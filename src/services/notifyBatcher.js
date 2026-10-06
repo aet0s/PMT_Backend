@@ -18,16 +18,25 @@ function getBatchKey(recipientUserId, cardId, eventType) {
  * Enqueues a notification into the in-memory anti-spam batcher
  */
 function enqueueNotification(recipientUserId, eventType, ctx, meta, actorName, dbInstance = null) {
-  // If no cardId or non-batchable/immediate event, dispatch immediately
   const IMMEDIATE_EVENTS = new Set([
+    'card.created',
     'card.assigned',
     'card.unassigned',
+    'card.moved',
+    'card.completed',
+    'card.deleted',
     'comment.added',
     'comment.mention',
     'invite.sent',
     'invite.accepted',
+    'member.added',
+    'member.role_changed',
+    'member.removed',
     'board.member_added',
-    'board.member_removed'
+    'board.member_removed',
+    'board.archived',
+    'attachment.added',
+    'label.added'
   ]);
   if (!ctx.cardId || IMMEDIATE_EVENTS.has(eventType)) {
     return flushSingleNotification(recipientUserId, eventType, ctx, meta, actorName, dbInstance);
@@ -106,6 +115,14 @@ async function insertAndEmitNotification(userId, eventType, message, ctx, dbInst
   const db = dbInstance || getDevSingleDb();
 
   try {
+    let finalWsId = ctx.workspaceId || null;
+    if (!finalWsId && ctx.boardId) {
+      try {
+        const bRes = await db.query('SELECT workspace_id FROM boards WHERE id = ?', [ctx.boardId]);
+        if (bRes[0]?.workspace_id) finalWsId = bRes[0].workspace_id;
+      } catch (e) {}
+    }
+
     const insertRes = await db.execute(
       `INSERT INTO notifications (user_id, type, event_type, card_id, board_id, workspace_id, actor_user_id, message)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -115,7 +132,7 @@ async function insertAndEmitNotification(userId, eventType, message, ctx, dbInst
         eventType,
         ctx.cardId || null,
         ctx.boardId || null,
-        ctx.workspaceId || null,
+        finalWsId,
         ctx.actorUserId || null,
         message
       ]

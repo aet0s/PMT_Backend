@@ -13,8 +13,14 @@ const NOTIFICATION_EVENTS = {
   'invite.accepted': {
     category: 'Invites & Workspace',
     recipients: 'workspaceAdmins',
-    requiredPermission: 'member.view',
+    requiredPermission: null,
     template: '{actor} accepted the invite and joined {workspace}'
+  },
+  'member.added': {
+    category: 'Invites & Workspace',
+    recipients: 'targetUser',
+    requiredPermission: null,
+    template: '{actor} added you to {workspace}'
   },
   'member.role_changed': {
     category: 'Invites & Workspace',
@@ -33,7 +39,7 @@ const NOTIFICATION_EVENTS = {
   'board.member_added': {
     category: 'Boards',
     recipients: 'targetUser',
-    requiredPermission: 'project.view',
+    requiredPermission: null,
     template: '{actor} added you to the board "{boardName}"'
   },
   'board.member_removed': {
@@ -45,51 +51,57 @@ const NOTIFICATION_EVENTS = {
   'board.archived': {
     category: 'Boards',
     recipients: 'boardMembers',
-    requiredPermission: 'project.view',
+    requiredPermission: null,
     template: '{actor} archived the board "{boardName}"'
   },
 
   // --- Cards ---
+  'card.created': {
+    category: 'Cards',
+    recipients: 'boardMembers',
+    requiredPermission: null,
+    template: '{actor} created task "{cardTitle}" in "{boardName}"'
+  },
   'card.assigned': {
     category: 'Cards',
     recipients: 'targetUser',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} assigned you to "{cardTitle}"'
   },
   'card.unassigned': {
     category: 'Cards',
     recipients: 'targetUser',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} removed you from "{cardTitle}"'
   },
   'card.moved': {
     category: 'Cards',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} moved "{cardTitle}" from {fromList} to {toList}'
   },
   'card.due_soon': {
     category: 'Due Dates',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '"{cardTitle}" is due {relativeDueTime}'
   },
   'card.overdue': {
     category: 'Due Dates',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '"{cardTitle}" is overdue'
   },
   'card.completed': {
     category: 'Cards',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} marked "{cardTitle}" as complete'
   },
   'card.deleted': {
     category: 'Cards',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} deleted "{cardTitle}"'
   },
 
@@ -97,19 +109,19 @@ const NOTIFICATION_EVENTS = {
   'checklist_item.completed': {
     category: 'Checklists',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} completed "{itemText}" from {checklistTitle} on "{cardTitle}"'
   },
   'checklist_item.reopened': {
     category: 'Checklists',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} reopened "{itemText}" from {checklistTitle} on "{cardTitle}"'
   },
   'checklist.completed_all': {
     category: 'Checklists',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} completed all items in {checklistTitle} on "{cardTitle}"'
   },
 
@@ -117,13 +129,13 @@ const NOTIFICATION_EVENTS = {
   'comment.added': {
     category: 'Comments & Mentions',
     recipients: 'cardMembersExcludingMentioned',
-    requiredPermission: 'comment.view',
+    requiredPermission: null,
     template: '{actor} commented on "{cardTitle}"'
   },
   'comment.mention': {
     category: 'Comments & Mentions',
     recipients: 'mentionedUsers',
-    requiredPermission: 'comment.view',
+    requiredPermission: null,
     template: '{actor} mentioned you in a comment on "{cardTitle}"'
   },
 
@@ -131,13 +143,13 @@ const NOTIFICATION_EVENTS = {
   'attachment.added': {
     category: 'Attachments & Labels',
     recipients: 'cardMembers',
-    requiredPermission: 'attachment.view',
+    requiredPermission: null,
     template: '{actor} attached "{fileName}" to "{cardTitle}"'
   },
   'label.added': {
     category: 'Attachments & Labels',
     recipients: 'cardMembers',
-    requiredPermission: 'task.view',
+    requiredPermission: null,
     template: '{actor} added the "{labelName}" label to "{cardTitle}"'
   }
 };
@@ -164,10 +176,11 @@ function renderMessage(eventType, meta = {}, actorName = 'Someone') {
   let text = eventConfig.template;
   const data = {
     actor: actorName || 'Someone',
-    workspace: meta.workspaceName || 'Workspace',
+    workspace: meta.workspaceName || meta.workspace || 'Workspace',
+    workspaceName: meta.workspaceName || meta.workspace || 'Workspace',
     roleName: meta.roleName || 'Member',
     boardName: meta.boardName || 'Board',
-    cardTitle: meta.cardTitle || 'Card',
+    cardTitle: meta.cardTitle || meta.card_title || 'Card',
     fromList: meta.fromList || 'List',
     toList: meta.toList || 'List',
     relativeDueTime: meta.relativeDueTime || 'soon',

@@ -21,10 +21,11 @@ function getNotificationAccessFilter(userId) {
     AND (
       n.board_id IS NULL
       OR EXISTS (
-        SELECT 1 FROM workspace_members wm
+        SELECT 1 FROM boards b
+        JOIN workspace_members wm ON b.workspace_id = wm.workspace_id AND wm.user_id = ?
         LEFT JOIN roles r ON wm.role_id = r.id
-        LEFT JOIN board_members bm ON bm.board_id = n.board_id AND bm.user_id = ?
-        WHERE wm.workspace_id = n.workspace_id AND wm.user_id = ?
+        LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
+        WHERE b.id = n.board_id
           AND (
             r.name IN ('Owner', 'Super Admin', 'Admin')
             OR EXISTS (

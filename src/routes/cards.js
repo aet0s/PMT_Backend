@@ -157,6 +157,20 @@ router.post('/', requireAuth, requirePermission('card.create'), validate(createC
 
     await logActivity(boardId, card.id, req.user.id, 'created_card', { title: card.title }, req.db);
 
+    const bRes = await req.db.query('SELECT name, workspace_id FROM boards WHERE id = ?', [boardId]);
+    await notify(
+      {
+        eventType: 'card.created',
+        actorUserId: req.user.id,
+        boardId,
+        cardId: card.id,
+        workspaceId: bRes[0]?.workspace_id || null,
+        tenantId: req.tenant?.id || null,
+        meta: { cardTitle: card.title, boardName: bRes[0]?.name || 'Board' }
+      },
+      req.db
+    );
+
     const newCard = await getFullCard(card.id, req.db);
 
     broadcastBoardEvent(boardId, 'card:created', { card: newCard }, originId, req.tenant ? req.tenant.id : null);

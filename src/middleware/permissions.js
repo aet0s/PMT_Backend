@@ -369,10 +369,15 @@ async function countOwners(workspaceId, dbInstance = null) {
   return Number(res[0]?.count || 0);
 }
 
+async function checkPermission(userId, permissionKey, workspaceId, dbInstance = null, projectId = null) {
+  return userHasPermission(userId, workspaceId, permissionKey, dbInstance, projectId);
+}
+
 module.exports = {
   getActiveDb,
   resolveWorkspaceId,
   userHasPermission,
+  checkPermission,
   getUserPermissions,
   requirePermission,
   countOwners,
