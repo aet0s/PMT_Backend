@@ -30,6 +30,7 @@
     "admin:reset-2fa": "node src/scripts/adminReset2fa.js",
     "db:clean-local": "node src/scripts/cleanLocalDb.js && node src/db/seed.js",
     "db:clean-test": "node src/scripts/cleanTestDatabases.js",
+    "db:reset-live": "node src/scripts/resetLiveDb.js",
     "check:prod-env": "node src/scripts/checkProdEnv.js",
     "backup": "node src/scripts/backup.js",
     "backup:restore": "node src/scripts/restoreBackup.js"
