@@ -57,23 +57,7 @@ const PORT = process.env.PORT || 5000;
 // Trust reverse proxy (nginx) for real client IP, protocol, and Secure cookies
 app.set('trust proxy', 1);
 
-function getAllowedOrigins() {
-  const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const defaults = [
-    'https://pmt.solarman.in',
-    'https://pmtmgmt.solarman.in',
-    'http://localhost:5173',
-    'http://127.0.0.1:5173'
-  ];
-  for (const d of defaults) {
-    if (!list.includes(d)) list.push(d);
-  }
-  if (process.env.CLIENT_URL) {
-    const cUrl = process.env.CLIENT_URL.trim();
-    if (!list.includes(cUrl)) list.push(cUrl);
-  }
-  return list;
-}
+const { getAllowedOrigins, isOriginAllowed } = require('./utils/corsOrigins');
 
 const { requestIdMiddleware } = require('./middleware/requestId');
 app.use(requestIdMiddleware);
@@ -108,14 +92,13 @@ app.use('/api/files', (req, res, next) => {
 });
 
 // CORS setup for cross-subdomain credentials (cookies) and all frontend mutation headers
-const allowedOrigins = getAllowedOrigins();
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin || origin === 'null') {
         return callback(null, false);
       }
-      if (allowedOrigins.includes(origin)) {
+      if (isOriginAllowed(origin)) {
         return callback(null, true);
       }
       return callback(null, false);

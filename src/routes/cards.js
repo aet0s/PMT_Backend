@@ -269,13 +269,17 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
         from: oldCard.list_name,
         to: newListName
       }, req.db);
-      await notify({
-        eventType: 'card.moved',
-        actorUserId: req.user.id,
-        boardId: oldCard.board_id,
-        cardId,
-        meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName }
-      });
+      await notify(
+        {
+          eventType: 'card.moved',
+          actorUserId: req.user.id,
+          boardId: oldCard.board_id,
+          cardId,
+          tenantId: req.tenant?.id || null,
+          meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName }
+        },
+        req.db
+      );
     }
 
     if (due_date !== undefined && due_date !== oldCard.due_date) {
@@ -294,13 +298,17 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
         { title: updatedCard.title }
       , req.db);
       if (is_complete) {
-        await notify({
-          eventType: 'card.completed',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          meta: { cardTitle: updatedCard.title }
-        });
+        await notify(
+          {
+            eventType: 'card.completed',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title }
+          },
+          req.db
+        );
       }
     }
 
@@ -327,13 +335,17 @@ router.delete('/:id', requireAuth, requirePermission('card.delete'), async (req,
 
     const { title: cardTitle, board_id: boardId } = cardRes[0];
 
-    await notify({
-      eventType: 'card.deleted',
-      actorUserId: req.user.id,
-      boardId,
-      cardId,
-      meta: { cardTitle }
-    });
+    await notify(
+      {
+        eventType: 'card.deleted',
+        actorUserId: req.user.id,
+        boardId,
+        cardId,
+        tenantId: req.tenant?.id || null,
+        meta: { cardTitle }
+      },
+      req.db
+    );
 
     await req.db.execute('DELETE FROM cards WHERE id = ?', [cardId]);
 
@@ -379,13 +391,17 @@ router.post('/:id/labels', requireAuth, requirePermission('card.edit'), async (r
       if (boardId) {
         await logActivity(boardId, cardId, req.user.id, 'label_added', { label_name: labelName }, req.db);
         const cardTitleRes = await req.db.query('SELECT title FROM cards WHERE id = ?', [cardId]);
-        await notify({
-          eventType: 'label.added',
-          actorUserId: req.user.id,
-          boardId,
-          cardId,
-          meta: { labelName, cardTitle: cardTitleRes[0]?.title || 'Card' }
-        });
+        await notify(
+          {
+            eventType: 'label.added',
+            actorUserId: req.user.id,
+            boardId,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { labelName, cardTitle: cardTitleRes[0]?.title || 'Card' }
+          },
+          req.db
+        );
       }
     }
 
@@ -432,34 +448,51 @@ router.post('/:id/members', requireAuth, requirePermission('card.assign_members'
       action = 'removed';
       if (boardId) {
         await logActivity(boardId, cardId, req.user.id, 'member_removed', { member_name: targetUserName }, req.db);
-        await notify({
-          eventType: 'card.unassigned',
-          actorUserId: req.user.id,
-          targetUserId: user_id,
-          boardId,
-          cardId,
-          meta: { cardTitle }
-        });
+        await notify(
+          {
+            eventType: 'card.unassigned',
+            actorUserId: req.user.id,
+            targetUserId: user_id,
+            boardId,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle }
+          },
+          req.db
+        );
       }
     } else {
       await req.db.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
+      if (boardId) {
+        await req.db.execute('INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, ?)', [boardId, user_id, 'member']);
+      }
       action = 'added';
       if (boardId) {
         await logActivity(boardId, cardId, req.user.id, 'member_added', { member_name: targetUserName }, req.db);
-        await notify({
-          eventType: 'card.assigned',
-          actorUserId: req.user.id,
-          targetUserId: user_id,
-          boardId,
-          cardId,
-          meta: { cardTitle }
-        });
+        await notify(
+          {
+            eventType: 'card.assigned',
+            actorUserId: req.user.id,
+            targetUserId: user_id,
+            boardId,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle }
+          },
+          req.db
+        );
       }
     }
 
     if (boardId) {
       const fullCard = await getFullCard(cardId, req.db);
-      broadcastBoardEvent(boardId, 'member:' + (action === 'added' ? 'added' : 'removed', req.tenant ? req.tenant.id : null), { cardId, userId: user_id, member: targetUser, action }, originId);
+      broadcastBoardEvent(
+        boardId,
+        action === 'added' ? 'member:added' : 'member:removed',
+        { cardId, userId: user_id, member: targetUser, action },
+        originId,
+        req.tenant ? req.tenant.id : null
+      );
       broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
 
@@ -541,13 +574,17 @@ router.post('/:id/attachments', requireAuth, requirePermission('card.manage_atta
     }
 
     await logActivity(boardId, cardId, req.user.id, 'attachment_added', { file_name: attachment.file_name }, req.db);
-    await notify({
-      eventType: 'attachment.added',
-      actorUserId: req.user.id,
-      boardId,
-      cardId,
-      meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
-    });
+    await notify(
+      {
+        eventType: 'attachment.added',
+        actorUserId: req.user.id,
+        boardId,
+        cardId,
+        tenantId: req.tenant?.id || null,
+        meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
+      },
+      req.db
+    );
 
     const fullCard = await getFullCard(cardId, req.db);
     broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
@@ -586,13 +623,17 @@ router.post('/:id/attachments/file', requireAuth, requirePermission('card.manage
     const [attachment] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
 
     await logActivity(boardId, cardId, req.user.id, 'attachment_added', { file_name: attachment.file_name }, req.db);
-    await notify({
-      eventType: 'attachment.added',
-      actorUserId: req.user.id,
-      boardId,
-      cardId,
-      meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
-    });
+    await notify(
+      {
+        eventType: 'attachment.added',
+        actorUserId: req.user.id,
+        boardId,
+        cardId,
+        tenantId: req.tenant?.id || null,
+        meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
+      },
+      req.db
+    );
 
     const fullCard = await getFullCard(cardId, req.db);
     broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
@@ -746,24 +787,32 @@ router.post('/:id/comments', requireAuth, requirePermission('card.comment'), asy
       }
 
       if (mentionedUserIds.length > 0) {
-        await notify({
-          eventType: 'comment.mention',
+        await notify(
+          {
+            eventType: 'comment.mention',
+            actorUserId: req.user.id,
+            boardId,
+            cardId,
+            mentionedUserIds,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: fullCard?.title || 'Card', actorName: author_name }
+          },
+          req.db
+        );
+      }
+
+      await notify(
+        {
+          eventType: 'comment.added',
           actorUserId: req.user.id,
           boardId,
           cardId,
           mentionedUserIds,
+          tenantId: req.tenant?.id || null,
           meta: { cardTitle: fullCard?.title || 'Card', actorName: author_name }
-        });
-      }
-
-      await notify({
-        eventType: 'comment.added',
-        actorUserId: req.user.id,
-        boardId,
-        cardId,
-        mentionedUserIds,
-        meta: { cardTitle: fullCard?.title || 'Card', actorName: author_name }
-      });
+        },
+        req.db
+      );
     }
 
     return res.status(201).json({ comment: { ...comment, author_name } });
@@ -990,13 +1039,17 @@ router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
           const { checklist_id, checklist_title, card_title } = detailRes[0];
           const eventType = is_checked ? 'checklist_item.completed' : 'checklist_item.reopened';
 
-          await notify({
-            eventType,
-            actorUserId: req.user.id,
-            boardId: board_id,
-            cardId: card_id,
-            meta: { itemText: updatedItem.text, checklistTitle: checklist_title, cardTitle: card_title }
-          });
+          await notify(
+            {
+              eventType,
+              actorUserId: req.user.id,
+              boardId: board_id,
+              cardId: card_id,
+              tenantId: req.tenant?.id || null,
+              meta: { itemText: updatedItem.text, checklistTitle: checklist_title, cardTitle: card_title }
+            },
+            req.db
+          );
 
           if (is_checked) {
             const countsRes = await req.db.query(

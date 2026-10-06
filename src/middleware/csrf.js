@@ -39,8 +39,9 @@ function csrfProtection(getAllowedOrigins) {
 
     // If an Origin or Referer is supplied (standard for all browsers on mutating requests)
     if (requestOrigin) {
+      const { isOriginAllowed } = require('../utils/corsOrigins');
       const normalizedRequest = requestOrigin.trim().replace(/\/+$/, '');
-      const isExactMatch = originList.some(allowed => allowed === normalizedRequest);
+      const isExactMatch = originList.some(allowed => allowed === normalizedRequest) || isOriginAllowed(normalizedRequest);
 
       if (!isExactMatch) {
         return res.status(403).json({

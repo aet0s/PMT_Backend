@@ -404,13 +404,17 @@ router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), vali
       await logActivity(boardId, null, req.user.id, 'board_renamed', { board_name: name }, req.db);
     }
     if (is_archived === true && updatedBoard) {
-      await notify({
-        eventType: 'board.archived',
-        actorUserId: req.user.id,
-        boardId,
-        workspaceId: updatedBoard.workspace_id,
-        meta: { boardName: updatedBoard.name }
-      });
+      await notify(
+        {
+          eventType: 'board.archived',
+          actorUserId: req.user.id,
+          boardId,
+          workspaceId: updatedBoard.workspace_id,
+          tenantId: req.tenant?.id || null,
+          meta: { boardName: updatedBoard.name }
+        },
+        req.db
+      );
     }
 
     return res.json({ board: updatedBoard });
@@ -581,14 +585,18 @@ router.post('/:id/members', requireAuth, requirePermission('project.manage_membe
     broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUser.id, action: 'granted' }, req.tenant ? req.tenant.id : null);
 
     const bRes = await req.db.query('SELECT name FROM boards WHERE id = ?', [boardId]);
-    await notify({
-      eventType: 'board.member_added',
-      actorUserId: req.user.id,
-      targetUserId: targetUser.id,
-      boardId,
-      workspaceId,
-      meta: { boardName: bRes[0]?.name || 'Board' }
-    });
+    await notify(
+      {
+        eventType: 'board.member_added',
+        actorUserId: req.user.id,
+        targetUserId: targetUser.id,
+        boardId,
+        workspaceId,
+        tenantId: req.tenant?.id || null,
+        meta: { boardName: bRes[0]?.name || 'Board' }
+      },
+      req.db
+    );
 
     return res.json({ member: { ...targetUser, role: 'member' } });
   } catch (err) {
@@ -613,14 +621,18 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
       }, req.tenant ? req.tenant.id : null);
       broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUserId, action: 'revoked' }, req.tenant ? req.tenant.id : null);
 
-      await notify({
-        eventType: 'board.member_removed',
-        actorUserId: req.user.id,
-        targetUserId,
-        boardId,
-        workspaceId: boardRes[0].workspace_id,
-        meta: { boardName: boardRes[0].name || 'Board' }
-      });
+      await notify(
+        {
+          eventType: 'board.member_removed',
+          actorUserId: req.user.id,
+          targetUserId,
+          boardId,
+          workspaceId: boardRes[0].workspace_id,
+          tenantId: req.tenant?.id || null,
+          meta: { boardName: boardRes[0].name || 'Board' }
+        },
+        req.db
+      );
     }
 
     return res.json({ message: 'Board access revoked successfully' });
@@ -696,13 +708,17 @@ router.post('/:id/archive', requireAuth, requirePermission('board.edit_settings'
     await req.db.execute('UPDATE boards SET is_archived = 1 WHERE id = ?', [boardId]);
     const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
 
-    await notify({
-      eventType: 'board.archived',
-      actorUserId: req.user.id,
-      boardId,
-      workspaceId: board.workspace_id,
-      meta: { boardName: board.name }
-    });
+    await notify(
+      {
+        eventType: 'board.archived',
+        actorUserId: req.user.id,
+        boardId,
+        workspaceId: board.workspace_id,
+        tenantId: req.tenant?.id || null,
+        meta: { boardName: board.name }
+      },
+      req.db
+    );
 
     return res.json({ message: 'Board archived successfully', board: updatedBoard });
   } catch (err) {

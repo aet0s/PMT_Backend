@@ -344,20 +344,26 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
   const wsName = wsRes[0]?.name || 'Workspace';
 
-  await notify({
-    eventType: 'invite.sent',
-    actorUserId: user.id,
-    inviteeUserId: targetUser.id,
-    workspaceId: workspaceId,
-    meta: { workspaceName: wsName }
-  });
+  await notify(
+    {
+      eventType: 'invite.sent',
+      actorUserId: user.id,
+      inviteeUserId: targetUser.id,
+      workspaceId: workspaceId,
+      meta: { workspaceName: wsName }
+    },
+    db
+  );
 
-  await notify({
-    eventType: 'invite.accepted',
-    actorUserId: targetUser.id,
-    workspaceId: workspaceId,
-    meta: { workspaceName: wsName }
-  });
+  await notify(
+    {
+      eventType: 'invite.accepted',
+      actorUserId: targetUser.id,
+      workspaceId: workspaceId,
+      meta: { workspaceName: wsName }
+    },
+    db
+  );
 
   const memberPayload = {
     id: targetUser.id,
@@ -491,12 +497,16 @@ router.post('/accept', requireAuth, async (req, res, next) => {
     const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [invite.workspace_id]);
     const wsName = wsRes[0]?.name || 'Workspace';
 
-    await notify({
-      eventType: 'invite.accepted',
-      actorUserId: req.user.id,
-      workspaceId: invite.workspace_id,
-      meta: { workspaceName: wsName }
-    });
+    await notify(
+      {
+        eventType: 'invite.accepted',
+        actorUserId: req.user.id,
+        workspaceId: invite.workspace_id,
+        tenantId: req.tenant?.id || null,
+        meta: { workspaceName: wsName }
+      },
+      req.db
+    );
 
     return res.json({
       message: 'Invitation accepted successfully',

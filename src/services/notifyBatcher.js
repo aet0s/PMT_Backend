@@ -18,8 +18,18 @@ function getBatchKey(recipientUserId, cardId, eventType) {
  * Enqueues a notification into the in-memory anti-spam batcher
  */
 function enqueueNotification(recipientUserId, eventType, ctx, meta, actorName, dbInstance = null) {
-  // If no cardId or non-batchable event, dispatch immediately
-  if (!ctx.cardId || eventType === 'invite.sent' || eventType === 'invite.accepted' || eventType === 'comment.mention') {
+  // If no cardId or non-batchable/immediate event, dispatch immediately
+  const IMMEDIATE_EVENTS = new Set([
+    'card.assigned',
+    'card.unassigned',
+    'comment.added',
+    'comment.mention',
+    'invite.sent',
+    'invite.accepted',
+    'board.member_added',
+    'board.member_removed'
+  ]);
+  if (!ctx.cardId || IMMEDIATE_EVENTS.has(eventType)) {
     return flushSingleNotification(recipientUserId, eventType, ctx, meta, actorName, dbInstance);
   }
 

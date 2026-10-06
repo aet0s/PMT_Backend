@@ -109,8 +109,8 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
     }
 
     // 2. Board Authorization Guard: If event is board or card scoped, user must have access to that board
-    // (Workspace Admin, Owner, or direct board_member). Exclude board.member_removed so user gets removal notice.
-    if (ctx.boardId && ctx.workspaceId && cleanIds.length > 0 && eventType !== 'board.member_removed') {
+    // (Workspace Admin, Owner, or direct board_member). Exclude board.member_removed and card.assigned so assigned user gets notice.
+    if (ctx.boardId && ctx.workspaceId && cleanIds.length > 0 && eventType !== 'board.member_removed' && eventType !== 'card.assigned') {
       const authorizedBoardUsers = await db.query(
         `SELECT wm.user_id
          FROM workspace_members wm

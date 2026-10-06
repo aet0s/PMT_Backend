@@ -34,25 +34,14 @@ function getWorkspaceRoom(workspaceId, tenantId) {
   return tenantId ? `t:${tenantId}:workspace:${workspaceId}` : `workspace:${workspaceId}`;
 }
 
-function getAllowedOrigins() {
-  const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (process.env.CLIENT_URL) {
-    const cUrl = process.env.CLIENT_URL.trim();
-    if (!list.includes(cUrl)) list.push(cUrl);
-  }
-  if (list.length === 0) {
-    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
-  }
-  return list;
-}
+const { isOriginAllowed, getAllowedOrigins } = require('./utils/corsOrigins');
 
 function initSocket(server) {
-  const allowedOrigins = getAllowedOrigins();
   io = new Server(server, {
     cors: {
       origin: (origin, callback) => {
         if (!origin) return callback(null, false);
-        if (allowedOrigins.includes(origin)) {
+        if (isOriginAllowed(origin)) {
           return callback(null, true);
         }
         return callback(null, false);
@@ -73,8 +62,7 @@ function initSocket(server) {
       }
 
       // 3. Foreign / disallowed origin: reject
-      const currentAllowed = getAllowedOrigins();
-      if (!currentAllowed.includes(origin)) {
+      if (!isOriginAllowed(origin)) {
         return callback(`ORIGIN_NOT_ALLOWED: Origin '${origin}' is not authorized.`, false);
       }
 
@@ -130,10 +118,8 @@ function initSocket(server) {
     // Join personal tenant-namespaced user room on connect
     const userRoom = getUserRoom(socket.userId, socket.tenantId);
     socket.join(userRoom);
-    // Also join legacy unnamespaced room for dev single mode
-    if (!socket.tenantId) {
-      socket.join(`user:${socket.userId}`);
-    }
+    // Unconditionally join user room so direct user notifications always reach this user
+    socket.join(`user:${socket.userId}`);
 
     // Join workspace room with tenant isolation
     socket.on('join_workspace', ({ workspaceId, tenantId }) => {

@@ -215,13 +215,17 @@ router.post('/', requireAuth, upload.single('file'), async (req, res, next) => {
       attachment = row;
     }
 
-    await notify({
-      eventType: 'attachment.added',
-      actorUserId: req.user.id,
-      boardId,
-      cardId,
-      meta: { fileName: attachment.file_name, cardTitle }
-    });
+    await notify(
+      {
+        eventType: 'attachment.added',
+        actorUserId: req.user.id,
+        boardId,
+        cardId,
+        tenantId: req.tenant?.id || null,
+        meta: { fileName: attachment.file_name, cardTitle }
+      },
+      req.db
+    );
 
     const fullCard = await getFullCard(cardId, req.db);
     broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);

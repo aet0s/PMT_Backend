@@ -11,7 +11,10 @@ const { enqueueNotification } = require('./notifyBatcher');
  * Every notification-worthy action in the app calls notify(...) post-DB write.
  */
 async function notify(
-  {
+  params = {},
+  dbInstance = null
+) {
+  const {
     eventType,
     actorUserId,
     workspaceId,
@@ -20,25 +23,63 @@ async function notify(
     targetUserId,
     inviteeUserId,
     mentionedUserIds,
-    tenantId = null,
     meta = {}
-  },
-  dbInstance = null
-) {
+  } = params;
+
   if (!eventType || !NOTIFICATION_EVENTS[eventType]) {
     console.warn(`Unknown or uncataloged eventType passed to notify: "${eventType}"`);
     return;
   }
 
-  let db = dbInstance;
+  let tenantId = params.tenantId || params.req?.tenant?.id || null;
+  let db = dbInstance || params.db || params.req?.db || null;
+
   if (!db) {
     if (tenantId) {
       try {
         db = await getTenantDb(tenantId);
       } catch (e) {
-        db = getDevSingleDb();
+        db = null;
       }
-    } else {
+    }
+
+    // Fallback: If tenantId was not supplied in multi-tenant mode, discover tenant by resource
+    if (!db && process.env.DEV_SINGLE_TENANT !== '1') {
+      try {
+        const { getMasterDb } = require('./tenantPools');
+        const masterDb = getMasterDb();
+        const tenants = await masterDb.query("SELECT id FROM tenants WHERE status = 'active'");
+        for (const t of tenants) {
+          const tDb = await getTenantDb(t.id);
+          if (cardId) {
+            const check = await tDb.query('SELECT id FROM cards WHERE id = ?', [cardId]);
+            if (check.length > 0) {
+              db = tDb;
+              tenantId = t.id;
+              break;
+            }
+          } else if (boardId) {
+            const check = await tDb.query('SELECT id FROM boards WHERE id = ?', [boardId]);
+            if (check.length > 0) {
+              db = tDb;
+              tenantId = t.id;
+              break;
+            }
+          } else if (workspaceId) {
+            const check = await tDb.query('SELECT id FROM workspaces WHERE id = ?', [workspaceId]);
+            if (check.length > 0) {
+              db = tDb;
+              tenantId = t.id;
+              break;
+            }
+          }
+        }
+      } catch (scanErr) {
+        // Fallback to dev single db
+      }
+    }
+
+    if (!db) {
       db = getDevSingleDb();
     }
   }

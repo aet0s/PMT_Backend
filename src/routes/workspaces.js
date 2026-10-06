@@ -607,26 +607,34 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
 
       for (const bId of addedBoardIds) {
         const bRes = await req.db.query('SELECT name FROM boards WHERE id = ?', [bId]);
-        await notify({
-          eventType: 'board.member_added',
-          actorUserId: req.user.id,
-          targetUserId,
-          boardId: bId,
-          workspaceId,
-          meta: { boardName: bRes[0]?.name || 'Board' }
-        });
+        await notify(
+          {
+            eventType: 'board.member_added',
+            actorUserId: req.user.id,
+            targetUserId,
+            boardId: bId,
+            workspaceId,
+            tenantId: req.tenant?.id || null,
+            meta: { boardName: bRes[0]?.name || 'Board' }
+          },
+          req.db
+        );
       }
 
       for (const bId of removedBoardIds) {
         const bRes = await req.db.query('SELECT name FROM boards WHERE id = ?', [bId]);
-        await notify({
-          eventType: 'board.member_removed',
-          actorUserId: req.user.id,
-          targetUserId,
-          boardId: bId,
-          workspaceId,
-          meta: { boardName: bRes[0]?.name || 'Board' }
-        });
+        await notify(
+          {
+            eventType: 'board.member_removed',
+            actorUserId: req.user.id,
+            targetUserId,
+            boardId: bId,
+            workspaceId,
+            tenantId: req.tenant?.id || null,
+            meta: { boardName: bRes[0]?.name || 'Board' }
+          },
+          req.db
+        );
       }
     }
 
@@ -641,13 +649,17 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
     if (oldRoleId && Number(oldRoleId) !== Number(role_id)) {
       const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
       const roleRes = await req.db.query('SELECT name FROM roles WHERE id = ?', [role_id]);
-      await notify({
-        eventType: 'member.role_changed',
-        actorUserId: req.user.id,
-        targetUserId,
-        workspaceId,
-        meta: { roleName: roleRes[0]?.name || 'Member', workspaceName: wsRes[0]?.name || 'Workspace' }
-      });
+      await notify(
+        {
+          eventType: 'member.role_changed',
+          actorUserId: req.user.id,
+          targetUserId,
+          workspaceId,
+          tenantId: req.tenant?.id || null,
+          meta: { roleName: roleRes[0]?.name || 'Member', workspaceName: wsRes[0]?.name || 'Workspace' }
+        },
+        req.db
+      );
       // Revoke all sessions for target user so old permissions cannot be refreshed
       await revokeAllSessions(req.db, targetUserId, 'ROLE_CHANGE', req);
     }
@@ -717,13 +729,17 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
 
     const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
 
-    await notify({
-      eventType: 'member.removed',
-      actorUserId: req.user.id,
-      targetUserId,
-      workspaceId,
-      meta: { workspaceName: wsRes[0]?.name || 'Workspace' }
-    });
+    await notify(
+      {
+        eventType: 'member.removed',
+        actorUserId: req.user.id,
+        targetUserId,
+        workspaceId,
+        tenantId: req.tenant?.id || null,
+        meta: { workspaceName: wsRes[0]?.name || 'Workspace' }
+      },
+      req.db
+    );
 
     // Remove from workspace
     await req.db.execute('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?', [workspaceId, targetUserId]);
@@ -992,13 +1008,17 @@ router.post('/:id/members', requireAuth, requirePermission('member.invite'), asy
         );
       }
 
-      await notify({
-        eventType: 'member.added',
-        actorUserId: req.user.id,
-        targetUserId: targetUser.id,
-        workspaceId,
-        meta: { workspaceName: workspace.name }
-      });
+      await notify(
+        {
+          eventType: 'member.added',
+          actorUserId: req.user.id,
+          targetUserId: targetUser.id,
+          workspaceId,
+          tenantId: req.tenant?.id || null,
+          meta: { workspaceName: workspace.name }
+        },
+        req.db
+      );
 
       broadcastWorkspaceEvent(
         workspaceId,
