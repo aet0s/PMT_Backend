@@ -182,9 +182,7 @@ function initSocket(server) {
       const room = getBoardRoom(bId, effectiveTenantId);
 
       socket.join(room);
-      if (process.env.DEV_SINGLE_TENANT === '1') {
-        socket.join(`board:${bId}`);
-      }
+      socket.join(`board:${bId}`);
       socket.currentBoardRoom = room;
       socket.currentBoardId = bId;
 
@@ -319,15 +317,10 @@ function broadcastBoardEvent(boardId, eventName, payload, originId, tenantId = n
     timestamp: new Date().toISOString()
   };
 
-  if (tenantId && process.env.DEV_SINGLE_TENANT !== '1') {
+  if (tenantId) {
     io.to(`t:${tenantId}:board:${bId}`).emit(eventName, data);
-  } else {
-    // Emit to both namespaced and fallback rooms
-    io.to(`board:${bId}`).emit(eventName, data);
-    if (tenantId) {
-      io.to(`t:${tenantId}:board:${bId}`).emit(eventName, data);
-    }
   }
+  io.to(`board:${bId}`).emit(eventName, data);
 }
 
 function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = null, tenantId = null) {
