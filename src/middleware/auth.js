@@ -2,6 +2,7 @@
 // Multi-tenant JWT authentication middleware attaching req.user, req.tenant, and req.db.
 const jwt = require('jsonwebtoken');
 const { getTenantDb, getDevSingleDb, getMasterDb } = require('../services/tenantPools');
+const { isTokenBlacklisted } = require('../utils/tokenBlacklist');
 
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
@@ -98,6 +99,12 @@ const requireAuth = async (req, res, next) => {
   if (!token) {
     return res.status(401).json({
       error: { message: 'Authentication token missing', code: 'UNAUTHORIZED' }
+    });
+  }
+
+  if (isTokenBlacklisted(token)) {
+    return res.status(401).json({
+      error: { message: 'Session has been revoked upon logout. Please log in again.', code: 'SESSION_REVOKED' }
     });
   }
 

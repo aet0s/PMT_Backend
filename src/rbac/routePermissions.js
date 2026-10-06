@@ -57,6 +57,10 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id/roles',                                   { permission: 'role.view',                  scope: 'company' }],
   ['POST /api/workspaces/:id/roles',                                  { permission: 'role.create',                scope: 'company' }],
   ['GET /api/workspaces/:id/members',                                 { permission: 'member.view',                scope: 'company' }],
+  ['POST /api/workspaces/:id/members',                                { permission: 'member.invite',              scope: 'company' }],
+  ['POST /api/workspaces/:id/invitations',                            { permission: 'member.invite',              scope: 'company' }],
+  ['GET /api/workspaces/:id/invitations',                             { permission: 'member.view',                scope: 'company' }],
+  ['GET /api/workspaces/:id/archived',                                { selfScoped: 'archive.view — scopes by workspace membership', scope: 'company' }],
   ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company' }],
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-password',{ permission: 'member.reset_password',      scope: 'company' }],
@@ -75,6 +79,10 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/boards/:id',                    { permission: 'project.view',          scope: 'project', note: 'enforced inline in handler' }],
   ['PATCH /api/boards/:id',                  { permission: 'board.edit_settings',   scope: 'project' }],
   ['DELETE /api/boards/:id',                 { permission: 'board.delete',          scope: 'project' }],
+  ['GET /api/boards/:id/archived',           { permission: 'project.view',          scope: 'project' }],
+  ['POST /api/boards/:id/archive',           { permission: 'board.edit_settings',   scope: 'project' }],
+  ['POST /api/boards/:id/restore',           { permission: 'board.edit_settings',   scope: 'project' }],
+  ['GET /api/boards/:id/attachments',        { permission: 'project.view',          scope: 'project' }],
   // workspace-members listed for board: authenticated, returns members of the parent workspace
   ['GET /api/boards/:id/workspace-members',  { permission: 'member.view',           scope: 'project', note: 'returns parent workspace members; enforced inline' }],
   ['POST /api/boards/:id/members',           { permission: 'project.manage_members',scope: 'project' }],
@@ -99,6 +107,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/members',           { permission: 'card.assign_members',   scope: 'project' }],
 
   // ─── Card: Attachments & Comments ────────────────────────────────────────
+  ['GET /api/cards/:id/attachments',        { permission: 'project.view',          scope: 'project' }],
   ['POST /api/cards/:id/attachments',       { permission: 'card.manage_attachments', scope: 'project' }],
   ['POST /api/cards/:id/attachments/file',  { permission: 'card.manage_attachments', scope: 'project' }],
   ['POST /api/cards/:id/attachments/link',  { permission: 'card.manage_attachments', scope: 'project' }],
@@ -118,6 +127,14 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Archive ──────────────────────────────────────────────────────────────
   // GET /api/archive: auth only; handler scopes by workspace membership
   ['GET /api/archive',                      { selfScoped: 'archive.view — handler scopes by workspace membership',    scope: 'company' }],
+  ['GET /api/archived',                     { selfScoped: 'archive.view — handler scopes by workspace membership',    scope: 'company' }],
+
+  // ─── Attachments & Upload ──────────────────────────────────────────────────
+  ['GET /api/attachments',                  { selfScoped: 'attachment.view — returns accessible attachments',          scope: 'project' }],
+  ['GET /api/attachments/:id',              { permission: 'file.view',                                                 scope: 'project' }],
+  ['DELETE /api/attachments/:id',           { permission: 'attachment.delete',                                         scope: 'project' }],
+  ['POST /api/attachments',                 { selfScoped: 'attachment.upload — verified in handler by card_id',        scope: 'project' }],
+  ['POST /api/upload',                      { selfScoped: 'User standalone file upload',                               scope: 'company' }],
 
   // ─── Invitations ─────────────────────────────────────────────────────────
   ['GET /api/invitations/verify',           { publicReason: 'Public validation of a signed invite link',              scope: 'company' }],

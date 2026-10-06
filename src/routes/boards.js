@@ -10,26 +10,34 @@ const fs = require('fs');
 const { queueFileCleanupRetry } = require('../utils/fileCleanupQueue');
 const { logAuthEvent } = require('../services/authAudit');
 const { notify } = require('../services/notify');
+const { sanitizePlain } = require('../utils/sanitizer');
 
 const router = express.Router();
 
 const createBoardSchema = z.object({
   workspace_id: z.number({ required_error: 'workspace_id is required' }),
-  name: z.string().min(1, 'Board name is required'),
+  name: z.string().min(1, 'Board name is required').transform((v) => sanitizePlain(v)),
   background_color: z.string().optional()
 });
 
 const updateBoardSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   background_color: z.string().optional(),
   is_archived: z.boolean().optional()
 });
 
 // GET /api/boards?workspace_id=
 router.get('/', requireAuth, async (req, res, next) => {
-  const { workspace_id } = req.query;
+  const { workspace_id, archived } = req.query;
 
   try {
+    let archivedCondition = 'b.is_archived = 0';
+    if (archived === 'true' || archived === '1') {
+      archivedCondition = 'b.is_archived = 1';
+    } else if (archived === 'all') {
+      archivedCondition = '1=1';
+    }
+
     let query = `
       SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.is_archived, b.created_at, w.name as workspace_name
       FROM boards b
@@ -37,7 +45,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
       LEFT JOIN roles r ON wm.role_id = r.id
       LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = ?
-      WHERE b.is_archived = 0 
+      WHERE ${archivedCondition} 
         AND w.is_archived = 0
         AND (
           EXISTS (
@@ -637,6 +645,94 @@ router.post('/:id/labels', requireAuth, requirePermission('board.edit_settings')
     );
     const [label] = await req.db.query('SELECT * FROM labels WHERE id = ?', [labelExec.insertId]);
     return res.status(201).json({ label });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/boards/:id/archived - Return archived lists and cards for board
+router.get('/:id/archived', requireAuth, async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  try {
+    const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (!board) {
+      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    }
+    const hasPerm = await userHasPermission(req.user.id, board.workspace_id, 'project.view', req.db, boardId);
+    if (!hasPerm) {
+      return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+    }
+    const lists = await req.db.query('SELECT * FROM lists WHERE board_id = ? AND is_archived = 1 ORDER BY position ASC', [boardId]);
+    const cards = await req.db.query(
+      `SELECT c.*, l.name as list_name FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       WHERE l.board_id = ? AND c.is_archived = 1 ORDER BY c.created_at DESC`,
+      [boardId]
+    );
+    return res.json({ lists, cards });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/boards/:id/archive - Archive board
+router.post('/:id/archive', requireAuth, requirePermission('board.edit_settings'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  try {
+    const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (!board) return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+
+    await req.db.execute('UPDATE boards SET is_archived = 1 WHERE id = ?', [boardId]);
+    const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+
+    await notify({
+      eventType: 'board.archived',
+      actorUserId: req.user.id,
+      boardId,
+      workspaceId: board.workspace_id,
+      meta: { boardName: board.name }
+    });
+
+    return res.json({ message: 'Board archived successfully', board: updatedBoard });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/boards/:id/restore - Restore archived board
+router.post('/:id/restore', requireAuth, requirePermission('board.edit_settings'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  try {
+    const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (!board) return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+
+    await req.db.execute('UPDATE boards SET is_archived = 0 WHERE id = ?', [boardId]);
+    const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+
+    return res.json({ message: 'Board restored successfully', board: updatedBoard });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/boards/:id/attachments - Return attachments for cards on this board
+router.get('/:id/attachments', requireAuth, async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  try {
+    const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (!board) return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    const hasPerm = await userHasPermission(req.user.id, board.workspace_id, 'project.view', req.db, boardId);
+    if (!hasPerm) return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+
+    const attachments = await req.db.query(
+      `SELECT a.*, c.title as card_title, u.name as uploader_name FROM attachments a
+       JOIN cards c ON a.card_id = c.id
+       JOIN lists l ON c.list_id = l.id
+       LEFT JOIN users u ON a.uploaded_by_user_id = u.id
+       WHERE l.board_id = ? ORDER BY a.created_at DESC`,
+      [boardId]
+    );
+    return res.json({ attachments });
   } catch (err) {
     next(err);
   }

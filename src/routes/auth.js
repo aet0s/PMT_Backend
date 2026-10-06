@@ -4,7 +4,8 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { requireAuth, getJwtSecret } = require('../middleware/auth');
+const { requireAuth, getJwtSecret, extractToken } = require('../middleware/auth');
+const { blacklistToken } = require('../utils/tokenBlacklist');
 const validate = require('../middleware/validate');
 const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenantPools');
 const { provisionTenant, slugify } = require('../services/tenantProvisioner');
@@ -1267,10 +1268,16 @@ router.post('/sessions/revoke-others', requireAuth, async (req, res, next) => {
 // -------------------------------------------------------------
 router.post('/logout', requireAuth, async (req, res, next) => {
   try {
+    const token = extractToken(req);
+    if (token) {
+      blacklistToken(token);
+    }
     if (req.user?.sessionId) {
       await revokeSession(req.db, req.user.id, req.user.sessionId, req);
+    } else if (req.user?.id) {
+      await revokeAllSessions(req.db, req.user.id, 'LOGOUT', req);
     }
-    const { maxAge, ...clearOptions } = COOKIE_OPTIONS;
+    const clearOptions = getClearCookieOptions();
     res.clearCookie('token', clearOptions);
     res.clearCookie('refreshToken', clearOptions);
     return res.json({ message: 'Logged out successfully' });
@@ -1285,8 +1292,12 @@ router.post('/logout', requireAuth, async (req, res, next) => {
 // -------------------------------------------------------------
 router.post('/logout-all', requireAuth, async (req, res, next) => {
   try {
+    const token = extractToken(req);
+    if (token) {
+      blacklistToken(token);
+    }
     await revokeAllSessions(req.db, req.user.id, 'LOGOUT_ALL', req);
-    const { maxAge, ...clearOptions } = COOKIE_OPTIONS;
+    const clearOptions = getClearCookieOptions();
     res.clearCookie('token', clearOptions);
     res.clearCookie('refreshToken', clearOptions);
     return res.json({ message: 'Logged out from all devices successfully' });

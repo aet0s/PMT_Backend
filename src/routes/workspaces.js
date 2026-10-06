@@ -17,21 +17,23 @@ const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
 const { canResetTarget, isOwnerRole, getRoleRank } = require('../utils/roleRank');
+const { sanitizePlain } = require('../utils/sanitizer');
+const { createInvitationHelper } = require('./invitations');
 
 const router = express.Router();
 
 const createWorkspaceSchema = z.object({
-  name: z.string().min(1, 'Workspace name is required')
+  name: z.string().min(1, 'Workspace name is required').transform((v) => sanitizePlain(v))
 });
 
 const updateWorkspaceSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   is_archived: z.boolean().optional(),
   require_2fa_for_admins: z.boolean().optional()
 });
 
 const createRoleSchema = z.object({
-  name: z.string().min(1, 'Role name is required'),
+  name: z.string().min(1, 'Role name is required').transform((v) => sanitizePlain(v)),
   permission_keys: z.array(z.string()).default([])
 });
 
@@ -117,7 +119,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 
 // POST /api/workspaces - Create new workspace and assign Super Admin to creator
 router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, next) => {
-  const { name } = req.body;
+  const name = sanitizePlain(req.body.name);
   try {
     const wsExec = await req.db.execute(
       'INSERT INTO workspaces (name) VALUES (?)',
@@ -155,7 +157,7 @@ router.patch('/:id', requireAuth, requirePermission('workspace.edit_settings'), 
 
     if (name !== undefined) {
       updates.push('name = ?');
-      values.push(name);
+      values.push(sanitizePlain(name));
     }
     if (is_archived !== undefined) {
       updates.push('is_archived = ?');
@@ -825,6 +827,194 @@ router.post('/:workspaceId/members/:userId/reset-2fa', requireAuth, requirePermi
       user: { id: targetUser.id, email: targetUser.email, name: targetUser.name },
       totp_enabled: false
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/members - Add or invite member to workspace
+router.post('/:id/members', requireAuth, requirePermission('member.invite'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const { email, user_id, role_id, role } = req.body;
+
+  try {
+    const [workspace] = await req.db.query('SELECT * FROM workspaces WHERE id = ?', [workspaceId]);
+    if (!workspace) {
+      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+
+    let targetRoleId = role_id ? Number(role_id) : null;
+    let roleName = role || 'Team Member';
+    if (!targetRoleId && role) {
+      const [rRow] = await req.db.query(
+        'SELECT id, name FROM roles WHERE (workspace_id = ? OR workspace_id IS NULL) AND name = ? LIMIT 1',
+        [workspaceId, role]
+      );
+      if (rRow) {
+        targetRoleId = rRow.id;
+        roleName = rRow.name;
+      }
+    }
+    if (!targetRoleId) {
+      const [tmRow] = await req.db.query(
+        "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL LIMIT 1"
+      );
+      targetRoleId = tmRow?.id || 2;
+      roleName = tmRow?.name || 'Team Member';
+    }
+
+    let targetUser = null;
+    if (user_id) {
+      const [uRow] = await req.db.query('SELECT id, email, name FROM users WHERE id = ?', [Number(user_id)]);
+      targetUser = uRow;
+    } else if (email) {
+      const [uRow] = await req.db.query('SELECT id, email, name FROM users WHERE email = ?', [email.trim().toLowerCase()]);
+      targetUser = uRow;
+    }
+
+    if (targetUser) {
+      const existing = await req.db.query(
+        'SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        [workspaceId, targetUser.id]
+      );
+      if (existing.length > 0) {
+        return res.status(409).json({
+          error: { message: 'User is already a member of this workspace', code: 'ALREADY_MEMBER' }
+        });
+      }
+
+      await req.db.execute(
+        'INSERT INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+        [workspaceId, targetUser.id, roleName, targetRoleId]
+      );
+
+      const wsBoards = await req.db.query('SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0', [workspaceId]);
+      for (const b of wsBoards) {
+        await req.db.execute(
+          "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
+          [b.id, targetUser.id]
+        );
+      }
+
+      await notify({
+        eventType: 'member.added',
+        actorUserId: req.user.id,
+        targetUserId: targetUser.id,
+        workspaceId,
+        meta: { workspaceName: workspace.name }
+      });
+
+      broadcastWorkspaceEvent(
+        workspaceId,
+        'workspace:member_added',
+        { workspaceId, user: targetUser, role_id: targetRoleId },
+        req.headers['x-origin-id'],
+        req.tenant?.id
+      );
+
+      return res.status(201).json({
+        message: 'Member added to workspace successfully',
+        member: {
+          id: targetUser.id,
+          name: targetUser.name,
+          email: targetUser.email,
+          role: roleName,
+          role_id: targetRoleId
+        }
+      });
+    }
+
+    if (email) {
+      const result = await createInvitationHelper(req, {
+        workspaceId,
+        email: email.trim().toLowerCase(),
+        roleId: targetRoleId
+      });
+      return res.status(201).json({
+        message: 'Invitation sent to user',
+        invitation: result.invitation
+      });
+    }
+
+    return res.status(400).json({
+      error: { message: 'Either email or user_id is required', code: 'BAD_REQUEST' }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/invitations - Send invitation for workspace
+router.post('/:id/invitations', requireAuth, requirePermission('member.invite'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const { email, role_id, board_ids } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: { message: 'Email is required', code: 'BAD_REQUEST' } });
+  }
+  try {
+    const result = await createInvitationHelper(req, {
+      workspaceId,
+      email: email.trim().toLowerCase(),
+      roleId: role_id ? Number(role_id) : undefined,
+      boardIds: board_ids
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/invitations - List pending invitations for workspace
+router.get('/:id/invitations', requireAuth, requirePermission('member.view'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const invites = await req.db.query(
+      `SELECT pi.*, r.name as role_name, u.name as inviter_name
+       FROM pending_invitations pi
+       LEFT JOIN roles r ON pi.role_id = r.id
+       LEFT JOIN users u ON pi.invited_by_user_id = u.id
+       WHERE pi.workspace_id = ?
+       ORDER BY pi.created_at DESC`,
+      [workspaceId]
+    );
+    return res.json({ invitations: invites });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/archived - List archived boards and cards for workspace
+router.get('/:id/archived', requireAuth, async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const wsMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    if (wsMember.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+    }
+
+    const boards = await req.db.query(
+      `SELECT b.*, w.name as workspace_name
+       FROM boards b
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id = ? AND b.is_archived = 1
+       ORDER BY b.created_at DESC`,
+      [workspaceId]
+    );
+
+    const cards = await req.db.query(
+      `SELECT c.*, l.name as list_name, b.name as board_name
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ? AND c.is_archived = 1
+       ORDER BY c.created_at DESC`,
+      [workspaceId]
+    );
+
+    return res.json({ boards, cards });
   } catch (err) {
     next(err);
   }

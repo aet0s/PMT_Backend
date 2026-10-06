@@ -9,13 +9,14 @@ const localStorage = require('../storage');
 const { broadcastBoardEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
-const { requirePermission } = require('../middleware/permissions');
+const { requirePermission, userHasPermission } = require('../middleware/permissions');
+const { sanitizePlain } = require('../utils/sanitizer');
 
 const router = express.Router();
 
 const createCardSchema = z.object({
   list_id: z.number(),
-  title: z.string().min(1, 'Card title is required'),
+  title: z.string().min(1, 'Card title is required').transform((v) => sanitizePlain(v)),
   description: z.string().optional(),
   position: z.number().optional(),
   due_date: z.string().nullable().optional()
@@ -23,7 +24,7 @@ const createCardSchema = z.object({
 
 const updateCardSchema = z.object({
   list_id: z.number().optional(),
-  title: z.string().min(1).optional(),
+  title: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   description: z.string().optional(),
   position: z.number().optional(),
   start_date: z.string().nullable().optional(),
@@ -474,6 +475,34 @@ router.post('/:id/members', requireAuth, requirePermission('card.assign_members'
     }
 
     return res.json({ action, user_id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cards/:id/attachments
+router.get('/:id/attachments', requireAuth, async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  try {
+    const cardRes = await req.db.query(
+      'SELECT l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
+      [cardId]
+    );
+    if (cardRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+    }
+    const { board_id: boardId, workspace_id: workspaceId } = cardRes[0];
+    const hasPerm = await userHasPermission(req.user.id, workspaceId, 'project.view', req.db, boardId);
+    if (!hasPerm) {
+      return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+    }
+    const attachments = await req.db.query(
+      `SELECT a.*, u.name as uploader_name FROM attachments a
+       LEFT JOIN users u ON a.uploaded_by_user_id = u.id
+       WHERE a.card_id = ? ORDER BY a.created_at DESC`,
+      [cardId]
+    );
+    return res.json({ attachments });
   } catch (err) {
     next(err);
   }

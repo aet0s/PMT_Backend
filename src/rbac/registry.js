@@ -227,6 +227,7 @@ const LEGACY_PERMISSION_ALIASES = {
   'board.create': 'project.create',
   'board.edit_settings': 'project.edit_settings',
   'board.delete': 'project.delete',
+  'board.archive': 'project.archive',
   'board.manage_members': 'project.manage_members',
   'card.create': 'task.create',
   'card.edit': 'task.edit',

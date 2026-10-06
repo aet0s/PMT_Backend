@@ -34,6 +34,10 @@ const notificationsRouter = require('./routes/notifications');
 const permissionsRouter = require('./routes/permissions');
 const rolesRouter = require('./routes/roles');
 const filesRouter = require('./routes/files');
+const attachmentsRouter = require('./routes/attachments');
+const upload = require('./middleware/upload');
+const localStorage = require('./storage');
+const { requireAuth } = require('./middleware/auth');
 
 const helmet = require('helmet');
 
@@ -55,12 +59,18 @@ app.set('trust proxy', 1);
 
 function getAllowedOrigins() {
   const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const defaults = [
+    'https://pmt.solarman.in',
+    'https://pmtmgmt.solarman.in',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173'
+  ];
+  for (const d of defaults) {
+    if (!list.includes(d)) list.push(d);
+  }
   if (process.env.CLIENT_URL) {
     const cUrl = process.env.CLIENT_URL.trim();
     if (!list.includes(cUrl)) list.push(cUrl);
-  }
-  if (list.length === 0) {
-    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
   }
   return list;
 }
@@ -77,6 +87,20 @@ app.use(
   })
 );
 
+// Comprehensive Security Headers for all responses (including dev & reverse-proxied HTTPS)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Origin-Agent-Cluster', '?1');
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https' || process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
+  next();
+});
+
 // Allow cross-origin embedding ONLY for authenticated tenant file route /api/files
 app.use('/api/files', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -88,7 +112,9 @@ const allowedOrigins = getAllowedOrigins();
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
+      if (!origin || origin === 'null') {
+        return callback(null, false);
+      }
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -137,11 +163,34 @@ app.use('/api/boards', boardsRouter);
 app.use('/api/lists', listsRouter);
 app.use('/api/cards', cardsRouter);
 app.use('/api/archive', archiveRouter);
+app.use('/api/archived', archiveRouter);
+app.use('/api/attachments', attachmentsRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/permissions', permissionsRouter);
 app.use('/api/roles', rolesRouter);
 app.use('/api/files', filesRouter);
+
+// POST /api/upload - Standalone file upload endpoint
+app.post('/api/upload', requireAuth, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: { message: 'File is required', code: 'BAD_REQUEST' } });
+    }
+    const saved = await localStorage.save(req.file, null, req.tenant ? req.tenant.id : 1);
+    return res.status(201).json({
+      message: 'File uploaded successfully',
+      file: {
+        file_name: saved.file_name,
+        file_url: saved.file_url,
+        file_type: saved.file_type,
+        file_size_bytes: saved.file_size_bytes
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 const { getSystemHealthStatus } = require('./db/migrator');
 
