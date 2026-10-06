@@ -1,8 +1,14 @@
 const { getDevSingleDb } = require('./tenantPools');
 const { NOTIFICATION_EVENTS } = require('./notificationEvents');
+const { checkPermission } = require('../middleware/permissions');
 
 /**
- * Resolves recipient user IDs for a given notification event
+ * Resolves recipient user IDs for a given notification event.
+ * Ensures strict security & permission verification:
+ * 1. User must be in workspace (workspace_members).
+ * 2. If event is board/card scoped, user must have access to that board (board_members or workspace admin).
+ * 3. User must possess the required RBAC permission for the action (e.g. task.view, comment.view).
+ * If user is outside of permission/access, notification will NOT be sent to them.
  */
 async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
   const db = dbInstance || getDevSingleDb();
@@ -70,7 +76,15 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
             `SELECT wm.user_id 
              FROM workspace_members wm
              LEFT JOIN roles r ON wm.role_id = r.id
-             WHERE wm.workspace_id = ? AND (r.name IN ('Super Admin', 'Manager') OR wm.role = 'admin' OR wm.role = 'Super Admin')`,
+             WHERE wm.workspace_id = ? AND (
+               r.name IN ('Owner', 'Super Admin', 'Admin', 'Manager')
+               OR wm.role IN ('admin', 'Super Admin', 'Owner')
+               OR EXISTS (
+                 SELECT 1 FROM role_permissions rp
+                 JOIN permissions p ON rp.permission_id = p.id
+                 WHERE rp.role_id = wm.role_id AND p.key IN ('member.view', 'workspace.edit_settings')
+               )
+             )`,
             [ctx.workspaceId]
           );
           userIds = res.map((r) => r.user_id);
@@ -82,16 +96,52 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
     }
 
     // Clean & Deduplicate IDs
-    const cleanIds = Array.from(new Set(userIds.map(Number).filter((id) => !isNaN(id) && id > 0)));
+    let cleanIds = Array.from(new Set(userIds.map(Number).filter((id) => !isNaN(id) && id > 0)));
 
-    // Recipient Safety Guard: Ensure target users still belong to workspace if workspaceId is present
-    if (ctx.workspaceId && cleanIds.length > 0) {
+    // 1. Workspace Safety Guard: Ensure target users belong to workspace (unless invite.sent)
+    if (ctx.workspaceId && cleanIds.length > 0 && eventType !== 'invite.sent') {
       const validWsMembers = await db.query(
         'SELECT user_id FROM workspace_members WHERE workspace_id = ? AND user_id IN (?)',
         [ctx.workspaceId, cleanIds]
       );
       const validSet = new Set(validWsMembers.map((r) => r.user_id));
-      return cleanIds.filter((id) => validSet.has(id));
+      cleanIds = cleanIds.filter((id) => validSet.has(id));
+    }
+
+    // 2. Board Authorization Guard: If event is board or card scoped, user must have access to that board
+    // (Workspace Admin, Owner, or direct board_member). Exclude board.member_removed so user gets removal notice.
+    if (ctx.boardId && ctx.workspaceId && cleanIds.length > 0 && eventType !== 'board.member_removed') {
+      const authorizedBoardUsers = await db.query(
+        `SELECT wm.user_id
+         FROM workspace_members wm
+         LEFT JOIN roles r ON wm.role_id = r.id
+         LEFT JOIN board_members bm ON bm.board_id = ? AND bm.user_id = wm.user_id
+         WHERE wm.workspace_id = ? AND wm.user_id IN (?)
+           AND (
+             r.name IN ('Owner', 'Super Admin', 'Admin')
+             OR EXISTS (
+               SELECT 1 FROM role_permissions rp
+               JOIN permissions p ON rp.permission_id = p.id
+               WHERE rp.role_id = wm.role_id AND p.key IN ('workspace.edit_settings', 'workspace.delete')
+             )
+             OR bm.user_id IS NOT NULL
+           )`,
+        [ctx.boardId, ctx.workspaceId, cleanIds]
+      );
+      const authorizedSet = new Set(authorizedBoardUsers.map((r) => r.user_id));
+      cleanIds = cleanIds.filter((id) => authorizedSet.has(id));
+    }
+
+    // 3. RBAC Permission Guard: If event has required permission, verify user has it
+    if (eventConfig.requiredPermission && ctx.workspaceId && cleanIds.length > 0) {
+      const permittedIds = [];
+      for (const id of cleanIds) {
+        const hasPerm = await checkPermission(id, eventConfig.requiredPermission, ctx.workspaceId, db, ctx.boardId);
+        if (hasPerm) {
+          permittedIds.push(id);
+        }
+      }
+      cleanIds = permittedIds;
     }
 
     return cleanIds;

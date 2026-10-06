@@ -2,16 +2,36 @@
 const sanitizeHtml = require('sanitize-html');
 
 /**
+ * Decodes standard HTML entities so plain text remains literal characters
+ * (e.g. '&amp;' becomes '&', '&lt;' becomes '<', '&gt;' becomes '>', '&quot;' becomes '"', etc.)
+ */
+function decodeEntities(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, '/')
+    .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/**
  * Strips all HTML/script tags and attributes completely for plain text fields
  * (workspace names, board names, list titles, usernames, role names, etc.)
+ * Ensures plain text characters like '&' remain literal plain text and are not encoded.
  */
 function sanitizePlain(str) {
   if (typeof str !== 'string') return str;
-  return sanitizeHtml(str, {
+  const cleaned = sanitizeHtml(str, {
     allowedTags: [],
     allowedAttributes: {},
     disallowedTagsMode: 'discard'
-  }).trim();
+  });
+  return decodeEntities(cleaned).trim();
 }
 
 /**
@@ -32,6 +52,8 @@ function sanitizeRich(html) {
 }
 
 module.exports = {
+  decodeEntities,
   sanitizePlain,
   sanitizeRich
 };
+

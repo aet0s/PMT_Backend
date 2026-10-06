@@ -60,6 +60,8 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/workspaces/:id/members',                                { permission: 'member.invite',              scope: 'company' }],
   ['POST /api/workspaces/:id/invitations',                            { permission: 'member.invite',              scope: 'company' }],
   ['GET /api/workspaces/:id/invitations',                             { permission: 'member.view',                scope: 'company' }],
+  ['GET /api/workspaces/:id/activity',                                { permission: 'workspace.view',             scope: 'company' }],
+  ['GET /api/workspaces/:id/reports',                                 { selfScoped: 'report.view — scoped to workspace members', scope: 'company' }],
   ['GET /api/workspaces/:id/archived',                                { selfScoped: 'archive.view — scopes by workspace membership', scope: 'company' }],
   ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company' }],
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],
@@ -141,6 +143,7 @@ const ROUTE_PERMISSIONS = new Map([
   // GET and DELETE invitations use inline requireWorkspaceAdmin check — effectivley member.invite
   ['GET /api/invitations',                  { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
   ['POST /api/invitations',                 { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
+  ['POST /api/invitations/:id/regenerate',  { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
   // POST accept: authenticated; handler validates token + tenant membership
   ['POST /api/invitations/accept',          { selfScoped: 'Accepts a valid signed invite token; no RBAC key needed', scope: 'company' }],
   ['DELETE /api/invitations/:id',           { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],

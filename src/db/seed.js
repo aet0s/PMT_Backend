@@ -61,28 +61,31 @@ async function seed() {
     const workspaceId = wsRes.insertId;
 
     // 5. Fetch System Roles
-    const superAdminRoleRes = await db.query(
-      "SELECT id FROM roles WHERE is_system = 1 AND name = 'Super Admin' AND workspace_id IS NULL"
+    const ownerRoleRes = await db.query(
+      "SELECT id, name FROM roles WHERE is_system = 1 AND name IN ('Owner', 'Super Admin') AND workspace_id IS NULL LIMIT 1"
     );
-    const superAdminRoleId = superAdminRoleRes[0]?.id;
+    const ownerRoleId = ownerRoleRes[0]?.id || 1;
+    const ownerRoleName = ownerRoleRes[0]?.name || 'Owner';
 
     const managerRoleRes = await db.query(
-      "SELECT id FROM roles WHERE is_system = 1 AND name = 'Manager' AND workspace_id IS NULL"
+      "SELECT id, name FROM roles WHERE is_system = 1 AND name IN ('Project Manager', 'Manager', 'Admin') AND workspace_id IS NULL LIMIT 1"
     );
-    const managerRoleId = managerRoleRes[0]?.id;
+    const managerRoleId = managerRoleRes[0]?.id || 2;
+    const managerRoleName = managerRoleRes[0]?.name || 'Project Manager';
 
     const teamMemberRoleRes = await db.query(
-      "SELECT id FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
+      "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL LIMIT 1"
     );
-    const teamMemberRoleId = teamMemberRoleRes[0]?.id;
+    const teamMemberRoleId = teamMemberRoleRes[0]?.id || 3;
+    const teamMemberRoleName = teamMemberRoleRes[0]?.name || 'Team Member';
 
     // 6. Assign Users to Workspace Members with exact role_ids
     const memberAssignments = [
-      [workspaceId, superAdminUser.id, 'Super Admin', superAdminRoleId],
-      [workspaceId, manager1User.id, 'Manager', managerRoleId],
-      [workspaceId, manager2User.id, 'Manager', managerRoleId],
-      [workspaceId, member1User.id, 'Team Member', teamMemberRoleId],
-      [workspaceId, member2User.id, 'Team Member', teamMemberRoleId]
+      [workspaceId, superAdminUser.id, ownerRoleName, ownerRoleId],
+      [workspaceId, manager1User.id, managerRoleName, managerRoleId],
+      [workspaceId, manager2User.id, managerRoleName, managerRoleId],
+      [workspaceId, member1User.id, teamMemberRoleName, teamMemberRoleId],
+      [workspaceId, member2User.id, teamMemberRoleName, teamMemberRoleId]
     ];
 
     for (const [wsId, uId, role, rId] of memberAssignments) {

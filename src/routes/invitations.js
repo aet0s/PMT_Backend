@@ -8,11 +8,14 @@ const { notify } = require('../services/notify');
 const { userHasPermission } = require('../middleware/permissions');
 const { broadcastWorkspaceEvent } = require('../socket');
 
+const { isOwnerRole } = require('../utils/roleRank');
+
 const router = express.Router();
 
 const inviteSchema = z.object({
   email: z.string().email('Invalid email address'),
   workspace_id: z.number({ required_error: 'workspace_id is required' }),
+  role_id: z.number().int().positive().optional(),
   board_ids: z.array(z.number()).optional().default([])
 });
 
@@ -76,13 +79,15 @@ router.get('/verify', async (req, res, next) => {
       activeDb = getDevSingleDb();
     }
     const inviteRes = await activeDb.query(
-      `SELECT pi.id, pi.email, pi.workspace_id, pi.status, pi.expires_at, w.name as workspace_name,
+      `SELECT pi.id, pi.email, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, w.name as workspace_name,
+              r.name as role_name,
               GROUP_CONCAT(ib.board_id) as board_ids_str
        FROM pending_invitations pi
        JOIN workspaces w ON pi.workspace_id = w.id
+       LEFT JOIN roles r ON pi.role_id = r.id
        LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
        WHERE pi.token = ?
-       GROUP BY pi.id, pi.email, pi.workspace_id, pi.status, pi.expires_at, w.name`,
+       GROUP BY pi.id, pi.email, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, w.name, r.name`,
       [token]
     );
 
@@ -116,6 +121,7 @@ router.get('/verify', async (req, res, next) => {
         email: invite.email,
         workspace_id: invite.workspace_id,
         workspace_name: invite.workspace_name,
+        role_name: invite.role_name || 'Team Member',
         board_names: boardNames,
         status: invite.status
       }
@@ -139,11 +145,13 @@ router.get('/', requireAuth, async (req, res, next) => {
     }
 
     const invitesRes = await req.db.query(
-      `SELECT pi.id, pi.email, pi.workspace_id, pi.token, pi.status, pi.created_at, pi.accepted_at,
+      `SELECT pi.id, pi.email, pi.workspace_id, pi.token, pi.role_id, pi.status, pi.created_at, pi.expires_at, pi.accepted_at,
               u.name as invited_by_name,
+              r.name as role_name,
               GROUP_CONCAT(ib.board_id) as board_ids_str
        FROM pending_invitations pi
        LEFT JOIN users u ON pi.invited_by_user_id = u.id
+       LEFT JOIN roles r ON pi.role_id = r.id
        LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
        WHERE pi.workspace_id = ? 
          AND pi.status = 'pending'
@@ -152,7 +160,7 @@ router.get('/', requireAuth, async (req, res, next) => {
            JOIN users u2 ON wm.user_id = u2.id
            WHERE wm.workspace_id = pi.workspace_id AND u2.email = pi.email
          )
-       GROUP BY pi.id, pi.email, pi.workspace_id, pi.token, pi.status, pi.created_at, pi.accepted_at, u.name
+       GROUP BY pi.id, pi.email, pi.workspace_id, pi.token, pi.role_id, pi.status, pi.created_at, pi.expires_at, pi.accepted_at, u.name, r.name
        ORDER BY pi.created_at DESC`,
       [Number(workspace_id)]
     );
@@ -175,9 +183,13 @@ router.get('/', requireAuth, async (req, res, next) => {
       });
     }
 
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+
     const invitations = invites.map((inv) => ({
       ...inv,
-      board_names: (inv.board_ids || []).map((id) => boardMap[id]).filter(Boolean)
+      role_name: inv.role_name || 'Team Member',
+      board_names: (inv.board_ids || []).map((id) => boardMap[id]).filter(Boolean),
+      invite_url: `${clientBase}/register?invite_token=${inv.token}&email=${encodeURIComponent(inv.email)}`
     }));
 
     return res.json({ invitations });
@@ -189,6 +201,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 async function createInvitationHelper({ db, user, tenant, workspaceId, email, roleId, boardIds = [], originId = null }) {
   const normalizedEmail = normalizeEmail(email);
 
+  // Validate boards belong to workspace
   if (boardIds.length > 0) {
     const validBoardsRes = await db.query(
       'SELECT id FROM boards WHERE workspace_id = ? AND id IN (?)',
@@ -202,6 +215,35 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       err.code = 'BAD_REQUEST';
       throw err;
     }
+  }
+
+  // Resolve role
+  let resolvedRoleId = roleId;
+  let resolvedRoleName = 'Team Member';
+  if (resolvedRoleId) {
+    const roleRes = await db.query(
+      'SELECT id, name FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
+      [resolvedRoleId, workspaceId]
+    );
+    if (roleRes.length === 0) {
+      const err = new Error('Selected role does not exist');
+      err.status = 400;
+      err.code = 'BAD_REQUEST';
+      throw err;
+    }
+    if (isOwnerRole(roleRes[0].name)) {
+      const err = new Error('Cannot invite a member with Owner role');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
+    resolvedRoleName = roleRes[0].name;
+  } else {
+    const defaultRoleRes = await db.query(
+      "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
+    );
+    resolvedRoleId = defaultRoleRes[0]?.id || null;
+    resolvedRoleName = defaultRoleRes[0]?.name || 'Team Member';
   }
 
   const existingUserRes = await db.query(
@@ -225,16 +267,16 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
     invitationId = existingInvite[0].id;
     token = signedToken;
     await db.execute(
-      'UPDATE pending_invitations SET token = ?, expires_at = ?, created_at = CURRENT_TIMESTAMP(3) WHERE id = ?',
-      [token, expiresAt, invitationId]
+      'UPDATE pending_invitations SET token = ?, role_id = ?, expires_at = ?, created_at = CURRENT_TIMESTAMP(3) WHERE id = ?',
+      [token, resolvedRoleId, expiresAt, invitationId]
     );
     await db.execute('DELETE FROM invitation_boards WHERE invitation_id = ?', [invitationId]);
   } else {
     token = signedToken;
     const insRes = await db.execute(
-      `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, status, expires_at)
-       VALUES (?, ?, ?, ?, 'pending', ?)`,
-      [normalizedEmail, workspaceId, user.id, token, expiresAt]
+      `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, role_id, status, expires_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+      [normalizedEmail, workspaceId, user.id, token, resolvedRoleId, expiresAt]
     );
     invitationId = insRes.insertId;
   }
@@ -251,7 +293,17 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
 
   if (existingUserRes.length === 0) {
     broadcastWorkspaceEvent(workspaceId, 'workspace:invitation_created', {
-      invitation: { id: invitationId, email: normalizedEmail, workspace_id: workspaceId, token, expires_at: expiresAt }
+      invitation: {
+        id: invitationId,
+        email: normalizedEmail,
+        workspace_id: workspaceId,
+        role_id: resolvedRoleId,
+        role_name: resolvedRoleName,
+        board_ids: boardIds,
+        token,
+        expires_at: expiresAt,
+        invite_url: inviteUrl
+      }
     }, originId, tenant?.id);
     return {
       status: 202,
@@ -259,6 +311,8 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
         requires_registration: true,
         invite_token: token,
         invite_url: inviteUrl,
+        role_id: resolvedRoleId,
+        role_name: resolvedRoleName,
         message: 'Invitation link generated! Copy and share the registration link below with the user to test signup.'
       }
     };
@@ -266,19 +320,11 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
 
   const targetUser = existingUserRes[0];
 
-  let resolvedRoleId = roleId;
-  if (!resolvedRoleId) {
-    const teamMemberRoleRes = await db.query(
-      "SELECT id FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
-    );
-    resolvedRoleId = teamMemberRoleRes[0]?.id;
-  }
-
   await db.execute(
     `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
-     VALUES (?, ?, 'Team Member', ?)
-     ON DUPLICATE KEY UPDATE role_id = VALUES(role_id)`,
-    [workspaceId, targetUser.id, resolvedRoleId]
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = VALUES(role)`,
+    [workspaceId, targetUser.id, resolvedRoleName, resolvedRoleId]
   );
 
   if (boardIds.length > 0) {
@@ -286,17 +332,6 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       await db.execute(
         "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
         [boardId, targetUser.id]
-      );
-    }
-  } else {
-    const allWsBoards = await db.query(
-      'SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0',
-      [workspaceId]
-    );
-    for (const b of allWsBoards) {
-      await db.execute(
-        "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-        [b.id, targetUser.id]
       );
     }
   }
@@ -328,7 +363,8 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
     id: targetUser.id,
     name: targetUser.name,
     email: targetUser.email,
-    role: 'member',
+    role: resolvedRoleName,
+    role_id: resolvedRoleId,
     workspace_id: workspaceId,
     board_ids: boardIds
   };
@@ -347,7 +383,7 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
 
 // POST /api/invitations (Create / Send invitation)
 router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => {
-  const { email, workspace_id, board_ids = [] } = req.body;
+  const { email, workspace_id, role_id, board_ids = [] } = req.body;
 
   try {
     const isAdmin = await requireWorkspaceAdmin(workspace_id, req.user.id, req.db);
@@ -363,6 +399,7 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
       tenant: req.tenant,
       workspaceId: workspace_id,
       email,
+      roleId: role_id,
       boardIds: board_ids,
       originId: req.headers['x-origin-id']
     });
@@ -387,11 +424,11 @@ router.post('/accept', requireAuth, async (req, res, next) => {
 
   try {
     const inviteRes = await req.db.query(
-      `SELECT pi.id, pi.workspace_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
+      `SELECT pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
        FROM pending_invitations pi
        LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
        WHERE pi.token = ?
-       GROUP BY pi.id, pi.workspace_id, pi.status, pi.expires_at`,
+       GROUP BY pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at`,
       [token]
     );
 
@@ -410,16 +447,29 @@ router.post('/accept', requireAuth, async (req, res, next) => {
 
     const boardIds = invite.board_ids_str ? invite.board_ids_str.split(',').map(Number) : [];
 
-    const teamMemberRoleRes = await req.db.query(
-      "SELECT id FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
-    );
-    const teamMemberRoleId = teamMemberRoleRes[0]?.id;
+    let assignedRoleId = invite.role_id;
+    let assignedRoleName = 'Team Member';
+    if (assignedRoleId) {
+      const rRes = await req.db.query('SELECT id, name FROM roles WHERE id = ?', [assignedRoleId]);
+      if (rRes.length > 0) {
+        assignedRoleName = rRes[0].name;
+      } else {
+        assignedRoleId = null;
+      }
+    }
+    if (!assignedRoleId) {
+      const teamMemberRoleRes = await req.db.query(
+        "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
+      );
+      assignedRoleId = teamMemberRoleRes[0]?.id;
+      assignedRoleName = teamMemberRoleRes[0]?.name || 'Team Member';
+    }
 
     await req.db.execute(
       `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
-       VALUES (?, ?, 'Team Member', ?)
-       ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = 'Team Member'`,
-      [invite.workspace_id, req.user.id, teamMemberRoleId]
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = VALUES(role)`,
+      [invite.workspace_id, req.user.id, assignedRoleName, assignedRoleId]
     );
 
     if (boardIds.length > 0) {
@@ -427,17 +477,6 @@ router.post('/accept', requireAuth, async (req, res, next) => {
         await req.db.execute(
           "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
           [boardId, req.user.id]
-        );
-      }
-    } else {
-      const allWsBoards = await req.db.query(
-        'SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0',
-        [invite.workspace_id]
-      );
-      for (const b of allWsBoards) {
-        await req.db.execute(
-          "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-          [b.id, req.user.id]
         );
       }
     }
@@ -462,6 +501,58 @@ router.post('/accept', requireAuth, async (req, res, next) => {
     return res.json({
       message: 'Invitation accepted successfully',
       workspace_id: invite.workspace_id
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/invitations/:id/regenerate (Regenerate invitation token & extend expiry)
+router.post('/:id/regenerate', requireAuth, async (req, res, next) => {
+  const inviteId = Number(req.params.id);
+
+  try {
+    const inviteRes = await req.db.query('SELECT * FROM pending_invitations WHERE id = ?', [inviteId]);
+    if (inviteRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Invitation not found', code: 'NOT_FOUND' } });
+    }
+
+    const invite = inviteRes[0];
+    const isAdmin = await requireWorkspaceAdmin(invite.workspace_id, req.user.id, req.db);
+    if (!isAdmin) {
+      return res.status(403).json({ error: { message: 'Only workspace admins can regenerate invitations', code: 'FORBIDDEN' } });
+    }
+
+    const tenantSlug = req.tenant?.slug || 'default';
+    const rawToken = crypto.randomBytes(20).toString('hex');
+    const newToken = signInviteToken(rawToken, tenantSlug);
+    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await req.db.execute(
+      `UPDATE pending_invitations SET token = ?, expires_at = ?, status = 'pending', created_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
+      [newToken, newExpiresAt, inviteId]
+    );
+
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+    const inviteUrl = `${clientBase}/register?invite_token=${newToken}&email=${encodeURIComponent(invite.email)}`;
+
+    broadcastWorkspaceEvent(invite.workspace_id, 'workspace:invitation_created', {
+      invitation: {
+        id: inviteId,
+        email: invite.email,
+        workspace_id: invite.workspace_id,
+        role_id: invite.role_id,
+        token: newToken,
+        expires_at: newExpiresAt,
+        invite_url: inviteUrl
+      }
+    }, req.headers['x-origin-id'], req.tenant?.id);
+
+    return res.json({
+      message: 'Invitation link regenerated successfully',
+      invite_token: newToken,
+      invite_url: inviteUrl,
+      expires_at: newExpiresAt
     });
   } catch (err) {
     next(err);

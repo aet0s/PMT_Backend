@@ -5,6 +5,7 @@ const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
 const { isOwnerRole } = require('../utils/roleRank');
 const { broadcastWorkspaceEvent } = require('../socket');
+const { logAuthEvent } = require('../services/authAudit');
 
 const router = express.Router();
 
@@ -26,9 +27,9 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     const role = roleRes[0];
 
-    if (!role.is_editable) {
+    if (!role.is_editable || isOwnerRole(role.name)) {
       return res.status(403).json({
-        error: { message: 'Built-in Super Admin role permissions cannot be edited', code: 'ROLE_NOT_EDITABLE' }
+        error: { message: 'Owner and Super Admin role permissions are locked and cannot be edited', code: 'ROLE_NOT_EDITABLE' }
       });
     }
 
@@ -100,6 +101,19 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       broadcastWorkspaceEvent(workspaceId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
     }
 
+    await logAuthEvent(req.db, {
+      userId: req.user.id,
+      email: req.user.email,
+      eventType: 'role.updated',
+      req,
+      metadata: {
+        workspace_id: workspaceId,
+        role_id: roleId,
+        role_name: rolePayload.name,
+        permission_count: keys.length
+      }
+    });
+
     return res.json({ role: rolePayload });
   } catch (err) {
     next(err);
@@ -118,9 +132,9 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 
     const role = roleRes[0];
 
-    if (role.is_system) {
+    if (role.is_system || isOwnerRole(role.name)) {
       return res.status(400).json({
-        error: { message: 'Built-in system roles cannot be deleted', code: 'ROLE_IS_SYSTEM' }
+        error: { message: 'Owner and built-in system roles cannot be deleted', code: 'ROLE_IS_SYSTEM' }
       });
     }
 
@@ -155,6 +169,18 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     if (workspaceId) {
       broadcastWorkspaceEvent(workspaceId, 'workspace:role_deleted', { roleId }, req.headers['x-origin-id'], req.tenant?.id);
     }
+
+    await logAuthEvent(req.db, {
+      userId: req.user.id,
+      email: req.user.email,
+      eventType: 'role.deleted',
+      req,
+      metadata: {
+        workspace_id: workspaceId,
+        role_id: roleId,
+        role_name: role.name
+      }
+    });
 
     return res.json({ message: 'Custom role deleted successfully', id: roleId });
   } catch (err) {

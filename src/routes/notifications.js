@@ -4,6 +4,43 @@ const { getUserPreferences, updateUserPreferences } = require('../services/notif
 
 const router = express.Router();
 
+/**
+ * Constructs SQL condition and params to ensure user only sees notifications
+ * within their authorized workspaces and boards.
+ */
+function getNotificationAccessFilter(userId) {
+  const clause = `(
+    n.user_id = ?
+    AND (
+      n.workspace_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM workspace_members wm 
+        WHERE wm.workspace_id = n.workspace_id AND wm.user_id = ?
+      )
+    )
+    AND (
+      n.board_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM workspace_members wm
+        LEFT JOIN roles r ON wm.role_id = r.id
+        LEFT JOIN board_members bm ON bm.board_id = n.board_id AND bm.user_id = ?
+        WHERE wm.workspace_id = n.workspace_id AND wm.user_id = ?
+          AND (
+            r.name IN ('Owner', 'Super Admin', 'Admin')
+            OR EXISTS (
+              SELECT 1 FROM role_permissions rp
+              JOIN permissions p ON rp.permission_id = p.id
+              WHERE rp.role_id = wm.role_id AND p.key IN ('workspace.edit_settings', 'workspace.delete')
+            )
+            OR bm.user_id IS NOT NULL
+          )
+      )
+    )
+  )`;
+  const params = [userId, userId, userId, userId];
+  return { clause, params };
+}
+
 // GET /api/notifications?page=1&limit=20&filter=all&workspace_id=...
 router.get('/', requireAuth, async (req, res, next) => {
   const page = Math.max(1, parseInt(req.query.page || '1', 10));
@@ -14,8 +51,9 @@ router.get('/', requireAuth, async (req, res, next) => {
   const workspaceId = req.query.workspace_id ? Number(req.query.workspace_id) : null;
 
   try {
-    const whereClauses = ['n.user_id = ?'];
-    const queryParams = [req.user.id];
+    const accessFilter = getNotificationAccessFilter(req.user.id);
+    const whereClauses = [accessFilter.clause];
+    const queryParams = [...accessFilter.params];
 
     if (filter === 'unread') {
       whereClauses.push('n.is_read = 0');
@@ -76,10 +114,10 @@ router.get('/', requireAuth, async (req, res, next) => {
     );
     const totalCount = Number(totalCountRes[0]?.total || 0);
 
-    // Global unread count for badge
+    // Global unread count for badge (scoped strictly to authorized notifications)
     const unreadCountRes = await req.db.query(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0',
-      [req.user.id]
+      `SELECT COUNT(*) as count FROM notifications n WHERE ${accessFilter.clause} AND n.is_read = 0`,
+      accessFilter.params
     );
 
     return res.json({
@@ -98,9 +136,10 @@ router.get('/', requireAuth, async (req, res, next) => {
 // GET /api/notifications/unread-count
 router.get('/unread-count', requireAuth, async (req, res, next) => {
   try {
+    const accessFilter = getNotificationAccessFilter(req.user.id);
     const countRes = await req.db.query(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0',
-      [req.user.id]
+      `SELECT COUNT(*) as count FROM notifications n WHERE ${accessFilter.clause} AND n.is_read = 0`,
+      accessFilter.params
     );
 
     return res.json({ unread_count: Number(countRes[0]?.count || 0) });
@@ -166,9 +205,10 @@ router.patch('/:id/unread', requireAuth, async (req, res, next) => {
 // PATCH /api/notifications/read-all
 router.patch('/read-all', requireAuth, async (req, res, next) => {
   try {
+    const accessFilter = getNotificationAccessFilter(req.user.id);
     await req.db.execute(
-      'UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0',
-      [req.user.id]
+      `UPDATE notifications n SET n.is_read = 1 WHERE ${accessFilter.clause} AND n.is_read = 0`,
+      accessFilter.params
     );
 
     return res.json({ message: 'All notifications marked as read' });
@@ -196,9 +236,10 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 // DELETE /api/notifications/clear/read (Clear all read notifications)
 router.delete('/clear/read', requireAuth, async (req, res, next) => {
   try {
+    const accessFilter = getNotificationAccessFilter(req.user.id);
     const delRes = await req.db.execute(
-      'DELETE FROM notifications WHERE user_id = ? AND is_read = 1',
-      [req.user.id]
+      `DELETE n FROM notifications n WHERE ${accessFilter.clause} AND n.is_read = 1`,
+      accessFilter.params
     );
 
     return res.json({ message: 'Read notifications cleared', count: delRes.affectedRows });

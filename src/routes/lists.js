@@ -4,17 +4,19 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { broadcastBoardEvent } = require('../socket');
 const { requirePermission } = require('../middleware/permissions');
+const { sanitizePlain } = require('../utils/sanitizer');
+const { logActivity } = require('../utils/activity');
 
 const router = express.Router();
 
 const createListSchema = z.object({
   board_id: z.number(),
-  name: z.string().min(1, 'List name is required'),
+  name: z.string().min(1, 'List name is required').transform((v) => sanitizePlain(v)),
   position: z.number().optional()
 });
 
 const updateListSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   position: z.number().optional(),
   is_archived: z.boolean().optional()
 });
@@ -41,6 +43,7 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 
     const [createdList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listExec.insertId]);
     const newList = { ...createdList, cards: [] };
+    await logActivity(board_id, null, req.user.id, 'list_created', { list_name: name }, req.db);
     broadcastBoardEvent(board_id, 'list:created', { list: newList }, originId);
 
     return res.status(201).json({ list: newList });
@@ -56,7 +59,7 @@ router.patch('/:id', requireAuth, requirePermission('list.edit'), validate(updat
   const originId = req.headers['x-origin-id'];
 
   try {
-    const listCheck = await req.db.query('SELECT board_id FROM lists WHERE id = ?', [listId]);
+    const listCheck = await req.db.query('SELECT board_id, name FROM lists WHERE id = ?', [listId]);
     if (listCheck.length === 0) {
       return res.status(404).json({ error: { message: 'List not found', code: 'NOT_FOUND' } });
     }
@@ -89,6 +92,11 @@ router.patch('/:id', requireAuth, requirePermission('list.edit'), validate(updat
     );
 
     const [updatedList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listId]);
+    if (is_archived === true) {
+      await logActivity(boardId, null, req.user.id, 'list_archived', { list_name: updatedList.name || listCheck[0]?.name }, req.db);
+    } else if (name !== undefined) {
+      await logActivity(boardId, null, req.user.id, 'list_renamed', { list_name: name }, req.db);
+    }
     const eventName = position !== undefined ? 'list:reordered' : 'list:updated';
     broadcastBoardEvent(boardId, eventName, { listId: updatedList.id, position: updatedList.position, list: updatedList }, originId);
 

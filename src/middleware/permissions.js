@@ -194,12 +194,13 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
   );
 
   if (wsRows.length > 0) {
-    const isGuest = wsRows[0].role_name === 'Guest';
+    const roleName = wsRows[0].role_name;
+    const isCompanyAdmin = ['Owner', 'Super Admin', 'Admin'].includes(roleName) || wsRows.some((r) => r.permission_key === 'workspace.edit_settings');
     const userCompanyPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
     for (const key of expandedKeys) {
       if (userCompanyPerms.has(key)) {
-        // Guest role only gets project-scoped capabilities within projects they belong to
-        if (isGuest && (key.startsWith('project.') || key.startsWith('task.') || key.startsWith('comment.') || key.startsWith('view.') || key.startsWith('attachment.') || key.startsWith('file.'))) {
+        // Non-admins must have project membership to exercise project-scoped permissions on a specific project
+        if (projectId && !isCompanyAdmin && (key.startsWith('project.') || key.startsWith('task.') || key.startsWith('comment.') || key.startsWith('view.') || key.startsWith('attachment.') || key.startsWith('file.') || key.startsWith('board.'))) {
           continue;
         }
         return true;
@@ -220,11 +221,11 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
     );
 
     if (bmRows.length > 0) {
-      // If user is a Guest and explicitly a member of this project, activate their Guest permissions
-      if (wsRows.length > 0 && wsRows[0].role_name === 'Guest') {
-        const guestPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
+      // If user is a member of this project, their company-level permissions for project actions activate
+      if (wsRows.length > 0) {
+        const companyPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
         for (const key of expandedKeys) {
-          if (guestPerms.has(key)) {
+          if (companyPerms.has(key)) {
             return true;
           }
         }

@@ -1,6 +1,7 @@
 // server/src/routes/auth.js
 // Multi-tenant authentication with rotating sessions, TOTP 2FA, lockout protection, and audit logging.
 const express = require('express');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
@@ -99,7 +100,11 @@ const registerUserSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
-  invite_token: z.string().optional()
+  invite_token: z.string().optional(),
+  company_name: z.string().optional(),
+  companyName: z.string().optional(),
+  slug: z.string().optional(),
+  phone: z.string().optional()
 });
 
 const loginSchema = z.object({
@@ -434,7 +439,7 @@ router.post('/verify-registration', validate(verifyRegistrationSchema), async (r
 // User registration (e.g. from invitation link or dev)
 // -------------------------------------------------------------
 router.post('/register', validate(registerUserSchema), async (req, res, next) => {
-  const { name, email, password, invite_token: inviteToken } = req.body;
+  const { name, email, password, invite_token: inviteToken, company_name, companyName, slug, phone } = req.body;
 
   // Validate Password Policy
   const passwordCheck = validatePassword(password);
@@ -445,26 +450,120 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
   }
 
   const normalizedEmail = normalizeEmail(email);
-  let activeDb = req.db;
-  if (!activeDb && inviteToken) {
-    const parts = inviteToken.split('.');
-    if (parts.length === 3 && parts[0] !== 'default') {
-      const masterDb = getMasterDb();
-      const [tenant] = await masterDb.query(
-        "SELECT id, db_name, slug FROM tenants WHERE slug = ? AND status != 'deleted'",
-        [parts[0]]
-      );
-      if (tenant) {
-        activeDb = await getTenantDb(tenant.id);
-        req.tenant = tenant;
-      }
-    }
-  }
-  if (!activeDb) {
-    activeDb = getDevSingleDb();
-  }
 
   try {
+    // When multi-tenant mode is active (DEV_SINGLE_TENANT !== '1') and registration is not via invite:
+    // Automatically provision a dedicated tenant database with pm_t_ prefix!
+    if (!inviteToken && process.env.DEV_SINGLE_TENANT !== '1') {
+      const registrationEnabled = process.env.REGISTRATION_ENABLED !== 'false' && process.env.REGISTRATION_ENABLED !== '0';
+      if (!registrationEnabled) {
+        return res.status(403).json({
+          error: { message: 'Registration is currently disabled.', code: 'REGISTRATION_DISABLED' }
+        });
+      }
+
+      const clientIp = req.ip || '127.0.0.1';
+      if (!checkRegistrationIpLimit(clientIp)) {
+        return res.status(429).json({
+          error: {
+            message: 'Too many registration requests from this IP address. Please try again later.',
+            code: 'REGISTRATION_RATE_LIMIT_EXCEEDED'
+          }
+        });
+      }
+
+      const masterDb = getMasterDb();
+      const existingUser = await masterDb.query(
+        'SELECT id FROM tenant_user_directory WHERE email = ?',
+        [normalizedEmail]
+      );
+      if (existingUser.length > 0) {
+        return res.status(409).json({
+          error: { message: `Email "${normalizedEmail}" is already registered.`, code: 'EMAIL_CONFLICT' }
+        });
+      }
+
+      const orgName = (company_name || companyName || `${name.trim()}'s Team`).trim();
+      let baseSlug = slugify(slug || orgName);
+      let candidateSlug = baseSlug;
+      let attempts = 0;
+      while (attempts < 5) {
+        const existingSlug = await masterDb.query(
+          'SELECT id FROM tenants WHERE slug = ?',
+          [candidateSlug]
+        );
+        if (existingSlug.length === 0 && !RESERVED_SLUGS.has(candidateSlug)) break;
+        candidateSlug = `${baseSlug}_${crypto.randomBytes(2).toString('hex')}`;
+        attempts++;
+      }
+
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+      activeTenantProvisionings++;
+      let provisionResult;
+      try {
+        provisionResult = await provisionTenant({
+          companyName: orgName,
+          slug: candidateSlug,
+          ownerEmail: normalizedEmail,
+          ownerPasswordHash: passwordHash,
+          ownerName: name.trim(),
+          phone: phone || null
+        });
+      } finally {
+        activeTenantProvisionings--;
+      }
+
+      const { tenant, owner, workspace, board } = provisionResult;
+      const tenantDb = await getTenantDb(tenant.id);
+      const session = await createSession(tenantDb, owner, req, { tenantId: tenant.id });
+
+      res.cookie('token', session.accessToken, COOKIE_OPTIONS);
+      res.cookie('refreshToken', session.refreshToken, REFRESH_COOKIE_OPTIONS);
+
+      await logAuthEvent(tenantDb, {
+        userId: owner.id,
+        email: owner.email,
+        eventType: 'COMPANY_REGISTERED',
+        req,
+        metadata: { company: tenant.name, slug: tenant.slug }
+      });
+
+      return res.status(201).json({
+        message: 'Registration successful',
+        tenant,
+        user: {
+          id: owner.id,
+          name: owner.name,
+          email: owner.email,
+          created_at: owner.created_at
+        },
+        initial_workspace_id: workspace.id,
+        initial_board_id: board ? board.id : null,
+        token: session.accessToken,
+        refreshToken: session.refreshToken,
+        expiresIn: session.expiresIn
+      });
+    }
+
+    let activeDb = req.db;
+    if (!activeDb && inviteToken) {
+      const parts = inviteToken.split('.');
+      if (parts.length === 3 && parts[0] !== 'default') {
+        const masterDb = getMasterDb();
+        const [tenant] = await masterDb.query(
+          "SELECT id, db_name, slug FROM tenants WHERE slug = ? AND status != 'deleted'",
+          [parts[0]]
+        );
+        if (tenant) {
+          activeDb = await getTenantDb(tenant.id);
+          req.tenant = tenant;
+        }
+      }
+    }
+    if (!activeDb) {
+      activeDb = getDevSingleDb();
+    }
     const existing = await activeDb.query('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
     if (existing.length > 0) {
       return res.status(400).json({
@@ -486,11 +585,11 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
 
     if (inviteToken) {
       const inviteRes = await activeDb.query(
-        `SELECT pi.id, pi.workspace_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
+        `SELECT pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
          FROM pending_invitations pi
          LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
          WHERE pi.token = ?
-         GROUP BY pi.id, pi.workspace_id, pi.status, pi.expires_at`,
+         GROUP BY pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at`,
         [inviteToken]
       );
       if (inviteRes.length === 0) {
@@ -511,12 +610,12 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
 
     if (!invite) {
       const emailInviteRes = await activeDb.query(
-        `SELECT pi.id, pi.workspace_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
+        `SELECT pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
          FROM pending_invitations pi
          LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
          WHERE pi.email = ? AND pi.status = 'pending'
            AND (pi.expires_at IS NULL OR pi.expires_at > CURRENT_TIMESTAMP(3))
-         GROUP BY pi.id, pi.workspace_id, pi.status, pi.expires_at
+         GROUP BY pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at
          ORDER BY pi.created_at DESC LIMIT 1`,
         [normalizedEmail]
       );
@@ -529,16 +628,32 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
     }
 
     if (invite) {
-      const teamMemberRoleRes = await activeDb.query(
-        "SELECT id FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
-      );
-      const teamMemberRoleId = teamMemberRoleRes[0]?.id;
+      let assignedRoleId = invite.role_id;
+      let assignedRoleName = 'Team Member';
+      if (assignedRoleId) {
+        const roleCheck = await activeDb.query(
+          'SELECT id, name FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
+          [assignedRoleId, invite.workspace_id]
+        );
+        if (roleCheck.length > 0) {
+          assignedRoleName = roleCheck[0].name;
+        } else {
+          assignedRoleId = null;
+        }
+      }
+      if (!assignedRoleId) {
+        const teamMemberRoleRes = await activeDb.query(
+          "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
+        );
+        assignedRoleId = teamMemberRoleRes[0]?.id;
+        assignedRoleName = teamMemberRoleRes[0]?.name || 'Team Member';
+      }
 
       await activeDb.execute(
         `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
-         VALUES (?, ?, 'Team Member', ?)
-         ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = 'Team Member'`,
-        [invite.workspace_id, user.id, teamMemberRoleId]
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = VALUES(role)`,
+        [invite.workspace_id, user.id, assignedRoleName, assignedRoleId]
       );
 
       if (invite.board_ids && invite.board_ids.length > 0) {
@@ -550,17 +665,7 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
         }
         createdBoardId = invite.board_ids[0];
       } else {
-        const allWsBoards = await activeDb.query(
-          'SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0 ORDER BY id ASC',
-          [invite.workspace_id]
-        );
-        for (const b of allWsBoards) {
-          await activeDb.execute(
-            "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-            [b.id, user.id]
-          );
-        }
-        createdBoardId = allWsBoards[0]?.id || null;
+        createdBoardId = null;
       }
 
       await activeDb.execute(
@@ -1434,31 +1539,86 @@ router.get('/2fa/status', requireAuth, async (req, res, next) => {
 
 // -------------------------------------------------------------
 // GET /api/auth/activity
-// Current user's recent security and auth events (paginated)
+// Security and auth events (workspace-wide for admins, personal for members)
 // -------------------------------------------------------------
 router.get('/activity', requireAuth, async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const offset = (page - 1) * limit;
+    const workspaceId = req.query.workspace_id ? Number(req.query.workspace_id) : null;
+    const search = (req.query.search || '').trim().toLowerCase();
+    const category = (req.query.category || '').trim().toLowerCase();
 
     let rows = [];
     let total = 0;
 
     if (req.db) {
+      // Determine if caller has permission to view all workspace security audit records
+      let canViewAll = false;
+      if (workspaceId) {
+        canViewAll = await userHasPermission(req.user.id, workspaceId, 'audit.view', req.db);
+        if (!canViewAll) {
+          canViewAll = await userHasPermission(req.user.id, workspaceId, 'company.manage_security', req.db);
+        }
+      }
+
+      if (!canViewAll) {
+        // Check if user is an Owner or Super Admin or Admin in any active workspace
+        const adminCheck = await req.db.query(
+          `SELECT 1 FROM workspace_members wm
+           JOIN roles r ON wm.role_id = r.id
+           WHERE wm.user_id = ? AND r.name IN ('Owner', 'Super Admin', 'Admin')
+           LIMIT 1`,
+          [req.user.id]
+        );
+        canViewAll = adminCheck.length > 0;
+      }
+
+      const whereClauses = [];
+      const queryParams = [];
+
+      if (!canViewAll) {
+        whereClauses.push('(a.user_id = ? OR a.email = ?)');
+        queryParams.push(req.user.id, req.user.email);
+      }
+
+      if (category && category !== 'all') {
+        if (category === 'auth') {
+          whereClauses.push("(a.event_type LIKE '%login%' OR a.event_type LIKE '%logout%' OR a.event_type LIKE '%password%' OR a.event_type LIKE '%2fa%' OR a.event_type LIKE '%session%')");
+        } else if (category === 'roles') {
+          whereClauses.push("(a.event_type LIKE '%role%' OR a.event_type LIKE '%permission%')");
+        } else if (category === 'workspace') {
+          whereClauses.push("(a.event_type LIKE '%workspace%' OR a.event_type LIKE '%board%' OR a.event_type LIKE '%member%')");
+        }
+      }
+
+      if (search) {
+        whereClauses.push('(LOWER(a.event_type) LIKE ? OR LOWER(COALESCE(u.name, \'\')) LIKE ? OR LOWER(COALESCE(a.email, COALESCE(u.email, \'\'))) LIKE ? OR LOWER(COALESCE(a.ip_address, \'\')) LIKE ?)');
+        const searchPattern = `%${search}%`;
+        queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern);
+      }
+
+      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
       const countRes = await req.db.query(
-        'SELECT COUNT(*) as total FROM auth_audit_log WHERE user_id = ? OR email = ?',
-        [req.user.id, req.user.email]
+        `SELECT COUNT(*) as total
+         FROM auth_audit_log a
+         LEFT JOIN users u ON a.user_id = u.id
+         ${whereSql}`,
+        queryParams
       );
       total = Number(countRes[0]?.total || 0);
 
       rows = await req.db.query(
-        `SELECT id, event_type, ip_address, user_agent, metadata, created_at
-         FROM auth_audit_log
-         WHERE user_id = ? OR email = ?
-         ORDER BY created_at DESC
+        `SELECT a.id, a.user_id, a.email, a.event_type, a.ip_address, a.user_agent, a.metadata, a.created_at,
+                u.name as user_name, u.email as user_email
+         FROM auth_audit_log a
+         LEFT JOIN users u ON a.user_id = u.id
+         ${whereSql}
+         ORDER BY a.created_at DESC
          LIMIT ? OFFSET ?`,
-        [req.user.id, req.user.email, limit, offset]
+        [...queryParams, limit, offset]
       );
     }
 
@@ -1469,13 +1629,55 @@ router.get('/activity', requireAuth, async (req, res, next) => {
       } catch (e) {
         meta = null;
       }
+
+      // Generate helpful summary details
+      let detailsSummary = '';
+      const etLower = String(r.event_type || '').toLowerCase();
+      if (etLower === 'token_refresh_success') {
+        detailsSummary = 'Session security token refreshed successfully';
+      } else if (etLower === 'login_success') {
+        detailsSummary = meta?.method ? `User authenticated via ${meta.method}` : 'User authenticated successfully';
+      } else if (etLower === 'login_failed') {
+        detailsSummary = `Authentication attempt failed${meta?.reason ? `: ${meta.reason}` : ''}`;
+      } else if (etLower === 'logout') {
+        detailsSummary = 'User signed out of active session';
+      } else if (etLower === 'user_registered') {
+        detailsSummary = 'New user account created and workspace joined';
+      } else if (etLower === 'board_deleted' || etLower === 'board.delete') {
+        detailsSummary = `Board deleted: "${meta?.boardName || meta?.board_name || meta?.board_id || 'Board'}"`;
+      } else if (etLower.includes('role.created') || etLower.includes('role_created')) {
+        detailsSummary = `Custom role created: "${meta?.role_name || meta?.name || 'Role'}"`;
+      } else if (etLower.includes('role.updated') || etLower.includes('role_updated')) {
+        detailsSummary = `Role permissions modified: "${meta?.role_name || meta?.name || 'Role'}"`;
+      } else if (etLower.includes('role.deleted') || etLower.includes('role_deleted')) {
+        detailsSummary = `Custom role removed: "${meta?.role_name || meta?.name || 'Role'}"`;
+      } else if (etLower.includes('workspace.settings_update')) {
+        detailsSummary = 'Workspace settings updated';
+      } else if (meta && typeof meta === 'object') {
+        const parts = [];
+        if (meta.reason) parts.push(`Reason: ${meta.reason}`);
+        if (meta.role) parts.push(`Role: ${meta.role}`);
+        if (meta.boardName || meta.board_name) parts.push(`Board: ${meta.boardName || meta.board_name}`);
+        if (meta.target_user_id) parts.push(`Target User ID: #${meta.target_user_id}`);
+        if (meta.updates && typeof meta.updates === 'object') {
+          const keys = Object.keys(meta.updates).join(', ');
+          parts.push(`Updated: [${keys}]`);
+        }
+        detailsSummary = parts.join(' | ') || (meta.sessionId ? 'Session token refreshed' : '');
+      }
+
       return {
         id: r.id,
-        action: r.event_type ? r.event_type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Security Event',
+        event: r.event_type,
         event_type: r.event_type,
+        action: r.event_type ? r.event_type.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Security Event',
+        user_id: r.user_id,
+        user_name: r.user_name || null,
+        user_email: r.user_email || r.email || null,
         ip: r.ip_address || '127.0.0.1',
         user_agent: r.user_agent || null,
         metadata: meta,
+        details: detailsSummary || (r.event_type ? r.event_type.replace(/[._]/g, ' ') : 'No additional details'),
         created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
       };
     });

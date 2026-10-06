@@ -11,6 +11,7 @@ const { queueFileCleanupRetry } = require('../utils/fileCleanupQueue');
 const { logAuthEvent } = require('../services/authAudit');
 const { notify } = require('../services/notify');
 const { sanitizePlain } = require('../utils/sanitizer');
+const { logActivity } = require('../utils/activity');
 
 const router = express.Router();
 
@@ -39,7 +40,10 @@ router.get('/', requireAuth, async (req, res, next) => {
     }
 
     let query = `
-      SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.is_archived, b.created_at, w.name as workspace_name
+      SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.is_archived, b.created_at, w.name as workspace_name,
+        (SELECT COUNT(*) FROM cards c JOIN lists l ON c.list_id = l.id WHERE l.board_id = b.id AND c.is_archived = 0) as card_count,
+        (SELECT COUNT(*) FROM lists l WHERE l.board_id = b.id AND l.is_archived = 0) as list_count,
+        (SELECT COUNT(*) FROM board_members bm2 WHERE bm2.board_id = b.id) as member_count
       FROM boards b
       JOIN workspaces w ON b.workspace_id = w.id
       JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
@@ -48,10 +52,11 @@ router.get('/', requireAuth, async (req, res, next) => {
       WHERE ${archivedCondition} 
         AND w.is_archived = 0
         AND (
-          EXISTS (
+          r.name IN ('Owner', 'Super Admin', 'Admin')
+          OR EXISTS (
             SELECT 1 FROM role_permissions rp
             JOIN permissions p ON rp.permission_id = p.id
-            WHERE rp.role_id = wm.role_id AND p.key IN ('project.view', 'project.create', 'board.create')
+            WHERE rp.role_id = wm.role_id AND p.key IN ('workspace.edit_settings', 'workspace.delete')
           )
           OR bm.user_id IS NOT NULL
         )
@@ -299,9 +304,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     // 6. Fetch Activity Log for Board
     const activityRes = await req.db.query(
-      `SELECT a.id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at, u.name as user_name
+      `SELECT a.id, a.board_id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at,
+              u.name as user_name, u.email as user_email,
+              c.title as card_title
        FROM activity_log a
        LEFT JOIN users u ON a.user_id = u.id
+       LEFT JOIN cards c ON a.card_id = c.id
        WHERE a.board_id = ?
        ORDER BY a.created_at DESC
        LIMIT 100`,
@@ -392,6 +400,9 @@ router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), vali
     }
 
     const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (name !== undefined) {
+      await logActivity(boardId, null, req.user.id, 'board_renamed', { board_name: name }, req.db);
+    }
     if (is_archived === true && updatedBoard) {
       await notify({
         eventType: 'board.archived',
@@ -641,7 +652,7 @@ router.post('/:id/labels', requireAuth, requirePermission('board.edit_settings')
   try {
     const labelExec = await req.db.execute(
       'INSERT INTO labels (board_id, name, color) VALUES (?, ?, ?)',
-      [boardId, name, color]
+      [boardId, sanitizePlain(name), color]
     );
     const [label] = await req.db.query('SELECT * FROM labels WHERE id = ?', [labelExec.insertId]);
     return res.status(201).json({ label });

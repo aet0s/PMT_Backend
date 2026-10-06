@@ -28,6 +28,7 @@
     "coverage:matrix": "node src/scripts/generateCoverageMatrix.js",
     "admin:reset-password": "node src/scripts/adminResetPassword.js",
     "admin:reset-2fa": "node src/scripts/adminReset2fa.js",
+    "db:clean-local": "node src/scripts/cleanLocalDb.js && node src/db/seed.js",
     "db:clean-test": "node src/scripts/cleanTestDatabases.js",
     "check:prod-env": "node src/scripts/checkProdEnv.js",
     "backup": "node src/scripts/backup.js",

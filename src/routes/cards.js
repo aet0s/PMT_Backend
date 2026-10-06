@@ -11,6 +11,7 @@ const { notifyOnComment, notifyOnAssignment } = require('../services/notificatio
 const { notify } = require('../services/notify');
 const { requirePermission, userHasPermission } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
+const { logActivity } = require('../utils/activity');
 
 const router = express.Router();
 
@@ -47,18 +48,6 @@ function sanitizeDescription(html) {
   });
 }
 
-// Helper for activity log
-async function logActivity(boardId, cardId, userId, actionType, metaJson = {}, dbInstance = null) {
-  const db = dbInstance || getDevSingleDb();
-  try {
-    await db.execute(
-      'INSERT INTO activity_log (board_id, card_id, user_id, action_type, meta_json) VALUES (?, ?, ?, ?, ?)',
-      [boardId, cardId, userId, actionType, JSON.stringify(metaJson)]
-    );
-  } catch (err) {
-    console.error('Failed to log activity:', err);
-  }
-}
 
 // Helper to fetch full card with all nested relations
 async function getFullCard(cardId, dbInstance = null) {
@@ -812,7 +801,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
 // POST /api/cards/:id/checklists
 router.post('/:id/checklists', requireAuth, async (req, res, next) => {
   const cardId = Number(req.params.id);
-  const { title = 'Checklist' } = req.body;
+  const { title = 'Checklist', items = [] } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -822,18 +811,41 @@ router.post('/:id/checklists', requireAuth, async (req, res, next) => {
     }
     const boardId = cardRes[0]?.board_id;
 
+    const filteredItems = (Array.isArray(items) ? items : [])
+      .map((it) => (typeof it === 'string' ? it.trim() : it?.text?.trim()))
+      .filter(Boolean);
+
+    if (filteredItems.length === 0) {
+      return res.status(400).json({
+        error: { message: 'Checklist must contain at least one item', code: 'BAD_REQUEST' }
+      });
+    }
+
     const chExec = await req.db.execute(
       'INSERT INTO checklists (card_id, title) VALUES (?, ?)',
-      [cardId, title]
+      [cardId, sanitizePlain(title) || 'Checklist']
     );
-    const [checklist] = await req.db.query('SELECT * FROM checklists WHERE id = ?', [chExec.insertId]);
+    const checklistId = chExec.insertId;
+
+    const insertedItems = [];
+    for (let i = 0; i < filteredItems.length; i++) {
+      const pos = (i + 1) * 1000.0;
+      const itExec = await req.db.execute(
+        'INSERT INTO checklist_items (checklist_id, text, position) VALUES (?, ?, ?)',
+        [checklistId, sanitizePlain(filteredItems[i]), pos]
+      );
+      const [itRow] = await req.db.query('SELECT * FROM checklist_items WHERE id = ?', [itExec.insertId]);
+      if (itRow) insertedItems.push({ ...itRow, is_checked: Boolean(itRow.is_checked) });
+    }
+
+    const [checklist] = await req.db.query('SELECT * FROM checklists WHERE id = ?', [checklistId]);
 
     if (boardId) {
       const fullCard = await getFullCard(cardId, req.db);
       broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
 
-    return res.status(201).json({ checklist: { ...checklist, items: [] } });
+    return res.status(201).json({ checklist: { ...checklist, items: insertedItems } });
   } catch (err) {
     next(err);
   }
@@ -877,7 +889,7 @@ router.post('/checklist-items', requireAuth, async (req, res, next) => {
   try {
     const itemExec = await req.db.execute(
       'INSERT INTO checklist_items (checklist_id, text) VALUES (?, ?)',
-      [checklist_id, text.trim()]
+      [checklist_id, sanitizePlain(text)]
     );
     const [item] = await req.db.query('SELECT * FROM checklist_items WHERE id = ?', [itemExec.insertId]);
 
@@ -911,7 +923,7 @@ router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
 
     if (text !== undefined) {
       updates.push('text = ?');
-      values.push(text);
+      values.push(sanitizePlain(text));
     }
     if (is_checked !== undefined) {
       updates.push('is_checked = ?');
