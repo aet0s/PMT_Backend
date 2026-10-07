@@ -153,11 +153,27 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
 });
 
 // PATCH /api/workspaces/:id - Update workspace
-router.patch('/:id', requireAuth, requirePermission('workspace.edit_settings'), validate(updateWorkspaceSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const { name, is_archived, require_2fa_for_admins } = req.body;
 
   try {
+    const isArchive = is_archived !== undefined;
+    const isEdit = name !== undefined || require_2fa_for_admins !== undefined;
+
+    if (isArchive) {
+      const canArchive = await userHasPermission(req.user.id, workspaceId, 'workspace.archive', req.db);
+      if (!canArchive) {
+        return res.status(403).json({ error: { message: 'Permission denied to archive workspace', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isEdit || !isArchive) {
+      const canEdit = (await userHasPermission(req.user.id, workspaceId, 'workspace.edit', req.db)) ||
+                      (await userHasPermission(req.user.id, workspaceId, 'workspace.edit_settings', req.db));
+      if (!canEdit) {
+        return res.status(403).json({ error: { message: 'Permission denied to edit workspace', code: 'PERMISSION_DENIED' } });
+      }
+    }
     const updates = [];
     const values = [];
 
@@ -227,7 +243,7 @@ router.get('/:id/my-permissions', requireAuth, async (req, res, next) => {
 });
 
 // GET /api/workspaces/:id/roles - Get all system & custom roles for workspace with member counts
-router.get('/:id/roles', requireAuth, async (req, res, next) => {
+router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
 
   try {
@@ -347,7 +363,7 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
 });
 
 // GET /api/workspaces/:id/members - List members
-router.get('/:id/members', requireAuth, async (req, res, next) => {
+router.get('/:id/members', requireAuth, requirePermission('member.view'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
 
   try {
@@ -437,7 +453,7 @@ router.get('/:id/members', requireAuth, async (req, res, next) => {
 });
 
 // PATCH /api/workspaces/:id/members/:userId/role - Reassign member role (Safety Floor Enforced)
-router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member.assign_role'), validate(assignRoleSchema), async (req, res, next) => {
+router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['member.assign_role', 'role.assign']), validate(assignRoleSchema), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const targetUserId = Number(req.params.userId);
   const { role_id, board_ids } = req.body;
@@ -1134,7 +1150,7 @@ router.get('/:id/invitations', requireAuth, requirePermission('member.view'), as
 });
 
 // GET /api/workspaces/:id/archived - List archived boards and cards for workspace
-router.get('/:id/archived', requireAuth, async (req, res, next) => {
+router.get('/:id/archived', requireAuth, requirePermission('archive.view'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   try {
     const wsMember = await req.db.query(

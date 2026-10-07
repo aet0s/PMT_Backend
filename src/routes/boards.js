@@ -87,7 +87,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/boards
-router.post('/', requireAuth, requirePermission('board.create'), validate(createBoardSchema), async (req, res, next) => {
+router.post('/', requireAuth, requirePermission('project.create'), validate(createBoardSchema), async (req, res, next) => {
   const { workspace_id, name, background_color = 'bg-gradient-to-br from-indigo-900 via-slate-900 to-purple-950' } = req.body;
 
   try {
@@ -390,11 +390,40 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 });
 
 // PATCH /api/boards/:id
-router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), validate(updateBoardSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, next) => {
   const boardId = Number(req.params.id);
   const { name, background_color, is_archived } = req.body;
 
   try {
+    const [existingBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+    if (!existingBoard) {
+      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    }
+    const workspaceId = existingBoard.workspace_id;
+
+    // Granular per-operation permission enforcement
+    const isArchive = is_archived === true && Boolean(existingBoard.is_archived) !== true;
+    const isRestore = is_archived === false && Boolean(existingBoard.is_archived) === true;
+    const isEditSettings = name !== undefined || background_color !== undefined;
+
+    if (isArchive) {
+      const canArchive = await userHasPermission(req.user.id, workspaceId, 'project.archive', req.db, boardId);
+      if (!canArchive) {
+        return res.status(403).json({ error: { message: 'Permission denied to archive project', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isRestore) {
+      const canRestore = await userHasPermission(req.user.id, workspaceId, 'archive.restore', req.db, boardId);
+      if (!canRestore) {
+        return res.status(403).json({ error: { message: 'Permission denied to restore project', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isEditSettings || (!isArchive && !isRestore)) {
+      const canEdit = await userHasPermission(req.user.id, workspaceId, 'project.edit_settings', req.db, boardId);
+      if (!canEdit) {
+        return res.status(403).json({ error: { message: 'Permission denied to edit project settings', code: 'PERMISSION_DENIED' } });
+      }
+    }
     const updates = [];
     const values = [];
 
@@ -470,7 +499,7 @@ router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), vali
 });
 
 // DELETE /api/boards/:id
-router.delete('/:id', requireAuth, requirePermission('board.delete'), async (req, res, next) => {
+router.delete('/:id', requireAuth, requirePermission(['project.delete', 'archive.permanent_delete']), async (req, res, next) => {
   const boardId = Number(req.params.id);
 
   // 1. Resolve board and verify existence
@@ -698,7 +727,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
 });
 
 // GET /api/boards/:id/labels
-router.get('/:id/labels', requireAuth, async (req, res, next) => {
+router.get('/:id/labels', requireAuth, requirePermission(['label.view', 'project.view']), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
@@ -709,7 +738,7 @@ router.get('/:id/labels', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/boards/:id/labels
-router.post('/:id/labels', requireAuth, requirePermission('board.edit_settings'), async (req, res, next) => {
+router.post('/:id/labels', requireAuth, requirePermission('label.create'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   const { name, color } = req.body;
 
@@ -744,7 +773,7 @@ router.post('/:id/labels', requireAuth, requirePermission('board.edit_settings')
 });
 
 // GET /api/boards/:id/archived - Return archived lists and cards for board
-router.get('/:id/archived', requireAuth, async (req, res, next) => {
+router.get('/:id/archived', requireAuth, requirePermission(['archive.view', 'project.view']), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
@@ -769,7 +798,7 @@ router.get('/:id/archived', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/boards/:id/archive - Archive board
-router.post('/:id/archive', requireAuth, requirePermission('board.edit_settings'), async (req, res, next) => {
+router.post('/:id/archive', requireAuth, requirePermission('project.archive'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
@@ -797,7 +826,7 @@ router.post('/:id/archive', requireAuth, requirePermission('board.edit_settings'
 });
 
 // POST /api/boards/:id/restore - Restore archived board
-router.post('/:id/restore', requireAuth, requirePermission('board.edit_settings'), async (req, res, next) => {
+router.post('/:id/restore', requireAuth, requirePermission('archive.restore'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
@@ -823,7 +852,7 @@ router.post('/:id/restore', requireAuth, requirePermission('board.edit_settings'
 });
 
 // GET /api/boards/:id/attachments - Return attachments for cards on this board
-router.get('/:id/attachments', requireAuth, async (req, res, next) => {
+router.get('/:id/attachments', requireAuth, requirePermission(['attachment.view', 'project.view']), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);

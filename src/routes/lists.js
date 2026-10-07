@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { broadcastBoardEvent } = require('../socket');
-const { requirePermission } = require('../middleware/permissions');
+const { requirePermission, userHasPermission } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
 const { notify } = require('../services/notify');
@@ -67,17 +67,39 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 });
 
 // PATCH /api/lists/:id
-router.patch('/:id', requireAuth, requirePermission('list.edit'), validate(updateListSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, next) => {
   const listId = Number(req.params.id);
   const { name, position, is_archived } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
-    const listCheck = await req.db.query('SELECT board_id, name FROM lists WHERE id = ?', [listId]);
+    const listCheck = await req.db.query(
+      `SELECT l.board_id, l.name, b.workspace_id 
+       FROM lists l 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE l.id = ?`,
+      [listId]
+    );
     if (listCheck.length === 0) {
       return res.status(404).json({ error: { message: 'List not found', code: 'NOT_FOUND' } });
     }
-    const boardId = listCheck[0].board_id;
+    const { board_id: boardId, workspace_id: workspaceId } = listCheck[0];
+
+    const isReorder = position !== undefined;
+    const isEdit = name !== undefined || is_archived !== undefined;
+
+    if (isReorder) {
+      const canReorder = await userHasPermission(req.user.id, workspaceId, 'list.reorder', req.db, boardId);
+      if (!canReorder) {
+        return res.status(403).json({ error: { message: 'Permission denied to reorder lists', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isEdit || !isReorder) {
+      const canEdit = await userHasPermission(req.user.id, workspaceId, 'list.edit', req.db, boardId);
+      if (!canEdit) {
+        return res.status(403).json({ error: { message: 'Permission denied to edit lists', code: 'PERMISSION_DENIED' } });
+      }
+    }
 
     const updates = [];
     const values = [];

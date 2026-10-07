@@ -50,7 +50,7 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Workspaces ───────────────────────────────────────────────────────────
   ['GET /api/workspaces',                                             { permission: 'workspace.view',             scope: 'company' }],
   ['POST /api/workspaces',                                            { permission: 'workspace.create',           scope: 'company' }],
-  ['PATCH /api/workspaces/:id',                                       { permission: 'workspace.edit_settings',    scope: 'company' }],
+  ['PATCH /api/workspaces/:id',                                       { permission: 'workspace.edit',             scope: 'company', note: 'fine-grained: workspace.edit, workspace.archive' }],
   ['DELETE /api/workspaces/:id',                                      { permission: 'workspace.delete',           scope: 'company' }],
   // my-permissions is self-evaluation — no workspace RBAC key; auth only
   ['GET /api/workspaces/:id/my-permissions',                          { selfScoped: 'User reads their own effective permissions for a workspace', scope: 'company' }],
@@ -62,82 +62,75 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id/invitations',                             { permission: 'member.view',                scope: 'company' }],
   ['GET /api/workspaces/:id/activity',                                { permission: 'workspace.view',             scope: 'company' }],
   ['GET /api/workspaces/:id/reports',                                 { selfScoped: 'report.view — scoped to workspace members', scope: 'company' }],
-  ['GET /api/workspaces/:id/archived',                                { selfScoped: 'archive.view — scopes by workspace membership', scope: 'company' }],
-  ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company' }],
+  ['GET /api/workspaces/:id/archived',                                { permission: 'archive.view',               scope: 'company' }],
+  ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company', note: 'accepts member.assign_role or role.assign' }],
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-password',{ permission: 'member.reset_password',      scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-2fa',     { permission: 'member.reset_2fa',           scope: 'company' }],
 
   // ─── Roles ────────────────────────────────────────────────────────────────
-  // PATCH and DELETE use inline userHasPermission('workspace.manage_roles') — no requirePermission middleware,
-  // but the handler still enforces it. We declare the effective permission here.
-  ['PATCH /api/roles/:id',   { permission: 'workspace.manage_roles', scope: 'company', note: 'enforced inline in handler' }],
-  ['DELETE /api/roles/:id',  { permission: 'workspace.manage_roles', scope: 'company', note: 'enforced inline in handler' }],
+  ['PATCH /api/roles/:id',   { permission: 'role.edit',   scope: 'company', note: 'enforced inline in handler' }],
+  ['DELETE /api/roles/:id',  { permission: 'role.delete', scope: 'company', note: 'enforced inline in handler' }],
 
   // ─── Boards (Projects) ────────────────────────────────────────────────────
   ['GET /api/boards',                        { permission: 'project.view',          scope: 'company' }],
-  ['POST /api/boards',                       { permission: 'board.create',          scope: 'company' }],
-  // GET /api/boards/:id uses inline userHasPermission('project.view')
+  ['POST /api/boards',                       { permission: 'project.create',        scope: 'company' }],
   ['GET /api/boards/:id',                    { permission: 'project.view',          scope: 'project', note: 'enforced inline in handler' }],
-  ['PATCH /api/boards/:id',                  { permission: 'board.edit_settings',   scope: 'project' }],
-  ['DELETE /api/boards/:id',                 { permission: 'board.delete',          scope: 'project' }],
-  ['GET /api/boards/:id/archived',           { permission: 'project.view',          scope: 'project' }],
-  ['POST /api/boards/:id/archive',           { permission: 'board.edit_settings',   scope: 'project' }],
-  ['POST /api/boards/:id/restore',           { permission: 'board.edit_settings',   scope: 'project' }],
-  ['GET /api/boards/:id/attachments',        { permission: 'project.view',          scope: 'project' }],
+  ['PATCH /api/boards/:id',                  { permission: 'project.edit_settings', scope: 'project', note: 'fine-grained: project.edit_settings, project.archive, archive.restore' }],
+  ['DELETE /api/boards/:id',                 { permission: 'project.delete',        scope: 'project' }],
+  ['GET /api/boards/:id/archived',           { permission: 'archive.view',          scope: 'project', note: 'requires archive.view or project.view' }],
+  ['POST /api/boards/:id/archive',           { permission: 'project.archive',       scope: 'project' }],
+  ['POST /api/boards/:id/restore',           { permission: 'archive.restore',       scope: 'project' }],
+  ['GET /api/boards/:id/attachments',        { permission: 'attachment.view',       scope: 'project', note: 'requires attachment.view or project.view' }],
   // workspace-members listed for board: authenticated, returns members of the parent workspace
   ['GET /api/boards/:id/workspace-members',  { permission: 'member.view',           scope: 'project', note: 'returns parent workspace members; enforced inline' }],
   ['POST /api/boards/:id/members',           { permission: 'project.manage_members',scope: 'project' }],
   ['DELETE /api/boards/:id/members/:userId', { permission: 'project.manage_members',scope: 'project' }],
-  // labels use board.edit_settings for write; read is open to project members
-  ['GET /api/boards/:id/labels',             { permission: 'project.view',          scope: 'project', note: 'enforced inline in handler' }],
-  ['POST /api/boards/:id/labels',            { permission: 'board.edit_settings',   scope: 'project' }],
+  ['GET /api/boards/:id/labels',             { permission: 'label.view',            scope: 'project', note: 'requires label.view or project.view' }],
+  ['POST /api/boards/:id/labels',            { permission: 'label.create',          scope: 'project' }],
 
   // ─── Lists ────────────────────────────────────────────────────────────────
   ['POST /api/lists',        { permission: 'list.create', scope: 'project' }],
-  ['PATCH /api/lists/:id',   { permission: 'list.edit',   scope: 'project' }],
+  ['PATCH /api/lists/:id',   { permission: 'list.edit',   scope: 'project', note: 'fine-grained: list.edit or list.reorder' }],
   ['DELETE /api/lists/:id',  { permission: 'list.delete', scope: 'project' }],
 
   // ─── Cards (Tasks) ────────────────────────────────────────────────────────
-  ['GET /api/cards/:id',     { permission: 'board.view',    scope: 'project' }],
-  ['POST /api/cards',        { permission: 'card.create',   scope: 'project' }],
-  ['PATCH /api/cards/:id',   { permission: 'card.edit',     scope: 'project' }],
-  ['DELETE /api/cards/:id',  { permission: 'card.delete',   scope: 'project' }],
+  ['GET /api/cards/:id',     { permission: 'task.view',     scope: 'project' }],
+  ['POST /api/cards',        { permission: 'task.create',   scope: 'project' }],
+  ['PATCH /api/cards/:id',   { permission: 'task.edit',     scope: 'project', note: 'fine-grained: task.edit, task.move, task.archive, task.restore' }],
+  ['DELETE /api/cards/:id',  { permission: 'task.delete',   scope: 'project' }],
 
   // ─── Card: Labels & Members ───────────────────────────────────────────────
-  ['POST /api/cards/:id/labels',            { permission: 'card.edit',             scope: 'project' }],
-  ['POST /api/cards/:id/members',           { permission: 'card.assign_members',   scope: 'project' }],
-  ['POST /api/cards/:id/assigners',         { permission: 'card.edit',             scope: 'project' }],
-  ['POST /api/cards/:id/copy',              { permission: 'card.create',           scope: 'project' }],
+  ['POST /api/cards/:id/labels',            { permission: 'task.edit',             scope: 'project' }],
+  ['POST /api/cards/:id/members',           { permission: 'task.assign',           scope: 'project' }],
+  ['POST /api/cards/:id/assigners',         { permission: 'task.edit',             scope: 'project' }],
+  ['POST /api/cards/:id/copy',              { permission: 'task.duplicate',        scope: 'project' }],
 
   // ─── Card: Attachments & Comments ────────────────────────────────────────
-  ['GET /api/cards/:id/attachments',        { permission: 'project.view',          scope: 'project' }],
-  ['POST /api/cards/:id/attachments',       { permission: 'card.manage_attachments', scope: 'project' }],
-  ['POST /api/cards/:id/attachments/file',  { permission: 'card.manage_attachments', scope: 'project' }],
-  ['POST /api/cards/:id/attachments/link',  { permission: 'card.manage_attachments', scope: 'project' }],
-  ['DELETE /api/cards/attachments/:id',     { permission: 'card.manage_attachments', scope: 'project', note: 'handler also checks ownership' }],
-  ['POST /api/cards/:id/comments',          { permission: 'card.comment',            scope: 'project' }],
-  // DELETE comments: auth only; handler enforces ownership or admin rank
-  ['DELETE /api/cards/comments/:id',        { selfScoped: 'card.comment — handler checks owner or sufficient role',  scope: 'project' }],
+  ['GET /api/cards/:id/attachments',        { permission: 'attachment.view',       scope: 'project' }],
+  ['POST /api/cards/:id/attachments',       { permission: 'attachment.upload',     scope: 'project' }],
+  ['POST /api/cards/:id/attachments/file',  { permission: 'attachment.upload',     scope: 'project' }],
+  ['POST /api/cards/:id/attachments/link',  { permission: 'attachment.upload',     scope: 'project' }],
+  ['DELETE /api/cards/attachments/:id',     { permission: 'attachment.delete_own', scope: 'project', note: 'enforces attachment.delete_own or attachment.delete_any' }],
+  ['POST /api/cards/:id/comments',          { permission: 'comment.create',        scope: 'project' }],
+  ['DELETE /api/cards/comments/:id',        { permission: 'comment.delete_own',    scope: 'project', note: 'enforces comment.delete_own or comment.delete_any' }],
 
   // ─── Checklists ───────────────────────────────────────────────────────────
-  // These routes use requireAuth only; handlers do card-level access checks internally
-  ['POST /api/cards/:id/checklists',        { selfScoped: 'card.edit — handler validates card membership',            scope: 'project' }],
-  ['DELETE /api/cards/checklists/:id',      { selfScoped: 'card.edit — handler validates card membership',            scope: 'project' }],
-  ['POST /api/cards/checklist-items',       { selfScoped: 'card.edit — handler validates card membership',            scope: 'project' }],
-  ['PATCH /api/cards/checklist-items/:id',  { selfScoped: 'card.edit — handler validates card membership',            scope: 'project' }],
-  ['DELETE /api/cards/checklist-items/:id', { selfScoped: 'card.edit — handler validates card membership',            scope: 'project' }],
+  ['POST /api/cards/:id/checklists',        { permission: 'checklist.create',      scope: 'project' }],
+  ['DELETE /api/cards/checklists/:id',      { permission: 'checklist.delete',      scope: 'project' }],
+  ['POST /api/cards/checklist-items',       { permission: 'checklist.edit',        scope: 'project' }],
+  ['PATCH /api/cards/checklist-items/:id',  { permission: 'checklist.edit',        scope: 'project' }],
+  ['DELETE /api/cards/checklist-items/:id', { permission: 'checklist.edit',        scope: 'project' }],
 
   // ─── Archive ──────────────────────────────────────────────────────────────
-  // GET /api/archive: auth only; handler scopes by workspace membership
-  ['GET /api/archive',                      { selfScoped: 'archive.view — handler scopes by workspace membership',    scope: 'company' }],
-  ['GET /api/archived',                     { selfScoped: 'archive.view — handler scopes by workspace membership',    scope: 'company' }],
+  ['GET /api/archive',                      { permission: 'archive.view',          scope: 'company', note: 'scopes by workspace membership' }],
+  ['GET /api/archived',                     { permission: 'archive.view',          scope: 'company', note: 'scopes by workspace membership' }],
 
   // ─── Attachments & Upload ──────────────────────────────────────────────────
-  ['GET /api/attachments',                  { selfScoped: 'attachment.view — returns accessible attachments',          scope: 'project' }],
-  ['GET /api/attachments/:id',              { permission: 'file.view',                                                 scope: 'project' }],
-  ['DELETE /api/attachments/:id',           { permission: 'attachment.delete',                                         scope: 'project' }],
-  ['POST /api/attachments',                 { selfScoped: 'attachment.upload — verified in handler by card_id',        scope: 'project' }],
+  ['GET /api/attachments',                  { permission: 'attachment.view',       scope: 'project', note: 'returns accessible attachments' }],
+  ['GET /api/attachments/:id',              { permission: 'attachment.view',       scope: 'project', note: 'requires attachment.view or file.view' }],
+  ['DELETE /api/attachments/:id',           { permission: 'attachment.delete_own', scope: 'project', note: 'enforces attachment.delete_own, attachment.delete_any, or file.delete' }],
+  ['POST /api/attachments',                 { permission: 'attachment.upload',     scope: 'project' }],
   ['POST /api/upload',                      { selfScoped: 'User standalone file upload',                               scope: 'company' }],
 
   // ─── Invitations ─────────────────────────────────────────────────────────

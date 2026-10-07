@@ -119,7 +119,7 @@ async function getFullCard(cardId, dbInstance = null) {
 }
 
 // GET /api/cards/:id
-router.get('/:id', requireAuth, requirePermission('board.view'), async (req, res, next) => {
+router.get('/:id', requireAuth, requirePermission('task.view'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   if (isNaN(cardId)) return next();
   try {
@@ -134,7 +134,7 @@ router.get('/:id', requireAuth, requirePermission('board.view'), async (req, res
 });
 
 // POST /api/cards
-router.post('/', requireAuth, requirePermission('card.create'), validate(createCardSchema), async (req, res, next) => {
+router.post('/', requireAuth, requirePermission('task.create'), validate(createCardSchema), async (req, res, next) => {
   let { list_id, title, description = '', position, due_date = null } = req.body;
   const originId = req.headers['x-origin-id'];
 
@@ -197,7 +197,7 @@ router.post('/', requireAuth, requirePermission('card.create'), validate(createC
 });
 
 // PATCH /api/cards/:id
-router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updateCardSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, next) => {
   const cardId = Number(req.params.id);
   if (isNaN(cardId)) return next();
   const { list_id, title, description, position, start_date, due_date, is_complete, is_archived } = req.body;
@@ -205,9 +205,10 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
 
   try {
     const oldCardRes = await req.db.query(
-      `SELECT c.*, l.board_id, l.name as list_name 
+      `SELECT c.*, l.board_id, l.name as list_name, b.workspace_id 
        FROM cards c 
        JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
        WHERE c.id = ?`,
       [cardId]
     );
@@ -216,6 +217,39 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
     const oldCard = oldCardRes[0];
+    const workspaceId = oldCard.workspace_id;
+    const boardId = oldCard.board_id;
+
+    // Granular per-operation permission enforcement
+    const isMove = list_id !== undefined || position !== undefined;
+    const isArchive = is_archived === true && Boolean(oldCard.is_archived) !== true;
+    const isRestore = is_archived === false && Boolean(oldCard.is_archived) === true;
+    const isEdit = title !== undefined || description !== undefined || start_date !== undefined || due_date !== undefined || is_complete !== undefined || req.body.cover_url !== undefined;
+
+    if (isMove) {
+      const canMove = await userHasPermission(req.user.id, workspaceId, 'task.move', req.db, boardId);
+      if (!canMove) {
+        return res.status(403).json({ error: { message: 'You do not have permission to move tasks', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isArchive) {
+      const canArchive = await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db, boardId);
+      if (!canArchive) {
+        return res.status(403).json({ error: { message: 'You do not have permission to archive tasks', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isRestore) {
+      const canRestore = await userHasPermission(req.user.id, workspaceId, 'task.restore', req.db, boardId);
+      if (!canRestore) {
+        return res.status(403).json({ error: { message: 'You do not have permission to restore tasks', code: 'PERMISSION_DENIED' } });
+      }
+    }
+    if (isEdit || (!isMove && !isArchive && !isRestore)) {
+      const canEdit = await userHasPermission(req.user.id, workspaceId, 'task.edit', req.db, boardId);
+      if (!canEdit) {
+        return res.status(403).json({ error: { message: 'You do not have permission to edit tasks', code: 'PERMISSION_DENIED' } });
+      }
+    }
 
     const updates = [];
     const values = [];
@@ -427,7 +461,7 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
 });
 
 // DELETE /api/cards/:id
-router.delete('/:id', requireAuth, requirePermission('card.delete'), async (req, res, next) => {
+router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   if (isNaN(cardId)) return next();
   const originId = req.headers['x-origin-id'];
@@ -467,7 +501,7 @@ router.delete('/:id', requireAuth, requirePermission('card.delete'), async (req,
 });
 
 // POST /api/cards/:id/labels (Toggle label assignment on card)
-router.post('/:id/labels', requireAuth, requirePermission('card.edit'), async (req, res, next) => {
+router.post('/:id/labels', requireAuth, requirePermission('task.edit'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { label_id } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -538,7 +572,7 @@ router.post('/:id/labels', requireAuth, requirePermission('card.edit'), async (r
 });
 
 // POST /api/cards/:id/members (Toggle member assignment on card)
-router.post('/:id/members', requireAuth, requirePermission('card.assign_members'), async (req, res, next) => {
+router.post('/:id/members', requireAuth, requirePermission('task.assign'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { user_id } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -624,7 +658,7 @@ router.post('/:id/members', requireAuth, requirePermission('card.assign_members'
 });
 
 // POST /api/cards/:id/assigners (Toggle assigner on card)
-router.post('/:id/assigners', requireAuth, requirePermission('card.edit'), async (req, res, next) => {
+router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { user_id } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -682,7 +716,7 @@ router.post('/:id/assigners', requireAuth, requirePermission('card.edit'), async
 });
 
 // POST /api/cards/:id/copy (Deep copy card)
-router.post('/:id/copy', requireAuth, async (req, res, next) => {
+router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async (req, res, next) => {
   const sourceCardId = Number(req.params.id);
   const { list_id, title } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -846,7 +880,7 @@ router.post('/:id/copy', requireAuth, async (req, res, next) => {
 });
 
 // GET /api/cards/:id/attachments
-router.get('/:id/attachments', requireAuth, async (req, res, next) => {
+router.get('/:id/attachments', requireAuth, requirePermission('attachment.view'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   try {
     const cardRes = await req.db.query(
@@ -857,7 +891,7 @@ router.get('/:id/attachments', requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
     const { board_id: boardId, workspace_id: workspaceId } = cardRes[0];
-    const hasPerm = await userHasPermission(req.user.id, workspaceId, 'project.view', req.db, boardId);
+    const hasPerm = await userHasPermission(req.user.id, workspaceId, 'attachment.view', req.db, boardId);
     if (!hasPerm) {
       return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
     }
@@ -874,7 +908,7 @@ router.get('/:id/attachments', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/cards/:id/attachments (Handles BOTH file upload & link attachment)
-router.post('/:id/attachments', requireAuth, requirePermission('card.manage_attachments'), upload.single('file'), async (req, res, next) => {
+router.post('/:id/attachments', requireAuth, requirePermission('attachment.upload'), upload.single('file'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -939,7 +973,7 @@ router.post('/:id/attachments', requireAuth, requirePermission('card.manage_atta
 });
 
 // POST /api/cards/:id/attachments/file (Multipart file upload alias)
-router.post('/:id/attachments/file', requireAuth, requirePermission('card.manage_attachments'), upload.single('file'), async (req, res, next) => {
+router.post('/:id/attachments/file', requireAuth, requirePermission('attachment.upload'), upload.single('file'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -988,7 +1022,7 @@ router.post('/:id/attachments/file', requireAuth, requirePermission('card.manage
 });
 
 // POST /api/cards/:id/attachments/link (JSON link attachment alias)
-router.post('/:id/attachments/link', requireAuth, requirePermission('card.manage_attachments'), async (req, res, next) => {
+router.post('/:id/attachments/link', requireAuth, requirePermission('attachment.upload'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { link_url, display_name } = req.body || {};
   const originId = req.headers['x-origin-id'];
@@ -1035,19 +1069,40 @@ router.post('/:id/attachments/link', requireAuth, requirePermission('card.manage
 });
 
 // DELETE /api/cards/attachments/:id
-router.delete('/attachments/:id', requireAuth, requirePermission('card.manage_attachments'), async (req, res, next) => {
+router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
   const attachmentId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
   try {
-    const attRes = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attachmentId]);
+    const attRes = await req.db.query(
+      `SELECT a.*, l.board_id, b.workspace_id 
+       FROM attachments a 
+       JOIN cards c ON a.card_id = c.id 
+       JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE a.id = ?`,
+      [attachmentId]
+    );
     if (attRes.length === 0) {
       return res.status(404).json({ error: { message: 'Attachment not found', code: 'NOT_FOUND' } });
     }
     const att = attRes[0];
+    const boardId = att.board_id;
+    const workspaceId = att.workspace_id;
 
-    const cardRes = await req.db.query('SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?', [att.card_id]);
-    const boardId = cardRes[0]?.board_id;
+    const isOwn = att.uploaded_by_user_id === req.user.id;
+    const hasDeleteOwn = await userHasPermission(req.user.id, workspaceId, 'attachment.delete_own', req.db, boardId);
+    const hasDeleteAny = await userHasPermission(req.user.id, workspaceId, 'attachment.delete_any', req.db, boardId);
+
+    if (isOwn) {
+      if (!hasDeleteOwn && !hasDeleteAny) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete attachment', code: 'PERMISSION_DENIED' } });
+      }
+    } else {
+      if (!hasDeleteAny) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete others attachment', code: 'PERMISSION_DENIED' } });
+      }
+    }
 
     if (att.file_type !== 'link') {
       if (att.file_url.startsWith('/uploads/')) {
@@ -1082,7 +1137,7 @@ router.delete('/attachments/:id', requireAuth, requirePermission('card.manage_at
 });
 
 // POST /api/cards/:id/comments
-router.post('/:id/comments', requireAuth, requirePermission('card.comment'), async (req, res, next) => {
+router.post('/:id/comments', requireAuth, requirePermission('comment.create'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { body } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -1189,27 +1244,51 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
   const originId = req.headers['x-origin-id'];
 
   try {
-    const comRes = await req.db.query('SELECT card_id FROM comments WHERE id = ?', [commentId]);
-    const cardId = comRes[0]?.card_id;
+    const comRes = await req.db.query(
+      `SELECT co.id, co.user_id, co.card_id, l.board_id, b.workspace_id 
+       FROM comments co 
+       JOIN cards c ON co.card_id = c.id 
+       JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE co.id = ?`,
+      [commentId]
+    );
+    if (comRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Comment not found', code: 'NOT_FOUND' } });
+    }
+    const com = comRes[0];
+    const cardId = com.card_id;
+    const boardId = com.board_id;
+    const workspaceId = com.workspace_id;
 
-    await req.db.execute('DELETE FROM comments WHERE id = ? AND user_id = ?', [commentId, req.user.id]);
+    const isOwn = com.user_id === req.user.id;
+    const hasDeleteOwn = await userHasPermission(req.user.id, workspaceId, 'comment.delete_own', req.db, boardId);
+    const hasDeleteAny = await userHasPermission(req.user.id, workspaceId, 'comment.delete_any', req.db, boardId);
+
+    if (isOwn) {
+      if (!hasDeleteOwn && !hasDeleteAny) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete comment', code: 'PERMISSION_DENIED' } });
+      }
+    } else {
+      if (!hasDeleteAny) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete others comment', code: 'PERMISSION_DENIED' } });
+      }
+    }
+
+    await req.db.execute('DELETE FROM comments WHERE id = ?', [commentId]);
 
     if (cardId) {
-      const cardRes = await req.db.query('SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?', [cardId]);
-      const boardId = cardRes[0]?.board_id;
-      if (boardId) {
-        const fullCard = await getFullCard(cardId, req.db);
-        broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
-        await notify({
-          db: req.db,
-          tenantId: req.tenant?.id,
-          boardId,
-          cardId,
-          eventType: 'comment.deleted',
-          actorId: req.user.id,
-          data: { cardTitle: fullCard?.title || 'Card' }
-        });
-      }
+      const fullCard = await getFullCard(cardId, req.db);
+      broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        boardId,
+        cardId,
+        eventType: 'comment.deleted',
+        actorId: req.user.id,
+        data: { cardTitle: fullCard?.title || 'Card' }
+      });
     }
 
     return res.json({ message: 'Comment deleted' });
@@ -1219,7 +1298,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/cards/:id/checklists
-router.post('/:id/checklists', requireAuth, async (req, res, next) => {
+router.post('/:id/checklists', requireAuth, requirePermission('checklist.create'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { title = 'Checklist', items = [] } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -1275,7 +1354,7 @@ router.post('/:id/checklists', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/checklists/:id
-router.delete('/checklists/:id', requireAuth, async (req, res, next) => {
+router.delete('/checklists/:id', requireAuth, requirePermission('checklist.delete'), async (req, res, next) => {
   const checklistId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -1310,7 +1389,7 @@ router.delete('/checklists/:id', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/checklist-items
-router.post('/checklist-items', requireAuth, async (req, res, next) => {
+router.post('/checklist-items', requireAuth, requirePermission('checklist.edit'), async (req, res, next) => {
   const { checklist_id, text } = req.body;
   const originId = req.headers['x-origin-id'];
 
@@ -1352,7 +1431,7 @@ router.post('/checklist-items', requireAuth, async (req, res, next) => {
 });
 
 // PATCH /api/checklist-items/:id
-router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
+router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.edit'), async (req, res, next) => {
   const itemId = Number(req.params.id);
   const { text, is_checked, position } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -1511,7 +1590,7 @@ router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/checklist-items/:id
-router.delete('/checklist-items/:id', requireAuth, async (req, res, next) => {
+router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.edit'), async (req, res, next) => {
   const itemId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 

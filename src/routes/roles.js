@@ -35,7 +35,8 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     const workspaceId = role.workspace_id;
     if (workspaceId) {
-      const hasPerm = await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db);
+      const hasPerm = (await userHasPermission(req.user.id, workspaceId, 'role.edit', req.db)) ||
+                      (await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db));
       if (!hasPerm) {
         return res.status(403).json({
           error: { message: 'You do not have permission to edit custom roles', code: 'PERMISSION_DENIED' }
@@ -140,7 +141,8 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 
     const workspaceId = role.workspace_id;
     if (workspaceId) {
-      const hasPerm = await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db);
+      const hasPerm = (await userHasPermission(req.user.id, workspaceId, 'role.delete', req.db)) ||
+                      (await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db));
       if (!hasPerm) {
         return res.status(403).json({
           error: { message: 'You do not have permission to delete custom roles', code: 'PERMISSION_DENIED' }

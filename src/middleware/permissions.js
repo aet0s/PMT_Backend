@@ -59,8 +59,56 @@ async function resolveWorkspaceId(req) {
     }
   }
 
+  if (req.body.card_id || req.body.cardId) {
+    const cid = Number(req.body.card_id || req.body.cardId);
+    const res = await db.query(
+      'SELECT l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
+      [cid]
+    );
+    if (res[0]) {
+      req.projectId = res[0].board_id;
+      req.workspaceId = res[0].workspace_id;
+      return req.workspaceId;
+    }
+  }
+
+  if (req.body.checklist_id) {
+    const chId = Number(req.body.checklist_id);
+    const res = await db.query(
+      `SELECT l.board_id, b.workspace_id 
+       FROM checklists ch 
+       JOIN cards c ON ch.card_id = c.id 
+       JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE ch.id = ?`,
+      [chId]
+    );
+    if (res[0]) {
+      req.projectId = res[0].board_id;
+      req.workspaceId = res[0].workspace_id;
+      return req.workspaceId;
+    }
+  }
+
   const routePath = req.baseUrl || req.path || '';
   const paramId = Number(req.params.id);
+
+  if (routePath.includes('/attachments') && paramId) {
+    const res = await db.query(
+      `SELECT l.board_id, b.workspace_id
+       FROM attachments a
+       JOIN cards c ON a.card_id = c.id
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE a.id = ?`,
+      [paramId]
+    );
+    if (res[0]) {
+      req.projectId = res[0].board_id;
+      req.workspaceId = res[0].workspace_id;
+      return req.workspaceId;
+    }
+  }
 
   if (routePath.includes('/notifications') && req.user?.id) {
     const wmRes = await db.query(
@@ -347,13 +395,14 @@ function requirePermission(permissionKey) {
 
       req.workspaceId = workspaceId;
 
-      const hasPerm = await userHasPermission(
-        req.user.id,
-        workspaceId,
-        permissionKey,
-        req.db,
-        req.projectId || null
-      );
+      const keys = Array.isArray(permissionKey) ? permissionKey : [permissionKey];
+      let hasPerm = false;
+      for (const k of keys) {
+        if (await userHasPermission(req.user.id, workspaceId, k, req.db, req.projectId || null)) {
+          hasPerm = true;
+          break;
+        }
+      }
 
       if (!hasPerm) {
         return res.status(403).json({

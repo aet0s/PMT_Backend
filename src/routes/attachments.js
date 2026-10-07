@@ -108,7 +108,8 @@ router.get('/:id', requireAuth, async (req, res, next) => {
     }
 
     const att = attRes[0];
-    const hasPerm = await userHasPermission(req.user.id, att.workspace_id, 'file.view', req.db, att.board_id);
+    const hasPerm = (await userHasPermission(req.user.id, att.workspace_id, 'file.view', req.db, att.board_id)) ||
+                    (await userHasPermission(req.user.id, att.workspace_id, 'attachment.view', req.db, att.board_id));
     if (!hasPerm) {
       return res.status(403).json({ error: { message: 'Access denied to attachment', code: 'FORBIDDEN' } });
     }
@@ -140,9 +141,19 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     }
 
     const att = attRes[0];
-    const hasPerm = await userHasPermission(req.user.id, att.workspace_id, 'attachment.delete', req.db, att.board_id);
-    if (!hasPerm && att.uploaded_by_user_id !== req.user.id) {
-      return res.status(403).json({ error: { message: 'Permission denied to delete attachment', code: 'FORBIDDEN' } });
+    const isOwn = att.uploaded_by_user_id === req.user.id;
+    const hasDeleteOwn = await userHasPermission(req.user.id, att.workspace_id, 'attachment.delete_own', req.db, att.board_id);
+    const hasDeleteAny = await userHasPermission(req.user.id, att.workspace_id, 'attachment.delete_any', req.db, att.board_id);
+    const hasFileDelete = await userHasPermission(req.user.id, att.workspace_id, 'file.delete', req.db, att.board_id);
+
+    if (isOwn) {
+      if (!hasDeleteOwn && !hasDeleteAny && !hasFileDelete) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete attachment', code: 'FORBIDDEN' } });
+      }
+    } else {
+      if (!hasDeleteAny && !hasFileDelete) {
+        return res.status(403).json({ error: { message: 'Permission denied to delete others attachment', code: 'FORBIDDEN' } });
+      }
     }
 
     if (att.file_type !== 'link') {

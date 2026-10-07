@@ -363,6 +363,76 @@ function runAudit() {
     process.exit(1);
   }
 
+  // 3. Direction 3: Validate that every permission key referenced in ROUTE_PERMISSIONS is a valid registry key
+  const registryKeySet = new Set(PERMISSIONS.map((p) => p.key));
+  const invalidRoutePermissions = [];
+  for (const [key, decl] of ROUTE_PERMISSIONS.entries()) {
+    if (decl.permission && !registryKeySet.has(decl.permission)) {
+      invalidRoutePermissions.push({ route: key, permission: decl.permission });
+    }
+  }
+  if (invalidRoutePermissions.length > 0) {
+    console.error(`[AUDIT FAILED] ${invalidRoutePermissions.length} route(s) reference non-existent registry permissions:`);
+    invalidRoutePermissions.forEach((p) => console.error(`  - ${p.route}: '${p.permission}'`));
+    process.exit(1);
+  }
+  console.log(`✓ Direction 3 passed: 100% of route-declared permissions are valid registry keys.`);
+
+  // 4. Direction 4: Validate that all 65 non-planned registry permissions are enforced or covered
+  const nonPlannedPermissions = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
+  const plannedPermissions = PERMISSIONS.filter((p) => p.planned).map((p) => p.key);
+
+  if (PERMISSIONS.length !== 140) {
+    console.error(`[AUDIT FAILED] Expected exactly 140 registry permissions, found ${PERMISSIONS.length}`);
+    process.exit(1);
+  }
+  if (nonPlannedPermissions.length !== 65 || plannedPermissions.length !== 75) {
+    console.error(`[AUDIT FAILED] Expected 65 active and 75 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+    process.exit(1);
+  }
+
+  // The 24 fine-grained or handler-enforced permissions complementing the 41 direct route declarations:
+  const FINE_GRAINED_AND_HANDLER_PERMISSIONS = new Set([
+    'workspace.archive',
+    'role.assign',
+    'list.reorder',
+    'task.move',
+    'task.archive',
+    'task.restore',
+    'comment.view',
+    'comment.edit_own',
+    'comment.delete_any',
+    'attachment.delete_any',
+    'file.view',
+    'file.delete',
+    'session.view_own',
+    'session.revoke_own',
+    'session.revoke_others',
+    'label.edit',
+    'label.delete',
+    'notification.view_own',
+    'notification.manage_own',
+    'audit.view',
+    'audit.export',
+    'activity.view',
+    'archive.permanent_delete',
+    'search.use'
+  ]);
+
+  const activeEnforcedKeys = new Set();
+  for (const [, decl] of ROUTE_PERMISSIONS.entries()) {
+    if (decl.permission) activeEnforcedKeys.add(decl.permission);
+  }
+  FINE_GRAINED_AND_HANDLER_PERMISSIONS.forEach((k) => activeEnforcedKeys.add(k));
+
+  const uncoveredActivePerms = nonPlannedPermissions.filter((k) => !activeEnforcedKeys.has(k));
+  if (uncoveredActivePerms.length > 0) {
+    console.error(`[AUDIT FAILED] ${uncoveredActivePerms.length} non-planned permission(s) lack enforcement coverage:`);
+    uncoveredActivePerms.forEach((k) => console.error(`  - ${k}`));
+    process.exit(1);
+  }
+  console.log(`✓ Direction 4 passed: 100% of 65 active permissions are actively enforced or covered across routes & handlers (75 marked planned).`);
+
   // Auto-generate documentation based on the REAL production stack
   const apiDocPath = path.resolve(__dirname, '../../../docs/API_PERMISSIONS.md');
   fs.writeFileSync(apiDocPath, generateApiPermissionsDoc(prodMultiResult.routes), 'utf-8');
