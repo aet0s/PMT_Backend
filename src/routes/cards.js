@@ -120,6 +120,7 @@ async function getFullCard(cardId, dbInstance = null) {
 // GET /api/cards/:id
 router.get('/:id', requireAuth, requirePermission('board.view'), async (req, res, next) => {
   const cardId = Number(req.params.id);
+  if (isNaN(cardId)) return next();
   try {
     const card = await getFullCard(cardId, req.db);
     if (!card) {
@@ -197,6 +198,7 @@ router.post('/', requireAuth, requirePermission('card.create'), validate(createC
 // PATCH /api/cards/:id
 router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updateCardSchema), async (req, res, next) => {
   const cardId = Number(req.params.id);
+  if (isNaN(cardId)) return next();
   const { list_id, title, description, position, start_date, due_date, is_complete, is_archived } = req.body;
   const originId = req.headers['x-origin-id'];
 
@@ -348,6 +350,7 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
 // DELETE /api/cards/:id
 router.delete('/:id', requireAuth, requirePermission('card.delete'), async (req, res, next) => {
   const cardId = Number(req.params.id);
+  if (isNaN(cardId)) return next();
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -1112,12 +1115,6 @@ router.post('/:id/checklists', requireAuth, async (req, res, next) => {
     const filteredItems = (Array.isArray(items) ? items : [])
       .map((it) => (typeof it === 'string' ? it.trim() : it?.text?.trim()))
       .filter(Boolean);
-
-    if (filteredItems.length === 0) {
-      return res.status(400).json({
-        error: { message: 'Checklist must contain at least one item', code: 'BAD_REQUEST' }
-      });
-    }
 
     const chExec = await req.db.execute(
       'INSERT INTO checklists (card_id, title) VALUES (?, ?)',
