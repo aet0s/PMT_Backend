@@ -1,6 +1,7 @@
 // server/src/test_phase2_multitenant.js
 // Complete test suite for Phase 2: Multi-Tenant Architecture, Isolation, & Verification Flow.
 require('dotenv').config();
+process.env.DEV_SINGLE_TENANT = '0';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
