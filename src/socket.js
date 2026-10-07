@@ -22,16 +22,32 @@ function parseCookies(cookieHeader) {
   return list;
 }
 
+function isSingleTenantMode() {
+  return process.env.DEV_SINGLE_TENANT === '1';
+}
+
 function getBoardRoom(boardId, tenantId) {
-  return tenantId ? `t:${tenantId}:board:${boardId}` : `board:${boardId}`;
+  if (isSingleTenantMode()) {
+    return `board:${boardId}`;
+  }
+  if (!tenantId) return null;
+  return `t:${tenantId}:board:${boardId}`;
 }
 
 function getUserRoom(userId, tenantId) {
-  return tenantId ? `t:${tenantId}:user:${userId}` : `user:${userId}`;
+  if (isSingleTenantMode()) {
+    return `user:${userId}`;
+  }
+  if (!tenantId) return null;
+  return `t:${tenantId}:user:${userId}`;
 }
 
 function getWorkspaceRoom(workspaceId, tenantId) {
-  return tenantId ? `t:${tenantId}:workspace:${workspaceId}` : `workspace:${workspaceId}`;
+  if (isSingleTenantMode()) {
+    return `workspace:${workspaceId}`;
+  }
+  if (!tenantId) return null;
+  return `t:${tenantId}:workspace:${workspaceId}`;
 }
 
 const { isOriginAllowed, getAllowedOrigins } = require('./utils/corsOrigins');
@@ -115,11 +131,15 @@ function initSocket(server) {
   });
 
   io.on('connection', (socket) => {
-    // Join personal tenant-namespaced user room on connect
+    // Join personal user room on connect
     const userRoom = getUserRoom(socket.userId, socket.tenantId);
-    socket.join(userRoom);
-    // Unconditionally join user room so direct user notifications always reach this user
-    socket.join(`user:${socket.userId}`);
+    if (userRoom) {
+      socket.join(userRoom);
+    }
+    // Only join legacy un-namespaced room in DEV_SINGLE_TENANT=1 mode
+    if (isSingleTenantMode()) {
+      socket.join(`user:${socket.userId}`);
+    }
 
     // Join workspace room with tenant isolation
     socket.on('join_workspace', ({ workspaceId, tenantId }) => {
@@ -127,8 +147,10 @@ function initSocket(server) {
       const wsId = Number(workspaceId);
       const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
       const room = getWorkspaceRoom(wsId, effectiveTenantId);
-      socket.join(room);
-      if (process.env.DEV_SINGLE_TENANT === '1') {
+      if (room) {
+        socket.join(room);
+      }
+      if (isSingleTenantMode()) {
         socket.join(`workspace:${wsId}`);
       }
     });
@@ -138,8 +160,10 @@ function initSocket(server) {
       const wsId = Number(workspaceId);
       const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
       const room = getWorkspaceRoom(wsId, effectiveTenantId);
-      socket.leave(room);
-      if (process.env.DEV_SINGLE_TENANT === '1') {
+      if (room) {
+        socket.leave(room);
+      }
+      if (isSingleTenantMode()) {
         socket.leave(`workspace:${wsId}`);
       }
     });
@@ -156,6 +180,11 @@ function initSocket(server) {
 
       const bId = Number(boardId);
       const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
+
+      if (!isSingleTenantMode() && !effectiveTenantId) {
+        socket.emit('error', { message: 'Tenant context required in multi-tenant mode', code: 'FORBIDDEN' });
+        return;
+      }
 
       // Verify board existence and user permission in tenant DB to prevent unauthorized room joins
       if (effectiveTenantId) {
@@ -180,9 +209,12 @@ function initSocket(server) {
       }
 
       const room = getBoardRoom(bId, effectiveTenantId);
+      if (!room) return;
 
       socket.join(room);
-      socket.join(`board:${bId}`);
+      if (isSingleTenantMode()) {
+        socket.join(`board:${bId}`);
+      }
       socket.currentBoardRoom = room;
       socket.currentBoardId = bId;
 
@@ -209,9 +241,14 @@ function initSocket(server) {
       const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
       const room = getBoardRoom(bId, effectiveTenantId);
 
-      socket.leave(room);
+      if (room) {
+        socket.leave(room);
+      }
+      if (isSingleTenantMode()) {
+        socket.leave(`board:${bId}`);
+      }
 
-      if (boardUsersMap.has(room)) {
+      if (room && boardUsersMap.has(room)) {
         const boardMap = boardUsersMap.get(room);
         boardMap.delete(socket.id);
         const uniqueMembers = Array.from(
@@ -231,6 +268,7 @@ function initSocket(server) {
     socket.on('card_drag_move', ({ boardId, cardId, cardTitle, card, x, y }) => {
       if (!boardId) return;
       const room = getBoardRoom(Number(boardId), socket.tenantId);
+      if (!room) return;
       socket.to(room).emit('card:dragging', {
         socketId: socket.id,
         userId: socket.userId,
@@ -246,6 +284,7 @@ function initSocket(server) {
     socket.on('card_drag_end', ({ boardId, cardId }) => {
       if (!boardId) return;
       const room = getBoardRoom(Number(boardId), socket.tenantId);
+      if (!room) return;
       socket.to(room).emit('card:drag_ended', {
         socketId: socket.id,
         userId: socket.userId,
@@ -256,6 +295,7 @@ function initSocket(server) {
     socket.on('list_drag_move', ({ boardId, listId, list, x, y }) => {
       if (!boardId) return;
       const room = getBoardRoom(Number(boardId), socket.tenantId);
+      if (!room) return;
       socket.to(room).emit('list:dragging', {
         socketId: socket.id,
         userId: socket.userId,
@@ -270,6 +310,7 @@ function initSocket(server) {
     socket.on('list_drag_end', ({ boardId, listId }) => {
       if (!boardId) return;
       const room = getBoardRoom(Number(boardId), socket.tenantId);
+      if (!room) return;
       socket.to(room).emit('list:drag_ended', {
         socketId: socket.id,
         userId: socket.userId,
@@ -306,9 +347,15 @@ function getIO() {
   return io;
 }
 
-function broadcastBoardEvent(boardId, eventName, payload, originId, tenantId = null, clientMutationId = null) {
+function broadcastBoardEvent(boardId, eventName, payload, originId = null, tenantId = null, clientMutationId = null) {
   if (!io || !boardId) return;
-  const bId = Number(boardId);
+  if (!isSingleTenantMode() && !tenantId) {
+    console.error(`[SOCKET_ERROR] broadcastBoardEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on board ${boardId}`);
+    return;
+  }
+  const room = getBoardRoom(boardId, tenantId);
+  if (!room) return;
+
   const data = {
     ...payload,
     originId: originId || null,
@@ -317,46 +364,50 @@ function broadcastBoardEvent(boardId, eventName, payload, originId, tenantId = n
     timestamp: new Date().toISOString()
   };
 
-  let emitter = io;
-  if (tenantId) {
-    emitter = emitter.to(`t:${tenantId}:board:${bId}`);
-  }
-  emitter.to(`board:${bId}`).emit(eventName, data);
+  io.to(room).emit(eventName, data);
 }
 
 function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = null, tenantId = null) {
   if (!io || !workspaceId) return;
-  const wsId = Number(workspaceId);
+  if (!isSingleTenantMode() && !tenantId) {
+    console.error(`[SOCKET_ERROR] broadcastWorkspaceEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on workspace ${workspaceId}`);
+    return;
+  }
+  const room = getWorkspaceRoom(workspaceId, tenantId);
+  if (!room) return;
+
   const data = {
     ...payload,
     originId: originId || null,
-    workspaceId: wsId,
+    workspaceId: Number(workspaceId),
     timestamp: new Date().toISOString()
   };
 
-  let emitter = io;
-  if (tenantId) {
-    emitter = emitter.to(`t:${tenantId}:workspace:${wsId}`);
-  }
-  emitter.to(`workspace:${wsId}`).emit(eventName, data);
+  io.to(room).emit(eventName, data);
 }
 
 function sendUserNotification(userId, notification, tenantId = null) {
   if (!io || !userId) return;
-  let emitter = io;
-  if (tenantId) {
-    emitter = emitter.to(`t:${tenantId}:user:${userId}`);
+  if (!isSingleTenantMode() && !tenantId) {
+    console.error(`[SOCKET_ERROR] sendUserNotification dropped: missing tenantId in multi-tenant mode for user ${userId}`);
+    return;
   }
-  emitter.to(`user:${userId}`).emit('notification:new', notification);
+  const room = getUserRoom(userId, tenantId);
+  if (!room) return;
+
+  io.to(room).emit('notification:new', notification);
 }
 
 function sendUserEvent(userId, eventName, payload, tenantId = null) {
   if (!io || !userId) return;
-  let emitter = io;
-  if (tenantId) {
-    emitter = emitter.to(`t:${tenantId}:user:${userId}`);
+  if (!isSingleTenantMode() && !tenantId) {
+    console.error(`[SOCKET_ERROR] sendUserEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' to user ${userId}`);
+    return;
   }
-  emitter.to(`user:${userId}`).emit(eventName, payload);
+  const room = getUserRoom(userId, tenantId);
+  if (!room) return;
+
+  io.to(room).emit(eventName, payload);
 }
 
 /**

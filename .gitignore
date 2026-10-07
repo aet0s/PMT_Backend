@@ -42,8 +42,8 @@ lerna-debug.log*
 # Test output, runners, and coverage
 coverage/
 .nyc_output/
-src/test_*.js
-test_*.js
+/test_*.js
+!src/test_*.js
 tests/
 test/
 src/test_utils/

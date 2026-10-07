@@ -5,9 +5,10 @@ const { getDevSingleDb } = require('../services/tenantPools');
 const { broadcastBoardEvent } = require('../socket');
 const { parseJson } = require('../db/mysql');
 
-async function logActivity(boardId, cardId, userId, actionType, metaJson = {}, dbInstance = null) {
+async function logActivity(boardId, cardId, userId, actionType, metaJson = {}, dbInstance = null, tenantId = null) {
   if (!boardId) return;
   const db = dbInstance || getDevSingleDb();
+  const effectiveTenantId = tenantId || db?.tenantId || metaJson?.tenantId || null;
   try {
     const result = await db.execute(
       'INSERT INTO activity_log (board_id, card_id, user_id, action_type, meta_json) VALUES (?, ?, ?, ?, ?)',
@@ -31,7 +32,7 @@ async function logActivity(boardId, cardId, userId, actionType, metaJson = {}, d
           ...actRes[0],
           meta_json: parseJson(actRes[0].meta_json)
         };
-        broadcastBoardEvent(boardId, 'board:activity', { activity: parsed });
+        broadcastBoardEvent(boardId, 'board:activity', { activity: parsed }, null, effectiveTenantId);
       }
     }
   } catch (err) {

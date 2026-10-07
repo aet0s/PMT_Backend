@@ -43,8 +43,8 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 
     const [createdList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listExec.insertId]);
     const newList = { ...createdList, cards: [] };
-    await logActivity(board_id, null, req.user.id, 'list_created', { list_name: name }, req.db);
-    broadcastBoardEvent(board_id, 'list:created', { list: newList }, originId);
+    await logActivity(board_id, null, req.user.id, 'list_created', { list_name: name }, req.db, req.tenant?.id);
+    broadcastBoardEvent(board_id, 'list:created', { list: newList }, originId, req.tenant?.id);
 
     return res.status(201).json({ list: newList });
   } catch (err) {
@@ -93,12 +93,12 @@ router.patch('/:id', requireAuth, requirePermission('list.edit'), validate(updat
 
     const [updatedList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listId]);
     if (is_archived === true) {
-      await logActivity(boardId, null, req.user.id, 'list_archived', { list_name: updatedList.name || listCheck[0]?.name }, req.db);
+      await logActivity(boardId, null, req.user.id, 'list_archived', { list_name: updatedList.name || listCheck[0]?.name }, req.db, req.tenant?.id);
     } else if (name !== undefined) {
-      await logActivity(boardId, null, req.user.id, 'list_renamed', { list_name: name }, req.db);
+      await logActivity(boardId, null, req.user.id, 'list_renamed', { list_name: name }, req.db, req.tenant?.id);
     }
     const eventName = position !== undefined ? 'list:reordered' : 'list:updated';
-    broadcastBoardEvent(boardId, eventName, { listId: updatedList.id, position: updatedList.position, list: updatedList }, originId);
+    broadcastBoardEvent(boardId, eventName, { listId: updatedList.id, position: updatedList.position, list: updatedList }, originId, req.tenant?.id);
 
     return res.json({ list: updatedList });
   } catch (err) {
@@ -119,7 +119,7 @@ router.delete('/:id', requireAuth, requirePermission('list.delete'), async (req,
     const boardId = listRes[0].board_id;
 
     await req.db.execute('DELETE FROM lists WHERE id = ?', [listId]);
-    broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId);
+    broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId, req.tenant?.id);
 
     return res.json({ message: 'List deleted successfully', id: listId });
   } catch (err) {

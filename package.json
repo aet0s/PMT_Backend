@@ -14,6 +14,7 @@
     "db:status": "node src/db/migrator.js status",
     "seed": "node src/db/seed.js",
     "test": "node src/test_backend.js",
+    "test:l0": "node src/test_l0_socket_static_audit.js && node src/test_l0_socket_cross_tenant_leak.js",
     "test:multitenant": "node src/test_phase2_multitenant.js",
     "test:part-a": "node src/test_part_a.js",
     "test:part-b": "node src/test_part_b.js",
