@@ -7,7 +7,7 @@ const http = require('http');
 
 function clearServerCache() {
   for (const k of Object.keys(require.cache)) {
-    if (k.includes('server')) {
+    if (k.startsWith(__dirname) || k.includes('server')) {
       delete require.cache[k];
     }
   }
