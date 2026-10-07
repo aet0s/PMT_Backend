@@ -138,11 +138,48 @@ function runAudit() {
     }
   }
 
-  const passed = catalogErrors === 0 && missingRoutes.length === 0 && invalidEventRoutes.length === 0;
+  // 3. Verify Every Catalogue Event Has at Least One Emitter in the Codebase
+  console.log('\n--- 3. Verifying Every Catalogue Event Has at Least One Emitter ---');
+  const fs = require('fs');
+  const path = require('path');
+  
+  function getCodeFiles(dir, files = []) {
+    for (const f of fs.readdirSync(dir)) {
+      const full = path.join(dir, f);
+      if (fs.statSync(full).isDirectory()) {
+        if (f !== 'node_modules' && f !== '.git') getCodeFiles(full, files);
+      } else if (full.endsWith('.js') && !full.includes('notificationEvents.js') && !full.includes('routeNotificationMap.js') && !full.includes('notifyAudit.js')) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
+  const allCodeFiles = getCodeFiles(path.join(__dirname, '..'));
+  const fileContents = allCodeFiles.map((f) => fs.readFileSync(f, 'utf8'));
+  const unemittedEvents = [];
+
+  for (const ev of catalogEventKeys) {
+    const isEmitted = fileContents.some((content) => content.includes(`'${ev}'`) || content.includes(`"${ev}"`));
+    if (!isEmitted) {
+      unemittedEvents.push(ev);
+    }
+  }
+
+  if (unemittedEvents.length > 0) {
+    console.error(`  ❌ AUDIT FAILED: ${unemittedEvents.length} catalogue events are NEVER emitted in code:`);
+    for (const ev of unemittedEvents) {
+      console.error(`     - ${ev}`);
+    }
+  } else {
+    console.log(`  ✓ All ${catalogEventKeys.length} catalogue events are actively emitted in code.`);
+  }
+
+  const passed = catalogErrors === 0 && missingRoutes.length === 0 && invalidEventRoutes.length === 0 && unemittedEvents.length === 0;
 
   console.log('\n================================================================');
   if (passed) {
-    console.log(`✓ NOTIFY AUDIT PASSED: 100% of mutating routes audited & compliant!`);
+    console.log(`✓ NOTIFY AUDIT PASSED: 100% of mutating routes & catalogue events audited & compliant!`);
     console.log('================================================================\n');
     return true;
   } else {

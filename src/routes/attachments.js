@@ -155,10 +155,18 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       }
     }
 
-    await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
-
     const fullCard = await getFullCard(att.card_id, req.db);
     broadcastBoardEvent(att.board_id, 'card:updated', { cardId: att.card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+
+    await notify({
+      db: req.db,
+      tenantId: req.tenant?.id,
+      boardId: att.board_id,
+      cardId: att.card_id,
+      eventType: 'attachment.removed',
+      actorId: req.user.id,
+      data: { attachmentName: att.file_name || 'File', cardTitle: fullCard?.title || 'Card' }
+    });
 
     return res.json({ message: 'Attachment deleted successfully', id: attachmentId });
   } catch (err) {

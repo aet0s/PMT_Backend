@@ -659,7 +659,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
       const roleRes = await req.db.query('SELECT name FROM roles WHERE id = ?', [role_id]);
       await notify(
         {
-          eventType: 'member.role_changed',
+          eventType: 'workspace.member_role_changed',
           actorUserId: req.user.id,
           targetUserId,
           workspaceId,
@@ -739,7 +739,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
 
     await notify(
       {
-        eventType: 'member.removed',
+        eventType: 'workspace.member_removed',
         actorUserId: req.user.id,
         targetUserId,
         workspaceId,
@@ -869,6 +869,19 @@ router.post('/:workspaceId/members/:userId/reset-password', requireAuth, require
       metadata: { resetBy: req.user.id, workspaceId }
     });
 
+    const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
+    await notify(
+      {
+        eventType: 'security.admin_password_reset',
+        actorUserId: req.user.id,
+        targetUserId,
+        workspaceId,
+        tenantId: req.tenant?.id || null,
+        meta: { workspaceName: wsRes[0]?.name || 'Workspace' }
+      },
+      req.db
+    );
+
     return res.json({
       message: 'Temporary password set successfully',
       user: { id: targetUser.id, email: targetUser.email, name: targetUser.name },
@@ -941,6 +954,19 @@ router.post('/:workspaceId/members/:userId/reset-2fa', requireAuth, requirePermi
       req,
       metadata: { resetBy: req.user.id, workspaceId }
     });
+
+    const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
+    await notify(
+      {
+        eventType: 'security.two_factor_reset',
+        actorUserId: req.user.id,
+        targetUserId,
+        workspaceId,
+        tenantId: req.tenant?.id || null,
+        meta: { workspaceName: wsRes[0]?.name || 'Workspace' }
+      },
+      req.db
+    );
 
     return res.json({
       message: 'Two-factor authentication reset successfully for user',
@@ -1018,7 +1044,7 @@ router.post('/:id/members', requireAuth, requirePermission('member.invite'), asy
 
       await notify(
         {
-          eventType: 'member.added',
+          eventType: 'workspace.member_added',
           actorUserId: req.user.id,
           targetUserId: targetUser.id,
           workspaceId,

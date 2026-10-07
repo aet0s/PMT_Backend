@@ -138,6 +138,16 @@ router.post('/', requireAuth, requirePermission('board.create'), validate(create
       [board.id, board.id, board.id, board.id, board.id]
     );
 
+    await notify({
+      db: req.db,
+      tenantId: req.tenant?.id,
+      workspaceId: board.workspace_id,
+      boardId: board.id,
+      eventType: 'board.created',
+      actorId: req.user.id,
+      data: { boardName: board.name }
+    });
+
     return res.status(201).json({ board });
   } catch (err) {
     next(err);
@@ -416,8 +426,28 @@ router.patch('/:id', requireAuth, requirePermission('board.edit_settings'), vali
     }
 
     const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
-    if (name !== undefined) {
+    if (name !== undefined && updatedBoard) {
       await logActivity(boardId, null, req.user.id, 'board_renamed', { board_name: name }, req.db);
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: updatedBoard.workspace_id,
+        boardId,
+        eventType: 'board.renamed',
+        actorId: req.user.id,
+        data: { boardName: name }
+      });
+    }
+    if (background_color !== undefined && updatedBoard) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: updatedBoard.workspace_id,
+        boardId,
+        eventType: 'board.background_changed',
+        actorId: req.user.id,
+        data: { boardName: updatedBoard.name }
+      });
     }
     if (is_archived === true && updatedBoard) {
       await notify(
@@ -510,6 +540,16 @@ router.delete('/:id', requireAuth, requirePermission('board.delete'), async (req
 
   // 5. Broadcast deletion over socket to other connected users
   broadcastBoardEvent(boardId, 'board:deleted', { boardId }, req.headers['x-origin-id'], req.tenant?.id);
+
+  await notify({
+    db: req.db,
+    tenantId: req.tenant?.id,
+    workspaceId: board.workspace_id,
+    boardId: boardId,
+    eventType: 'board.deleted',
+    actorId: req.user.id,
+    data: { boardName: board.name }
+  });
 
   return res.json({ message: 'Board deleted successfully', boardId });
 });
@@ -683,6 +723,20 @@ router.post('/:id/labels', requireAuth, requirePermission('board.edit_settings')
       [boardId, sanitizePlain(name), color]
     );
     const [label] = await req.db.query('SELECT * FROM labels WHERE id = ?', [labelExec.insertId]);
+
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
+    if (bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId,
+        eventType: 'board.label_created',
+        actorId: req.user.id,
+        data: { boardName: bRes.name, labelName: name }
+      });
+    }
+
     return res.status(201).json({ label });
   } catch (err) {
     next(err);
@@ -751,6 +805,16 @@ router.post('/:id/restore', requireAuth, requirePermission('board.edit_settings'
 
     await req.db.execute('UPDATE boards SET is_archived = 0 WHERE id = ?', [boardId]);
     const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
+
+    await notify({
+      db: req.db,
+      tenantId: req.tenant?.id,
+      workspaceId: board.workspace_id,
+      boardId,
+      eventType: 'board.restored',
+      actorId: req.user.id,
+      data: { boardName: board.name }
+    });
 
     return res.json({ message: 'Board restored successfully', board: updatedBoard });
   } catch (err) {

@@ -574,7 +574,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
   const inviteId = Number(req.params.id);
 
   try {
-    const inviteRes = await req.db.query('SELECT workspace_id FROM pending_invitations WHERE id = ?', [inviteId]);
+    const inviteRes = await req.db.query('SELECT workspace_id, email FROM pending_invitations WHERE id = ?', [inviteId]);
     if (inviteRes.length === 0) {
       return res.status(404).json({ error: { message: 'Invitation not found', code: 'NOT_FOUND' } });
     }
@@ -584,8 +584,20 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: { message: 'Only workspace admins can revoke invitations', code: 'FORBIDDEN' } });
     }
 
+    const [wsRow] = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [inviteRes[0].workspace_id]);
+
     await req.db.execute('DELETE FROM pending_invitations WHERE id = ?', [inviteId]);
     broadcastWorkspaceEvent(inviteRes[0].workspace_id, 'workspace:invitation_revoked', { invitationId: inviteId }, req.headers['x-origin-id'], req.tenant?.id);
+
+    await notify({
+      db: req.db,
+      tenantId: req.tenant?.id,
+      workspaceId: inviteRes[0].workspace_id,
+      eventType: 'invite.revoked',
+      actorId: req.user.id,
+      data: { workspaceName: wsRow?.name || 'Workspace', email: inviteRes[0].email }
+    });
+
     return res.json({ message: 'Invitation revoked successfully' });
   } catch (err) {
     next(err);

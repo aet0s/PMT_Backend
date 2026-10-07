@@ -79,38 +79,11 @@ const NOTIFICATION_EVENTS = {
     coalescingPolicy: 'immediate',
     deepLink: '/w/{workspaceId}'
   },
-  'board.member_role_changed': {
-    category: 'Boards',
-    recipients: 'targetUser',
-    requiredPermission: 'project.view',
-    template: '{actor} changed your board role to {roleName} on "{boardName}"',
-    metaFields: ['boardName', 'roleName'],
-    coalescingPolicy: 'immediate',
-    deepLink: '/b/{boardId}'
-  },
   'board.label_created': {
     category: 'Boards',
     recipients: 'boardMembers',
     requiredPermission: 'label.view',
     template: '{actor} created label "{labelName}" on board "{boardName}"',
-    metaFields: ['boardName', 'labelName'],
-    coalescingPolicy: 'immediate',
-    deepLink: '/b/{boardId}'
-  },
-  'board.label_edited': {
-    category: 'Boards',
-    recipients: 'boardMembers',
-    requiredPermission: 'label.view',
-    template: '{actor} edited label "{labelName}" on board "{boardName}"',
-    metaFields: ['boardName', 'labelName'],
-    coalescingPolicy: 'coalesce_60s',
-    deepLink: '/b/{boardId}'
-  },
-  'board.label_deleted': {
-    category: 'Boards',
-    recipients: 'boardMembers',
-    requiredPermission: 'label.view',
-    template: '{actor} deleted label "{labelName}" from board "{boardName}"',
     metaFields: ['boardName', 'labelName'],
     coalescingPolicy: 'immediate',
     deepLink: '/b/{boardId}'
@@ -249,15 +222,6 @@ const NOTIFICATION_EVENTS = {
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}'
   },
-  'card.moved_board': {
-    category: 'Cards',
-    recipients: 'boardMembers',
-    requiredPermission: 'task.view',
-    template: '{actor} moved "{cardTitle}" to board "{targetBoardName}"',
-    metaFields: ['cardTitle', 'targetBoardName'],
-    coalescingPolicy: 'immediate',
-    deepLink: '/b/{boardId}?card={cardId}'
-  },
   'card.archived': {
     category: 'Cards',
     recipients: 'boardMembers',
@@ -352,15 +316,6 @@ const NOTIFICATION_EVENTS = {
     coalescingPolicy: 'immediate',
     deepLink: '/b/{boardId}?card={cardId}'
   },
-  'checklist.renamed': {
-    category: 'Checklists',
-    recipients: 'boardMembers',
-    requiredPermission: 'task.view',
-    template: '{actor} renamed checklist to "{checklistTitle}" on "{cardTitle}"',
-    metaFields: ['checklistTitle', 'cardTitle', 'boardName'],
-    coalescingPolicy: 'coalesce_60s',
-    deepLink: '/b/{boardId}?card={cardId}'
-  },
   'checklist.deleted': {
     category: 'Checklists',
     recipients: 'boardMembers',
@@ -435,15 +390,6 @@ const NOTIFICATION_EVENTS = {
     template: '{actor} commented on "{cardTitle}"',
     metaFields: ['cardTitle', 'boardName'],
     coalescingPolicy: 'immediate',
-    deepLink: '/b/{boardId}?card={cardId}'
-  },
-  'comment.edited': {
-    category: 'Comments & Attachments',
-    recipients: 'cardMembers',
-    requiredPermission: 'comment.view',
-    template: '{actor} edited comment on "{cardTitle}"',
-    metaFields: ['cardTitle', 'boardName'],
-    coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}'
   },
   'comment.deleted': {
@@ -532,15 +478,6 @@ const NOTIFICATION_EVENTS = {
     requiredPermission: 'member.view',
     template: '{actor} changed your role to {roleName} in "{workspaceName}"',
     metaFields: ['workspaceName', 'roleName'],
-    coalescingPolicy: 'immediate',
-    deepLink: '/w/{workspaceId}'
-  },
-  'workspace.member_permissions_changed': {
-    category: 'Workspace & Security',
-    recipients: 'targetUser',
-    requiredPermission: 'member.view',
-    template: 'Your permissions in "{workspaceName}" were updated',
-    metaFields: ['workspaceName'],
     coalescingPolicy: 'immediate',
     deepLink: '/w/{workspaceId}'
   },

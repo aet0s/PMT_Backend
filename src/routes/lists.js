@@ -6,6 +6,7 @@ const { broadcastBoardEvent } = require('../socket');
 const { requirePermission } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
+const { notify } = require('../services/notify');
 
 const router = express.Router();
 
@@ -45,6 +46,19 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
     const newList = { ...createdList, cards: [] };
     await logActivity(board_id, null, req.user.id, 'list_created', { list_name: name }, req.db, req.tenant?.id);
     broadcastBoardEvent(board_id, 'list:created', { list: newList }, originId, req.tenant?.id);
+
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [board_id]);
+    if (bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId: board_id,
+        eventType: 'list.created',
+        actorId: req.user.id,
+        data: { listTitle: name, boardName: bRes.name }
+      });
+    }
 
     return res.status(201).json({ list: newList });
   } catch (err) {
@@ -92,11 +106,46 @@ router.patch('/:id', requireAuth, requirePermission('list.edit'), validate(updat
     );
 
     const [updatedList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listId]);
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
+
     if (is_archived === true) {
       await logActivity(boardId, null, req.user.id, 'list_archived', { list_name: updatedList.name || listCheck[0]?.name }, req.db, req.tenant?.id);
+      if (bRes) {
+        await notify({
+          db: req.db,
+          tenantId: req.tenant?.id,
+          workspaceId: bRes.workspace_id,
+          boardId,
+          eventType: 'list.archived',
+          actorId: req.user.id,
+          data: { listTitle: updatedList.name || listCheck[0]?.name, boardName: bRes.name }
+        });
+      }
     } else if (name !== undefined) {
       await logActivity(boardId, null, req.user.id, 'list_renamed', { list_name: name }, req.db, req.tenant?.id);
+      if (bRes) {
+        await notify({
+          db: req.db,
+          tenantId: req.tenant?.id,
+          workspaceId: bRes.workspace_id,
+          boardId,
+          eventType: 'list.renamed',
+          actorId: req.user.id,
+          data: { listTitle: name, boardName: bRes.name }
+        });
+      }
+    } else if (position !== undefined && bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId,
+        eventType: 'list.moved',
+        actorId: req.user.id,
+        data: { listTitle: updatedList.name || listCheck[0]?.name, boardName: bRes.name }
+      });
     }
+
     const eventName = position !== undefined ? 'list:reordered' : 'list:updated';
     broadcastBoardEvent(boardId, eventName, { listId: updatedList.id, position: updatedList.position, list: updatedList }, originId, req.tenant?.id);
 
@@ -112,14 +161,27 @@ router.delete('/:id', requireAuth, requirePermission('list.delete'), async (req,
   const originId = req.headers['x-origin-id'];
 
   try {
-    const listRes = await req.db.query('SELECT board_id FROM lists WHERE id = ?', [listId]);
+    const listRes = await req.db.query('SELECT board_id, name FROM lists WHERE id = ?', [listId]);
     if (listRes.length === 0) {
       return res.status(404).json({ error: { message: 'List not found', code: 'NOT_FOUND' } });
     }
     const boardId = listRes[0].board_id;
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
 
     await req.db.execute('DELETE FROM lists WHERE id = ?', [listId]);
     broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId, req.tenant?.id);
+
+    if (bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId,
+        eventType: 'list.deleted',
+        actorId: req.user.id,
+        data: { listTitle: listRes[0]?.name || 'List', boardName: bRes.name }
+      });
+    }
 
     return res.json({ message: 'List deleted successfully', id: listId });
   } catch (err) {

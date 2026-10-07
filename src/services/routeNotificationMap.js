@@ -165,8 +165,8 @@ const ROUTE_NOTIFICATION_MAP = {
     description: 'Removes member from workspace'
   },
   'PATCH /api/workspaces/:id/members/:userId/role': {
-    events: ['workspace.member_role_changed', 'workspace.member_permissions_changed'],
-    description: 'Updates workspace role/permissions of member'
+    events: ['workspace.member_role_changed'],
+    description: 'Updates workspace role of member'
   },
   'POST /api/workspaces/:workspaceId/members/:userId/reset-password': {
     events: ['security.admin_password_reset'],

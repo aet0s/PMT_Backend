@@ -70,6 +70,27 @@ async function createSession(db, user, req, options = {}) {
 
   const accessToken = generateAccessToken(user, options.tenantId || null, sessionId);
 
+  // Notify if user has previous sessions (new device/session login)
+  try {
+    const prevSessions = await db.query(
+      'SELECT id FROM sessions WHERE user_id = ? AND id != ? LIMIT 1',
+      [user.id, sessionId]
+    );
+    if (prevSessions.length > 0) {
+      const { notify } = require('./notify');
+      await notify({
+        db,
+        tenantId,
+        eventType: 'security.new_device_session',
+        actorId: user.id,
+        targetUserId: user.id,
+        data: { deviceInfo, ipAddress }
+      });
+    }
+  } catch (notifErr) {
+    // Non-blocking
+  }
+
   return {
     sessionId,
     familyId,
