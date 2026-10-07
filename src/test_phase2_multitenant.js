@@ -2,6 +2,7 @@
 // Complete test suite for Phase 2: Multi-Tenant Architecture, Isolation, & Verification Flow.
 require('dotenv').config();
 process.env.DEV_SINGLE_TENANT = '0';
+process.env.REGISTRATION_DAILY_CAP = '10000';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');

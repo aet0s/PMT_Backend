@@ -9,6 +9,7 @@
 
 require('dotenv').config();
 process.env.DEV_SINGLE_TENANT = '0';
+process.env.REGISTRATION_DAILY_CAP = '10000';
 const http = require('http');
 const express = require('express');
 const cookieParser = require('cookie-parser');

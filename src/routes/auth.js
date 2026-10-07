@@ -231,8 +231,8 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
   const masterDb = getMasterDb();
 
   try {
-    // 7. Global daily cap on new tenants (configurable, default 20)
-    const dailyCap = Number(process.env.REGISTRATION_DAILY_CAP || 20);
+    // 7. Global daily cap on new tenants (configurable, default 20, 10000 in test mode)
+    const dailyCap = Number(process.env.REGISTRATION_DAILY_CAP || (process.env.NODE_ENV === 'test' ? 10000 : 20));
     const capRows = await masterDb.query(
       "SELECT COUNT(*) as count FROM tenants WHERE created_at >= NOW() - INTERVAL 1 DAY"
     );

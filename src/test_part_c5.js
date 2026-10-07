@@ -12,6 +12,7 @@
 require('dotenv').config();
 process.env.DEV_SINGLE_TENANT = '0';
 process.env.REGISTRATION_RATE_LIMIT_PER_HOUR = '100';
+process.env.REGISTRATION_DAILY_CAP = '10000';
 const http = require('http');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
