@@ -54,14 +54,17 @@ CREATE TABLE IF NOT EXISTS notification_mutes (
   CONSTRAINT fk_nm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 6. Create Notification User Settings table (mode: all | only_mine)
+-- 6. Create Notification User Settings table (mode: all | only_mine, play_sound: 0 by default)
 CREATE TABLE IF NOT EXISTS notification_user_settings (
   user_id BIGINT UNSIGNED PRIMARY KEY,
   mode ENUM('all', 'only_mine') NOT NULL DEFAULT 'all',
+  play_sound TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   CONSTRAINT fk_nus_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE notification_user_settings ADD COLUMN IF NOT EXISTS play_sound TINYINT(1) NOT NULL DEFAULT 0;
 
 -- 7. Create Notification Workspace Settings table (notify_all_boards flag)
 CREATE TABLE IF NOT EXISTS notification_workspace_settings (
