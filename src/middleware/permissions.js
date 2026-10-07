@@ -62,6 +62,17 @@ async function resolveWorkspaceId(req) {
   const routePath = req.baseUrl || req.path || '';
   const paramId = Number(req.params.id);
 
+  if (routePath.includes('/notifications') && req.user?.id) {
+    const wmRes = await db.query(
+      'SELECT workspace_id FROM workspace_members WHERE user_id = ? ORDER BY workspace_id ASC LIMIT 1',
+      [req.user.id]
+    );
+    if (wmRes[0]?.workspace_id) {
+      req.workspaceId = wmRes[0].workspace_id;
+      return req.workspaceId;
+    }
+  }
+
   if (routePath.includes('/workspaces') && paramId) {
     req.workspaceId = paramId;
     return req.workspaceId;
@@ -184,7 +195,7 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
 
   // 1. Company-level role evaluation
   const wsRows = await db.query(
-    `SELECT r.id as role_id, r.name as role_name, p.key as permission_key
+    `SELECT r.id as role_id, r.name as role_name, r.is_system, p.key as permission_key
      FROM workspace_members wm
      JOIN roles r ON wm.role_id = r.id
      LEFT JOIN role_permissions rp ON r.id = rp.role_id
@@ -215,7 +226,7 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
   // 2. Project-level evaluation (if project context is provided)
   if (projectId) {
     const bmRows = await db.query(
-      `SELECT bm.role_id, r.name as role_name, p.key as permission_key
+      `SELECT bm.role_id, r.name as role_name, r.is_system, p.key as permission_key
        FROM board_members bm
        LEFT JOIN roles r ON bm.role_id = r.id
        LEFT JOIN role_permissions rp ON r.id = rp.role_id
@@ -235,8 +246,10 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
         }
       }
 
-      // Direct membership in board automatically grants viewing project & tasks
-      if (['project.view', 'task.view', 'view.view'].some((k) => expandedKeys.includes(k))) {
+      // Direct membership in board automatically grants viewing project & tasks for system roles,
+      // but NOT for custom roles whose permissions are explicitly defined
+      const hasCustomRole = wsRows.some((r) => r.is_system === 0 || r.is_system === false) || bmRows.some((r) => r.is_system === 0 || r.is_system === false);
+      if (!hasCustomRole && ['project.view', 'task.view', 'view.view'].some((k) => expandedKeys.includes(k))) {
         return true;
       }
 
@@ -394,7 +407,7 @@ async function usersWithPermission(dbInstance, workspaceId, boardId, permissionK
 
   // 1. Fetch workspace role and permissions for all candidate users in 1 query
   const wsRows = await db.query(
-    `SELECT wm.user_id, r.name as role_name, p.key as permission_key
+    `SELECT wm.user_id, r.name as role_name, r.is_system, p.key as permission_key
      FROM workspace_members wm
      JOIN roles r ON wm.role_id = r.id
      LEFT JOIN role_permissions rp ON r.id = rp.role_id
@@ -408,6 +421,7 @@ async function usersWithPermission(dbInstance, workspaceId, boardId, permissionK
     if (!wsUserMap.has(row.user_id)) {
       wsUserMap.set(row.user_id, {
         roleName: row.role_name,
+        isSystem: row.is_system !== 0 && row.is_system !== false,
         permissions: new Set()
       });
     }
@@ -420,7 +434,7 @@ async function usersWithPermission(dbInstance, workspaceId, boardId, permissionK
   const bmUserMap = new Map();
   if (boardId) {
     const bmRows = await db.query(
-      `SELECT bm.user_id, r.name as role_name, p.key as permission_key
+      `SELECT bm.user_id, r.name as role_name, r.is_system, p.key as permission_key
        FROM board_members bm
        LEFT JOIN roles r ON bm.role_id = r.id
        LEFT JOIN role_permissions rp ON r.id = rp.role_id
@@ -434,6 +448,7 @@ async function usersWithPermission(dbInstance, workspaceId, boardId, permissionK
         bmUserMap.set(row.user_id, {
           isMember: true,
           roleName: row.role_name,
+          isSystem: row.is_system !== 0 && row.is_system !== false,
           permissions: new Set()
         });
       }
@@ -494,8 +509,10 @@ async function usersWithPermission(dbInstance, workspaceId, boardId, permissionK
           continue;
         }
 
-        // Direct membership in board automatically grants viewing project & tasks
-        if (['project.view', 'task.view', 'view.view'].some((k) => expandedKeys.includes(k))) {
+        // Direct membership in board automatically grants viewing project & tasks for system roles,
+        // but NOT for custom roles whose permissions are explicitly defined
+        const isCustom = !wsData.isSystem || (bmData && !bmData.isSystem);
+        if (!isCustom && ['project.view', 'task.view', 'view.view'].some((k) => expandedKeys.includes(k))) {
           authorizedUserIds.push(userId);
           continue;
         }

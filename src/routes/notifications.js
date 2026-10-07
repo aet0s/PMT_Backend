@@ -361,10 +361,14 @@ router.patch('/:id/read', requireAuth, requirePermission('notification.manage_ow
   const notificationId = Number(req.params.id);
 
   try {
-    await req.db.execute(
+    const result = await req.db.execute(
       'UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?',
       [notificationId, req.user.id]
     );
+
+    if (!result || result.affectedRows === 0) {
+      return res.status(404).json({ error: { message: 'Notification not found', code: 'NOT_FOUND' } });
+    }
 
     return res.json({ message: 'Notification marked as read' });
   } catch (err) {
@@ -377,10 +381,14 @@ router.patch('/:id/unread', requireAuth, requirePermission('notification.manage_
   const notificationId = Number(req.params.id);
 
   try {
-    await req.db.execute(
+    const result = await req.db.execute(
       'UPDATE notifications SET is_read = 0 WHERE id = ? AND user_id = ?',
       [notificationId, req.user.id]
     );
+
+    if (!result || result.affectedRows === 0) {
+      return res.status(404).json({ error: { message: 'Notification not found', code: 'NOT_FOUND' } });
+    }
 
     return res.json({ message: 'Notification marked as unread' });
   } catch (err) {
@@ -415,10 +423,14 @@ router.delete('/:id', requireAuth, requirePermission('notification.manage_own'),
   const notificationId = Number(req.params.id);
 
   try {
-    await req.db.execute(
+    const result = await req.db.execute(
       'DELETE FROM notifications WHERE id = ? AND user_id = ?',
       [notificationId, req.user.id]
     );
+
+    if (!result || result.affectedRows === 0) {
+      return res.status(404).json({ error: { message: 'Notification not found', code: 'NOT_FOUND' } });
+    }
 
     return res.json({ message: 'Notification deleted' });
   } catch (err) {

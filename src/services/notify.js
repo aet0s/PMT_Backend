@@ -156,6 +156,9 @@ async function notify(
       }
     }
 
+    const effectiveActorUserId = (actorUserId || params.actorId || params.req?.user?.id) ? Number(actorUserId || params.actorId || params.req?.user?.id) : null;
+    const effectiveMeta = { ...(meta || {}), ...(params.data || {}) };
+
     // 2. Enqueue into Outbox table for crash durability & transaction isolation
     try {
       await enqueueOutbox(db, {
@@ -163,11 +166,11 @@ async function notify(
         workspaceId: resolvedWorkspaceId ? Number(resolvedWorkspaceId) : null,
         boardId: resolvedBoardId ? Number(resolvedBoardId) : null,
         cardId: cardId ? Number(cardId) : null,
-        actorUserId: actorUserId ? Number(actorUserId) : null,
+        actorUserId: effectiveActorUserId,
         targetUserId: targetUserId ? Number(targetUserId) : null,
         inviteeUserId: inviteeUserId ? Number(inviteeUserId) : null,
         mentionedUserIds: Array.isArray(mentionedUserIds) ? mentionedUserIds.map(Number) : [],
-        meta,
+        meta: effectiveMeta,
         dedupeKey
       });
 

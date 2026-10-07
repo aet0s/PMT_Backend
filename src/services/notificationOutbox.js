@@ -30,6 +30,13 @@ async function enqueueOutbox(db, params = {}) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
   `;
 
+  if (dedupeKey) {
+    const existing = await db.query('SELECT id FROM notification_outbox WHERE dedupe_key = ? LIMIT 1', [dedupeKey]);
+    if (existing && existing.length > 0) {
+      return null;
+    }
+  }
+
   try {
     const res = await db.execute(insertQuery, [
       eventType,
@@ -45,7 +52,7 @@ async function enqueueOutbox(db, params = {}) {
     ]);
     return res.insertId;
   } catch (err) {
-    if (dedupeKey && err.code === 'ER_DUP_ENTRY') {
+    if (dedupeKey && (err.code === 'ER_DUP_ENTRY' || (err.message && err.message.includes('Duplicate')))) {
       // Deduplicated successfully (e.g. reminder already enqueued for this date)
       return null;
     }
