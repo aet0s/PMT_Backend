@@ -377,10 +377,152 @@ async function checkPermission(userId, permissionKey, workspaceId, dbInstance = 
   return userHasPermission(userId, workspaceId, permissionKey, dbInstance, projectId);
 }
 
+/**
+ * Bulk resolves which candidate users hold a specific permission in a workspace/board.
+ * Guaranteed to execute in a bounded number of SQL queries regardless of candidate count.
+ * Produces results identical to userHasPermission for every candidate.
+ */
+async function usersWithPermission(dbInstance, workspaceId, boardId, permissionKey, candidateIds = []) {
+  if (!candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
+    return [];
+  }
+  const cleanIds = Array.from(new Set(candidateIds.map(Number).filter((id) => !isNaN(id) && id > 0)));
+  if (cleanIds.length === 0) return [];
+
+  const db = getActiveDb(dbInstance);
+  const expandedKeys = expandPermissionKeys(permissionKey);
+
+  // 1. Fetch workspace role and permissions for all candidate users in 1 query
+  const wsRows = await db.query(
+    `SELECT wm.user_id, r.name as role_name, p.key as permission_key
+     FROM workspace_members wm
+     JOIN roles r ON wm.role_id = r.id
+     LEFT JOIN role_permissions rp ON r.id = rp.role_id
+     LEFT JOIN permissions p ON rp.permission_id = p.id
+     WHERE wm.workspace_id = ? AND wm.user_id IN (?)`,
+    [workspaceId, cleanIds]
+  );
+
+  const wsUserMap = new Map();
+  for (const row of wsRows) {
+    if (!wsUserMap.has(row.user_id)) {
+      wsUserMap.set(row.user_id, {
+        roleName: row.role_name,
+        permissions: new Set()
+      });
+    }
+    if (row.permission_key) {
+      wsUserMap.get(row.user_id).permissions.add(row.permission_key);
+    }
+  }
+
+  // 2. Fetch board membership and board role permissions in 1 query (if boardId provided)
+  const bmUserMap = new Map();
+  if (boardId) {
+    const bmRows = await db.query(
+      `SELECT bm.user_id, r.name as role_name, p.key as permission_key
+       FROM board_members bm
+       LEFT JOIN roles r ON bm.role_id = r.id
+       LEFT JOIN role_permissions rp ON r.id = rp.role_id
+       LEFT JOIN permissions p ON rp.permission_id = p.id
+       WHERE bm.board_id = ? AND bm.user_id IN (?)`,
+      [boardId, cleanIds]
+    );
+
+    for (const row of bmRows) {
+      if (!bmUserMap.has(row.user_id)) {
+        bmUserMap.set(row.user_id, {
+          isMember: true,
+          roleName: row.role_name,
+          permissions: new Set()
+        });
+      }
+      if (row.permission_key) {
+        bmUserMap.get(row.user_id).permissions.add(row.permission_key);
+      }
+    }
+  }
+
+  const authorizedUserIds = [];
+
+  for (const userId of cleanIds) {
+    const wsData = wsUserMap.get(userId);
+    if (!wsData) {
+      continue;
+    }
+
+    const roleName = wsData.roleName;
+    const isCompanyAdmin =
+      ['Owner', 'Super Admin', 'Admin'].includes(roleName) ||
+      wsData.permissions.has('workspace.edit_settings');
+
+    let authorized = false;
+
+    // Check company-level permissions
+    for (const key of expandedKeys) {
+      if (wsData.permissions.has(key)) {
+        if (boardId && roleName === 'Viewer' && ['project.view', 'task.view', 'view.view', 'board.view', 'card.view'].includes(key)) {
+          authorized = true;
+          break;
+        }
+        if (boardId && !isCompanyAdmin && (key.startsWith('project.') || key.startsWith('task.') || key.startsWith('comment.') || key.startsWith('view.') || key.startsWith('attachment.') || key.startsWith('file.') || key.startsWith('board.'))) {
+          continue;
+        }
+        authorized = true;
+        break;
+      }
+    }
+
+    if (authorized) {
+      authorizedUserIds.push(userId);
+      continue;
+    }
+
+    // Check project-level membership and role (if boardId provided)
+    if (boardId) {
+      const bmData = bmUserMap.get(userId);
+      if (bmData && bmData.isMember) {
+        // Membership in board activates company-level project permissions
+        for (const key of expandedKeys) {
+          if (wsData.permissions.has(key)) {
+            authorized = true;
+            break;
+          }
+        }
+        if (authorized) {
+          authorizedUserIds.push(userId);
+          continue;
+        }
+
+        // Direct membership in board automatically grants viewing project & tasks
+        if (['project.view', 'task.view', 'view.view'].some((k) => expandedKeys.includes(k))) {
+          authorizedUserIds.push(userId);
+          continue;
+        }
+
+        // Project role permissions
+        for (const key of expandedKeys) {
+          if (bmData.permissions.has(key)) {
+            authorized = true;
+            break;
+          }
+        }
+        if (authorized) {
+          authorizedUserIds.push(userId);
+          continue;
+        }
+      }
+    }
+  }
+
+  return authorizedUserIds;
+}
+
 module.exports = {
   getActiveDb,
   resolveWorkspaceId,
   userHasPermission,
+  usersWithPermission,
   checkPermission,
   getUserPermissions,
   requirePermission,

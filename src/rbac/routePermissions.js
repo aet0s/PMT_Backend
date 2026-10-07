@@ -107,6 +107,8 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Card: Labels & Members ───────────────────────────────────────────────
   ['POST /api/cards/:id/labels',            { permission: 'card.edit',             scope: 'project' }],
   ['POST /api/cards/:id/members',           { permission: 'card.assign_members',   scope: 'project' }],
+  ['POST /api/cards/:id/assigners',         { permission: 'card.edit',             scope: 'project' }],
+  ['POST /api/cards/:id/copy',              { permission: 'card.create',           scope: 'project' }],
 
   // ─── Card: Attachments & Comments ────────────────────────────────────────
   ['GET /api/cards/:id/attachments',        { permission: 'project.view',          scope: 'project' }],
@@ -151,9 +153,13 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Notifications ────────────────────────────────────────────────────────
   // All notification routes are self-scoped (user operates on their own notifications)
   ['GET /api/notifications',                { selfScoped: 'notification.view_own — user reads their own notifications',         scope: 'company' }],
+  ['GET /api/notifications/summary',        { selfScoped: 'notification.view_own — user reads their own notification summary',  scope: 'company' }],
   ['GET /api/notifications/unread-count',   { selfScoped: 'notification.view_own — user reads their own unread count',          scope: 'company' }],
   ['GET /api/notifications/preferences',    { selfScoped: 'notification.manage_own — user reads their own preferences',         scope: 'company' }],
   ['PATCH /api/notifications/preferences',  { selfScoped: 'notification.manage_own — user updates their own preferences',       scope: 'company' }],
+  ['GET /api/notifications/mutes',          { selfScoped: 'notification.view_own — user reads their own mute settings',         scope: 'company' }],
+  ['POST /api/notifications/mute',          { selfScoped: 'notification.manage_own — user mutes board or card notifications',   scope: 'company' }],
+  ['POST /api/notifications/unmute',        { selfScoped: 'notification.manage_own — user unmutes board or card notifications', scope: 'company' }],
   ['PATCH /api/notifications/:id/read',     { selfScoped: 'notification.manage_own — user marks their own notification read',    scope: 'company' }],
   ['PATCH /api/notifications/:id/unread',   { selfScoped: 'notification.manage_own — user marks their own notification unread',  scope: 'company' }],
   ['PATCH /api/notifications/read-all',     { selfScoped: 'notification.manage_own — user marks all their notifications read',   scope: 'company' }],

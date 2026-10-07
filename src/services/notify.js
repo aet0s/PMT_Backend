@@ -1,5 +1,5 @@
 // server/src/services/notify.js
-// Central notification dispatcher function with strict multi-tenant database requirements.
+// Central notification dispatcher function with multi-tenant database outbox support.
 const { getDevSingleDb, getTenantDb } = require('./tenantPools');
 
 function isSingleTenantMode() {
@@ -9,10 +9,10 @@ const { NOTIFICATION_EVENTS, renderMessage } = require('./notificationEvents');
 const { resolveRecipients } = require('./resolveRecipients');
 const { isEventEnabledForUser } = require('./notificationPreferences');
 const { sendUserNotification } = require('../socket');
+const { enqueueOutbox, processOutbox } = require('./notificationOutbox');
 
 /**
- * Inserts notification row into DB with raw text and structured meta,
- * then dispatches real-time socket notification.
+ * Direct fallback insertion and real-time delivery
  */
 async function insertAndDeliverNotification(userId, eventType, message, meta, ctx, actorName, db, tenantId) {
   try {
@@ -50,7 +50,6 @@ async function insertAndDeliverNotification(userId, eventType, message, meta, ct
         ]
       );
     } catch (colErr) {
-      // In case meta column is not yet present before migration 0010
       insertRes = await db.execute(
         `INSERT INTO notifications (user_id, type, event_type, card_id, board_id, workspace_id, actor_user_id, message)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -100,7 +99,8 @@ async function notify(
     targetUserId,
     inviteeUserId,
     mentionedUserIds,
-    meta = {}
+    meta = {},
+    dedupeKey = null
   } = params;
 
   if (!eventType || !NOTIFICATION_EVENTS[eventType]) {
@@ -136,14 +136,7 @@ async function notify(
   }
 
   try {
-    // 1. Resolve actor name if not in meta
-    let actorName = meta.actorName;
-    if (!actorName && actorUserId) {
-      const actorRes = await db.query('SELECT name FROM users WHERE id = ?', [actorUserId]);
-      actorName = actorRes[0]?.name || 'Someone';
-    }
-
-    // 2. Infer workspaceId or boardId if missing but cardId/boardId present
+    // 1. Resolve workspaceId or boardId if missing but cardId/boardId present
     let resolvedBoardId = boardId;
     let resolvedWorkspaceId = workspaceId;
 
@@ -163,38 +156,50 @@ async function notify(
       }
     }
 
-    const ctx = {
-      workspaceId: resolvedWorkspaceId ? Number(resolvedWorkspaceId) : null,
-      boardId: resolvedBoardId ? Number(resolvedBoardId) : null,
-      cardId: cardId ? Number(cardId) : null,
-      actorUserId: actorUserId ? Number(actorUserId) : null,
-      targetUserId: targetUserId ? Number(targetUserId) : null,
-      inviteeUserId: inviteeUserId ? Number(inviteeUserId) : null,
-      tenantId: tenantId ? Number(tenantId) : null,
-      mentionedUserIds: Array.isArray(mentionedUserIds) ? mentionedUserIds.map(Number) : []
-    };
+    // 2. Enqueue into Outbox table for crash durability & transaction isolation
+    try {
+      await enqueueOutbox(db, {
+        eventType,
+        workspaceId: resolvedWorkspaceId ? Number(resolvedWorkspaceId) : null,
+        boardId: resolvedBoardId ? Number(resolvedBoardId) : null,
+        cardId: cardId ? Number(cardId) : null,
+        actorUserId: actorUserId ? Number(actorUserId) : null,
+        targetUserId: targetUserId ? Number(targetUserId) : null,
+        inviteeUserId: inviteeUserId ? Number(inviteeUserId) : null,
+        mentionedUserIds: Array.isArray(mentionedUserIds) ? mentionedUserIds.map(Number) : [],
+        meta,
+        dedupeKey
+      });
 
-    // 3. Resolve recipients
-    const recipients = await resolveRecipients(eventType, ctx, db);
-
-    // 4. Dispatch to each recipient
-    for (const recipientId of recipients) {
-      // Exclude actor from receiving notification for their own action
-      if (ctx.actorUserId && Number(recipientId) === Number(ctx.actorUserId)) {
-        continue;
+      // 3. Trigger immediate outbox processor for low-latency delivery
+      await processOutbox(db, tenantId);
+    } catch (outboxErr) {
+      // Fallback: direct in-memory resolution & delivery
+      let actorName = meta.actorName;
+      if (!actorName && actorUserId) {
+        const actorRes = await db.query('SELECT name FROM users WHERE id = ?', [actorUserId]);
+        actorName = actorRes[0]?.name || 'Someone';
       }
 
-      // Check server-side preference check
-      const isEnabled = await isEventEnabledForUser(recipientId, eventType, 'in_app', db);
-      if (!isEnabled) {
-        continue;
+      const ctx = {
+        workspaceId: resolvedWorkspaceId ? Number(resolvedWorkspaceId) : null,
+        boardId: resolvedBoardId ? Number(resolvedBoardId) : null,
+        cardId: cardId ? Number(cardId) : null,
+        actorUserId: actorUserId ? Number(actorUserId) : null,
+        targetUserId: targetUserId ? Number(targetUserId) : null,
+        inviteeUserId: inviteeUserId ? Number(inviteeUserId) : null,
+        tenantId: tenantId ? Number(tenantId) : null,
+        mentionedUserIds: Array.isArray(mentionedUserIds) ? mentionedUserIds.map(Number) : []
+      };
+
+      const recipients = await resolveRecipients(eventType, ctx, db);
+      for (const recipientId of recipients) {
+        if (ctx.actorUserId && Number(recipientId) === Number(ctx.actorUserId)) continue;
+        const isEnabled = await isEventEnabledForUser(recipientId, eventType, 'in_app', db);
+        if (!isEnabled) continue;
+        const message = renderMessage(eventType, meta, actorName);
+        await insertAndDeliverNotification(recipientId, eventType, message, meta, ctx, actorName, db, tenantId);
       }
-
-      // Render message with function replacer (literal user text safe)
-      const message = renderMessage(eventType, meta, actorName);
-
-      // Insert into DB and deliver via Socket.IO
-      await insertAndDeliverNotification(recipientId, eventType, message, meta, ctx, actorName, db, tenantId);
     }
   } catch (err) {
     console.error(`Error in notify dispatcher for event ${eventType}:`, err);

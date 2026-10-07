@@ -353,13 +353,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 104 || prodSingleResult.count !== 104) {
-    console.error(`[AUDIT FAILED] Expected exactly 104 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 110 || prodSingleResult.count !== 110) {
+    console.error(`[AUDIT FAILED] Expected exactly 110 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 105 || testSingleResult.count !== 105) {
-    console.error(`[AUDIT FAILED] Expected exactly 105 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 111 || testSingleResult.count !== 111) {
+    console.error(`[AUDIT FAILED] Expected exactly 111 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 

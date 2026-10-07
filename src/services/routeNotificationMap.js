@@ -302,6 +302,14 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Self notification preference updates'
   },
+  'POST /api/notifications/mute': {
+    noNotify: true,
+    reason: 'Self notification mute state modification'
+  },
+  'POST /api/notifications/unmute': {
+    noNotify: true,
+    reason: 'Self notification unmute state modification'
+  },
   'PATCH /api/notifications/:id/read': {
     noNotify: true,
     reason: 'Self notification mark read state'
