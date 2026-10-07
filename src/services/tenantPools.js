@@ -125,6 +125,7 @@ async function getTenantDb(tenantId) {
 
   const rawPool = mysql.createPool(getBaseMysqlConfig(tenant.db_name));
   const wrapper = createPoolWrapper(rawPool);
+  wrapper.tenantId = tid;
 
   tenantPoolCache.set(tid, {
     wrapper,

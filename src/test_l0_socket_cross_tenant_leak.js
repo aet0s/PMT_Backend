@@ -127,6 +127,15 @@ async function runTestSuite() {
 
   console.log('[Test 1.3] Safety drop test: calls with missing tenantId in multi-tenant mode...');
   // Capture console.error to verify safety drop logging
+  // In test/dev mode, missing tenantId must throw
+  assert.throws(() => broadcastBoardEvent(1, 'card:created', { card: { id: 999 } }, null, null), /\[SOCKET_ERROR\]/);
+  assert.throws(() => broadcastWorkspaceEvent(1, 'workspace:updated', {}, null, null), /\[SOCKET_ERROR\]/);
+  assert.throws(() => sendUserNotification(1, {}, null), /\[SOCKET_ERROR\]/);
+  assert.throws(() => sendUserEvent(1, 'test', {}, null), /\[SOCKET_ERROR\]/);
+
+  // In production mode, missing tenantId must log [SOCKET_ERROR] and drop without throwing
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
   let loggedError = false;
   const origErr = console.error;
   console.error = (...args) => {
@@ -139,12 +148,13 @@ async function runTestSuite() {
   sendUserEvent(1, 'test', {}, null);
 
   console.error = origErr;
+  process.env.NODE_ENV = prevEnv;
   await new Promise((r) => setTimeout(r, 150));
 
-  assert.strictEqual(loggedError, true, 'Calls with missing tenantId in multi-tenant mode must log error');
+  assert.strictEqual(loggedError, true, 'Calls with missing tenantId in multi-tenant mode must log error in prod');
   assert.strictEqual(receivedA.length, 0, 'No events emitted when tenantId is missing in multi-tenant mode');
   assert.strictEqual(receivedB.length, 0, 'No events emitted when tenantId is missing in multi-tenant mode');
-  console.log('  ✓ Missing tenantId events safely dropped and logged.');
+  console.log('  ✓ Missing tenantId throws in test/dev, logs and drops in prod.');
 
   // Clean up sockets & server
   socketA.disconnect();

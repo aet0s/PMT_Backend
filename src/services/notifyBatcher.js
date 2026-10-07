@@ -10,8 +10,8 @@ const pendingBatchMap = new Map();
 /**
  * Generates batch key for anti-spam debouncing
  */
-function getBatchKey(recipientUserId, cardId, eventType) {
-  return `${recipientUserId}:${cardId || 0}:${eventType}`;
+function getBatchKey(recipientUserId, cardId, eventType, tenantId = null) {
+  return `t:${tenantId || 'single'}:${recipientUserId}:${cardId || 0}:${eventType}`;
 }
 
 /**
@@ -42,7 +42,7 @@ function enqueueNotification(recipientUserId, eventType, ctx, meta, actorName, d
     return flushSingleNotification(recipientUserId, eventType, ctx, meta, actorName, dbInstance);
   }
 
-  const key = getBatchKey(recipientUserId, ctx.cardId, eventType);
+  const key = getBatchKey(recipientUserId, ctx.cardId, eventType, ctx.tenantId);
 
   if (pendingBatchMap.has(key)) {
     const batch = pendingBatchMap.get(key);

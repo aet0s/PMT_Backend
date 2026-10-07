@@ -643,7 +643,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
       targetUserId,
       roleId: role_id,
       boardIds: board_ids
-    });
+    }, req.tenant?.id);
 
     // Notify role change ONLY IF the role ID actually changed
     if (oldRoleId && Number(oldRoleId) !== Number(role_id)) {

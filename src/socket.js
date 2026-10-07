@@ -142,11 +142,39 @@ function initSocket(server) {
     }
 
     // Join workspace room with tenant isolation
-    socket.on('join_workspace', ({ workspaceId, tenantId }) => {
+    socket.on('join_workspace', async ({ workspaceId }) => {
       if (!workspaceId) return;
       const wsId = Number(workspaceId);
-      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
-      const room = getWorkspaceRoom(wsId, effectiveTenantId);
+      const tenantId = socket.tenantId;
+
+      if (!isSingleTenantMode() && !tenantId) {
+        socket.emit('error', { message: 'Tenant context required in multi-tenant mode', code: 'FORBIDDEN' });
+        return;
+      }
+
+      if (tenantId) {
+        try {
+          const tenantDb = await getTenantDb(tenantId);
+          const wsRows = await tenantDb.query('SELECT id FROM workspaces WHERE id = ?', [wsId]);
+          if (!wsRows || wsRows.length === 0) {
+            socket.emit('error', { message: 'Workspace not found in tenant', code: 'NOT_FOUND' });
+            return;
+          }
+          const memberRows = await tenantDb.query(
+            'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+            [wsId, socket.userId]
+          );
+          if (!memberRows || memberRows.length === 0) {
+            socket.emit('error', { message: 'You are not a member of this workspace', code: 'PERMISSION_DENIED' });
+            return;
+          }
+        } catch (err) {
+          socket.emit('error', { message: 'Failed to verify workspace access', code: 'FORBIDDEN' });
+          return;
+        }
+      }
+
+      const room = getWorkspaceRoom(wsId, tenantId);
       if (room) {
         socket.join(room);
       }
@@ -155,11 +183,10 @@ function initSocket(server) {
       }
     });
 
-    socket.on('leave_workspace', ({ workspaceId, tenantId }) => {
+    socket.on('leave_workspace', ({ workspaceId }) => {
       if (!workspaceId) return;
       const wsId = Number(workspaceId);
-      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
-      const room = getWorkspaceRoom(wsId, effectiveTenantId);
+      const room = getWorkspaceRoom(wsId, socket.tenantId);
       if (room) {
         socket.leave(room);
       }
@@ -169,27 +196,20 @@ function initSocket(server) {
     });
 
     // Join board room with tenant isolation
-    socket.on('join_board', async ({ boardId, tenantId }) => {
+    socket.on('join_board', async ({ boardId }) => {
       if (!boardId) return;
-
-      // Cross-tenant guard: if a tenantId is explicitly requested and doesn't match token tenantId
-      if (tenantId && socket.tenantId && Number(tenantId) !== Number(socket.tenantId)) {
-        socket.emit('error', { message: 'Cross-tenant board access denied', code: 'FORBIDDEN' });
-        return;
-      }
-
       const bId = Number(boardId);
-      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
+      const tenantId = socket.tenantId;
 
-      if (!isSingleTenantMode() && !effectiveTenantId) {
+      if (!isSingleTenantMode() && !tenantId) {
         socket.emit('error', { message: 'Tenant context required in multi-tenant mode', code: 'FORBIDDEN' });
         return;
       }
 
       // Verify board existence and user permission in tenant DB to prevent unauthorized room joins
-      if (effectiveTenantId) {
+      if (tenantId) {
         try {
-          const tenantDb = await getTenantDb(effectiveTenantId);
+          const tenantDb = await getTenantDb(tenantId);
           const bRows = await tenantDb.query('SELECT id, workspace_id FROM boards WHERE id = ?', [bId]);
           if (!bRows || bRows.length === 0) {
             socket.emit('error', { message: 'Board not found in tenant', code: 'NOT_FOUND' });
@@ -208,8 +228,24 @@ function initSocket(server) {
         }
       }
 
-      const room = getBoardRoom(bId, effectiveTenantId);
+      const room = getBoardRoom(bId, tenantId);
       if (!room) return;
+
+      // Clean up previous board presence if socket was in a different board room
+      if (socket.currentBoardRoom && socket.currentBoardRoom !== room) {
+        socket.leave(socket.currentBoardRoom);
+        if (boardUsersMap.has(socket.currentBoardRoom)) {
+          const oldMap = boardUsersMap.get(socket.currentBoardRoom);
+          oldMap.delete(socket.id);
+          const oldUnique = Array.from(
+            new Map(Array.from(oldMap.values()).map((m) => [m.id, m])).values()
+          );
+          io.to(socket.currentBoardRoom).emit('board:presence_update', {
+            boardId: socket.currentBoardId,
+            onlineMembers: oldUnique
+          });
+        }
+      }
 
       socket.join(room);
       if (isSingleTenantMode()) {
@@ -235,11 +271,10 @@ function initSocket(server) {
     });
 
     // Leave board room
-    socket.on('leave_board', ({ boardId, tenantId }) => {
+    socket.on('leave_board', ({ boardId }) => {
       if (!boardId) return;
       const bId = Number(boardId);
-      const effectiveTenantId = socket.tenantId || (tenantId ? Number(tenantId) : null);
-      const room = getBoardRoom(bId, effectiveTenantId);
+      const room = getBoardRoom(bId, socket.tenantId);
 
       if (room) {
         socket.leave(room);
@@ -350,8 +385,12 @@ function getIO() {
 function broadcastBoardEvent(boardId, eventName, payload, originId = null, tenantId = null, clientMutationId = null) {
   if (!io || !boardId) return;
   if (!isSingleTenantMode() && !tenantId) {
-    console.error(`[SOCKET_ERROR] broadcastBoardEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on board ${boardId}`);
-    return;
+    const errMsg = `[SOCKET_ERROR] broadcastBoardEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on board ${boardId}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(errMsg);
+      return;
+    }
+    throw new Error(errMsg);
   }
   const room = getBoardRoom(boardId, tenantId);
   if (!room) return;
@@ -370,8 +409,12 @@ function broadcastBoardEvent(boardId, eventName, payload, originId = null, tenan
 function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = null, tenantId = null) {
   if (!io || !workspaceId) return;
   if (!isSingleTenantMode() && !tenantId) {
-    console.error(`[SOCKET_ERROR] broadcastWorkspaceEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on workspace ${workspaceId}`);
-    return;
+    const errMsg = `[SOCKET_ERROR] broadcastWorkspaceEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on workspace ${workspaceId}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(errMsg);
+      return;
+    }
+    throw new Error(errMsg);
   }
   const room = getWorkspaceRoom(workspaceId, tenantId);
   if (!room) return;
@@ -389,8 +432,12 @@ function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = nul
 function sendUserNotification(userId, notification, tenantId = null) {
   if (!io || !userId) return;
   if (!isSingleTenantMode() && !tenantId) {
-    console.error(`[SOCKET_ERROR] sendUserNotification dropped: missing tenantId in multi-tenant mode for user ${userId}`);
-    return;
+    const errMsg = `[SOCKET_ERROR] sendUserNotification dropped: missing tenantId in multi-tenant mode for user ${userId}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(errMsg);
+      return;
+    }
+    throw new Error(errMsg);
   }
   const room = getUserRoom(userId, tenantId);
   if (!room) return;
@@ -401,8 +448,12 @@ function sendUserNotification(userId, notification, tenantId = null) {
 function sendUserEvent(userId, eventName, payload, tenantId = null) {
   if (!io || !userId) return;
   if (!isSingleTenantMode() && !tenantId) {
-    console.error(`[SOCKET_ERROR] sendUserEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' to user ${userId}`);
-    return;
+    const errMsg = `[SOCKET_ERROR] sendUserEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' to user ${userId}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(errMsg);
+      return;
+    }
+    throw new Error(errMsg);
   }
   const room = getUserRoom(userId, tenantId);
   if (!room) return;
@@ -416,6 +467,14 @@ function sendUserEvent(userId, eventName, payload, tenantId = null) {
  */
 function disconnectUserSockets(userId, tenantId = null, reason = 'SESSION_REVOKED') {
   if (!io || !userId) return;
+  if (!isSingleTenantMode() && !tenantId) {
+    const errMsg = `[SOCKET_ERROR] disconnectUserSockets dropped: missing tenantId in multi-tenant mode for user ${userId}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(errMsg);
+      return;
+    }
+    throw new Error(errMsg);
+  }
   const targetUserId = Number(userId);
   const targetTenantId = tenantId ? Number(tenantId) : null;
 
@@ -423,7 +482,10 @@ function disconnectUserSockets(userId, tenantId = null, reason = 'SESSION_REVOKE
     const sUserId = Number(socket.userId);
     const sTenantId = socket.tenantId ? Number(socket.tenantId) : null;
 
-    if (sUserId === targetUserId && (!targetTenantId || sTenantId === targetTenantId)) {
+    const matchesUser = sUserId === targetUserId;
+    const matchesTenant = isSingleTenantMode() ? true : (sTenantId === targetTenantId);
+
+    if (matchesUser && matchesTenant) {
       socket.emit('auth:revoked', {
         reason,
         message: 'Your session has been terminated. Please log in again.'

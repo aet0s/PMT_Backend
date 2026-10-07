@@ -598,7 +598,7 @@ router.post('/:id/members', requireAuth, requirePermission('project.manage_membe
       boardId,
       action: 'granted'
     }, req.tenant ? req.tenant.id : null);
-    broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUser.id, action: 'granted' }, req.tenant ? req.tenant.id : null);
+    broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUser.id, action: 'granted' }, req.headers['x-origin-id'] || null, req.tenant?.id);
 
     const bRes = await req.db.query('SELECT name FROM boards WHERE id = ?', [boardId]);
     await notify(
@@ -635,7 +635,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
         boardId,
         action: 'revoked'
       }, req.tenant ? req.tenant.id : null);
-      broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUserId, action: 'revoked' }, req.tenant ? req.tenant.id : null);
+      broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUserId, action: 'revoked' }, req.headers['x-origin-id'] || null, req.tenant?.id);
 
       await notify(
         {

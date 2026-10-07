@@ -34,7 +34,8 @@ const sessionCache = new Map();
 
 async function checkSessionActive(db, tenantId, sessionId) {
   if (!sessionId) return { active: true };
-  const cacheKey = `${tenantId || 'single'}:${sessionId}`;
+  const effectiveTenant = tenantId ? String(tenantId) : (process.env.DEV_SINGLE_TENANT === '1' ? 'single' : 'unknown');
+  const cacheKey = `t:${effectiveTenant}:sess:${sessionId}`;
   const now = Date.now();
   const cached = sessionCache.get(cacheKey);
 
@@ -81,10 +82,12 @@ async function checkSessionActive(db, tenantId, sessionId) {
 
 function invalidateSessionCache(tenantId = null, sessionId = null) {
   if (sessionId) {
-    sessionCache.delete(`${tenantId || 'single'}:${sessionId}`);
+    const effectiveTenant = tenantId ? String(tenantId) : (process.env.DEV_SINGLE_TENANT === '1' ? 'single' : 'unknown');
+    sessionCache.delete(`t:${effectiveTenant}:sess:${sessionId}`);
   } else if (tenantId) {
+    const prefix = `t:${tenantId}:sess:`;
     for (const key of sessionCache.keys()) {
-      if (key.startsWith(`${tenantId}:`)) {
+      if (key.startsWith(prefix)) {
         sessionCache.delete(key);
       }
     }
@@ -144,6 +147,7 @@ const requireAuth = async (req, res, next) => {
 
       req.tenant = tenant;
       req.db = await getTenantDb(tenantId);
+      req.db.tenantId = tenant.id;
     } else {
       // Single-tenant or development fallback
       req.tenant = {
@@ -154,6 +158,7 @@ const requireAuth = async (req, res, next) => {
         status: 'active'
       };
       req.db = getDevSingleDb();
+      req.db.tenantId = 1;
     }
 
     const userRes = await req.db.query(
