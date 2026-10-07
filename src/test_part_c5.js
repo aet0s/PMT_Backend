@@ -10,6 +10,8 @@
 // 8. Phase 2.5 items (failed provisioning cleanup via tenants:reconcile, reminder cron tenant isolation, 30-day slug reservation)
 
 require('dotenv').config();
+process.env.DEV_SINGLE_TENANT = '0';
+process.env.REGISTRATION_RATE_LIMIT_PER_HOUR = '100';
 const http = require('http');
 const crypto = require('crypto');
 const { execSync } = require('child_process');

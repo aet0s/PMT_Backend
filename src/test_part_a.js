@@ -9,6 +9,7 @@
 // 7. Notification preferences with email channel hidden
 
 require('dotenv').config();
+process.env.DEV_SINGLE_TENANT = '0';
 const http = require('http');
 const express = require('express');
 const cookieParser = require('cookie-parser');
@@ -206,6 +207,10 @@ async function runPartATests() {
     process.env.VERIFICATION_MODE = 'on';
     EmailProvider.clearHistory();
 
+    process.env.REGISTRATION_RATE_LIMIT_PER_HOUR = '100';
+    if (typeof authRouter.resetRegistrationLimitsForTest === 'function') {
+      authRouter.resetRegistrationLimitsForTest();
+    }
     const otpRegRes = await request(baseUrl, '/api/auth/register-company', {
       method: 'POST',
       body: {

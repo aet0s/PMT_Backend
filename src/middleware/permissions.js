@@ -199,6 +199,10 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
     const userCompanyPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
     for (const key of expandedKeys) {
       if (userCompanyPerms.has(key)) {
+        // Viewers have company-wide read-only access to view projects and tasks
+        if (projectId && roleName === 'Viewer' && ['project.view', 'task.view', 'view.view', 'board.view', 'card.view'].includes(key)) {
+          return true;
+        }
         // Non-admins must have project membership to exercise project-scoped permissions on a specific project
         if (projectId && !isCompanyAdmin && (key.startsWith('project.') || key.startsWith('task.') || key.startsWith('comment.') || key.startsWith('view.') || key.startsWith('attachment.') || key.startsWith('file.') || key.startsWith('board.'))) {
           continue;

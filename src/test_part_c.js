@@ -11,6 +11,8 @@
 // 9. Profile management (timezone, locale, avatar image validation)
 
 require('dotenv').config();
+process.env.DEV_SINGLE_TENANT = '0';
+process.env.REGISTRATION_RATE_LIMIT_PER_HOUR = '100';
 const http = require('http');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');

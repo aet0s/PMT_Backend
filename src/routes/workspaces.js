@@ -465,8 +465,28 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
 
     const currentRoleName = targetMemberRes[0].role_name;
 
-    // Rule: Owner role is locked and cannot be changed
+    // Fetch caller role & ranks
+    const callerMemberRes = await req.db.query(
+      `SELECT r.id as role_id, r.name as role_name
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    const callerRoleName = callerMemberRes[0]?.role_name || 'Team Member';
+    const callerRank = getRoleRank(callerRoleName);
+    const targetRank = getRoleRank(currentRoleName);
+
+    // Rule: Owner role is locked and cannot be changed by non-owners
     if (isOwnerRole(currentRoleName)) {
+      if (!isOwnerRole(callerRoleName)) {
+        return res.status(403).json({
+          error: {
+            message: 'Only an Owner may modify the Owner role',
+            code: 'ONLY_OWNER_MAY_MODIFY_OWNER'
+          }
+        });
+      }
       return res.status(403).json({
         error: {
           message: 'The Owner role is locked and cannot be changed.',
@@ -486,19 +506,17 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
     }
 
     const newRole = newRoleRes[0];
-
-    // Fetch caller role & ranks
-    const callerMemberRes = await req.db.query(
-      `SELECT r.id as role_id, r.name as role_name
-       FROM workspace_members wm
-       JOIN roles r ON wm.role_id = r.id
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [workspaceId, req.user.id]
-    );
-    const callerRoleName = callerMemberRes[0]?.role_name || 'Team Member';
-    const callerRank = getRoleRank(callerRoleName);
-    const targetRank = getRoleRank(currentRoleName);
     const newRank = getRoleRank(newRole.name);
+
+    // Anti-escalation Rule 4: Cannot assign a role with higher rank than caller's own rank
+    if (!isOwnerRole(callerRoleName) && newRank > callerRank) {
+      return res.status(403).json({
+        error: {
+          message: 'Cannot assign a role with higher rank than your own',
+          code: 'PRIVILEGE_ESCALATION_FORBIDDEN'
+        }
+      });
+    }
 
     // Only Owner may assign Owner role
     if (isOwnerRole(newRole.name) && !isOwnerRole(callerRoleName)) {
@@ -516,16 +534,6 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission('member
         error: {
           message: 'You cannot change the role of a member with equal or higher rank',
           code: 'INSUFFICIENT_ROLE_RANK'
-        }
-      });
-    }
-
-    // Anti-escalation Rule 4: Cannot assign a role with higher rank than caller's own rank
-    if (!isOwnerRole(callerRoleName) && newRank > callerRank) {
-      return res.status(403).json({
-        error: {
-          message: 'Cannot assign a role with higher rank than your own',
-          code: 'PRIVILEGE_ESCALATION_FORBIDDEN'
         }
       });
     }

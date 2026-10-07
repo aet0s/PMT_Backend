@@ -8,6 +8,7 @@
 // 6. File-path consistency (private uploads) and cross-tenant access guards
 
 require('dotenv').config();
+process.env.DEV_SINGLE_TENANT = '0';
 const http = require('http');
 const express = require('express');
 const cookieParser = require('cookie-parser');
