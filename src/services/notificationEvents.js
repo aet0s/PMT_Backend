@@ -194,7 +194,7 @@ function renderMessage(eventType, meta = {}, actorName = 'Someone') {
 
   Object.keys(data).forEach((key) => {
     const placeholder = `{${key}}`;
-    text = text.replace(new RegExp(placeholder, 'g'), data[key]);
+    text = text.replace(new RegExp(placeholder, 'g'), () => String(data[key] ?? ''));
   });
 
   return text;

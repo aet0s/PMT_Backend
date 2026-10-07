@@ -1,15 +1,17 @@
-const { notify } = require('./notify');
-const { flushSingleNotification } = require('./notifyBatcher');
+const { notify, insertAndDeliverNotification } = require('./notify');
 
 module.exports = {
   notify,
-  createNotification: async ({ userId, type, cardId, boardId, actorUserId, message }) => {
-    return flushSingleNotification(
+  createNotification: async ({ userId, type, cardId, boardId, actorUserId, message, db, tenantId }) => {
+    return insertAndDeliverNotification(
       userId,
       type || 'system',
-      { cardId, boardId, actorUserId },
+      message || 'Notification',
       { customMessage: message },
-      'System'
+      { cardId, boardId, actorUserId },
+      'System',
+      db,
+      tenantId
     );
   },
   notifyOnComment: async ({ cardId, boardId, commentBody, authorUserId, authorName, mentionedUserIds = [] }) => {

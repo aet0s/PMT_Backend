@@ -1,10 +1,87 @@
 // server/src/services/notify.js
-// Central notification dispatcher function with multi-tenant database support.
+// Central notification dispatcher function with strict multi-tenant database requirements.
 const { getDevSingleDb, getTenantDb } = require('./tenantPools');
+
+function isSingleTenantMode() {
+  return process.env.DEV_SINGLE_TENANT === '1';
+}
 const { NOTIFICATION_EVENTS, renderMessage } = require('./notificationEvents');
 const { resolveRecipients } = require('./resolveRecipients');
 const { isEventEnabledForUser } = require('./notificationPreferences');
-const { enqueueNotification } = require('./notifyBatcher');
+const { sendUserNotification } = require('../socket');
+
+/**
+ * Inserts notification row into DB with raw text and structured meta,
+ * then dispatches real-time socket notification.
+ */
+async function insertAndDeliverNotification(userId, eventType, message, meta, ctx, actorName, db, tenantId) {
+  try {
+    let finalWsId = ctx.workspaceId || null;
+    if (!finalWsId && ctx.boardId) {
+      try {
+        const bRes = await db.query('SELECT workspace_id FROM boards WHERE id = ?', [ctx.boardId]);
+        if (bRes[0]?.workspace_id) finalWsId = bRes[0].workspace_id;
+      } catch (e) {}
+    }
+
+    const metaJson = JSON.stringify({
+      ...meta,
+      actorName: actorName || 'Someone',
+      boardId: ctx.boardId,
+      cardId: ctx.cardId,
+      workspaceId: finalWsId
+    });
+
+    let insertRes;
+    try {
+      insertRes = await db.execute(
+        `INSERT INTO notifications (user_id, type, event_type, card_id, board_id, workspace_id, actor_user_id, message, meta)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          eventType,
+          eventType,
+          ctx.cardId || null,
+          ctx.boardId || null,
+          finalWsId,
+          ctx.actorUserId || null,
+          message,
+          metaJson
+        ]
+      );
+    } catch (colErr) {
+      // In case meta column is not yet present before migration 0010
+      insertRes = await db.execute(
+        `INSERT INTO notifications (user_id, type, event_type, card_id, board_id, workspace_id, actor_user_id, message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          eventType,
+          eventType,
+          ctx.cardId || null,
+          ctx.boardId || null,
+          finalWsId,
+          ctx.actorUserId || null,
+          message
+        ]
+      );
+    }
+
+    const [notification] = await db.query(
+      `SELECT id, user_id, type, event_type, card_id, board_id, workspace_id, actor_user_id, message, is_read, created_at
+       FROM notifications WHERE id = ?`,
+      [insertRes.insertId]
+    );
+
+    if (notification) {
+      notification.actor_name = actorName || 'Someone';
+      notification.meta = meta;
+      sendUserNotification(userId, notification, tenantId);
+    }
+  } catch (err) {
+    console.error(`[NOTIFY_DELIVERY_ERROR] Failed to insert/emit notification to user ${userId}:`, err);
+  }
+}
 
 /**
  * Central Notification Dispatcher Function
@@ -31,11 +108,19 @@ async function notify(
     return;
   }
 
-  let tenantId = params.tenantId || params.req?.tenant?.id || null;
+  let tenantId = params.tenantId || params.req?.tenant?.id || dbInstance?.tenantId || params.db?.tenantId || null;
   let db = dbInstance || params.db || params.req?.db || null;
 
-  if (!db) {
-    if (tenantId) {
+  if (isSingleTenantMode() || process.env.DEV_SINGLE_TENANT === '1') {
+    if (!db) {
+      db = getDevSingleDb();
+    }
+    if (!tenantId) {
+      tenantId = 'single';
+    }
+  } else {
+    // Multi-tenant mode: db and tenantId are strictly REQUIRED
+    if (!db && tenantId) {
       try {
         db = await getTenantDb(tenantId);
       } catch (e) {
@@ -43,44 +128,10 @@ async function notify(
       }
     }
 
-    // Fallback: If tenantId was not supplied in multi-tenant mode, discover tenant by resource
-    if (!db && process.env.DEV_SINGLE_TENANT !== '1') {
-      try {
-        const { getMasterDb } = require('./tenantPools');
-        const masterDb = getMasterDb();
-        const tenants = await masterDb.query("SELECT id FROM tenants WHERE status = 'active'");
-        for (const t of tenants) {
-          const tDb = await getTenantDb(t.id);
-          if (cardId) {
-            const check = await tDb.query('SELECT id FROM cards WHERE id = ?', [cardId]);
-            if (check.length > 0) {
-              db = tDb;
-              tenantId = t.id;
-              break;
-            }
-          } else if (boardId) {
-            const check = await tDb.query('SELECT id FROM boards WHERE id = ?', [boardId]);
-            if (check.length > 0) {
-              db = tDb;
-              tenantId = t.id;
-              break;
-            }
-          } else if (workspaceId) {
-            const check = await tDb.query('SELECT id FROM workspaces WHERE id = ?', [workspaceId]);
-            if (check.length > 0) {
-              db = tDb;
-              tenantId = t.id;
-              break;
-            }
-          }
-        }
-      } catch (scanErr) {
-        // Fallback to dev single db
-      }
-    }
-
-    if (!db) {
-      db = getDevSingleDb();
+    if (!db || !tenantId) {
+      throw new Error(
+        `[NOTIFY_ERROR] Database connection and tenantId are required in multi-tenant mode (got tenantId=${tenantId}, db=${!!db})`
+      );
     }
   }
 
@@ -139,12 +190,15 @@ async function notify(
         continue;
       }
 
-      // Enqueue to batcher/dispatcher
-      enqueueNotification(recipientId, eventType, ctx, meta, actorName, db);
+      // Render message with function replacer (literal user text safe)
+      const message = renderMessage(eventType, meta, actorName);
+
+      // Insert into DB and deliver via Socket.IO
+      await insertAndDeliverNotification(recipientId, eventType, message, meta, ctx, actorName, db, tenantId);
     }
   } catch (err) {
     console.error(`Error in notify dispatcher for event ${eventType}:`, err);
   }
 }
 
-module.exports = { notify };
+module.exports = { notify, insertAndDeliverNotification };
