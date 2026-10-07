@@ -485,6 +485,11 @@ async function runPartC5Tests() {
       body: { email: ownerEmail, password: defaultPassword, tenant_slug: tenantSlug }
     });
     const replayChallengeToken = step1ForReplay.data.temp_token;
+    // Ensure we are not at the tail end of the 30-second window to prevent window rollover
+    const secInWindow = Math.floor(Date.now() / 1000) % 30;
+    if (secInWindow >= 27) {
+      await new Promise((r) => setTimeout(r, (30 - secInWindow + 1) * 1000));
+    }
     const freshCode = generateSync({ secret: ownerSecret });
 
     const step2FirstUse = await request(baseUrl, '/api/auth/2fa/verify-login', {
