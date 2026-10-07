@@ -174,8 +174,10 @@ async function notify(
         dedupeKey
       });
 
-      // 3. Trigger immediate outbox processor for low-latency delivery
-      await processOutbox(db, tenantId);
+      // 3. Trigger immediate outbox processor for low-latency delivery (only outside transactions)
+      if (!db.conn) {
+        await processOutbox(db, tenantId);
+      }
     } catch (outboxErr) {
       // Fallback: direct in-memory resolution & delivery
       let actorName = meta.actorName;

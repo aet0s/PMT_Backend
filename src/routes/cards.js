@@ -9,6 +9,7 @@ const localStorage = require('../storage');
 const { broadcastBoardEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
+const { processOutbox } = require('../services/notificationOutbox');
 const { requirePermission, userHasPermission } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
@@ -257,13 +258,140 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
       return res.status(400).json({ error: { message: 'No fields to update', code: 'BAD_REQUEST' } });
     }
 
+    let updatedCard;
     values.push(cardId);
-    await req.db.execute(
-      `UPDATE cards SET ${updates.join(', ')} WHERE id = ?`,
-      values
-    );
 
-    const [updatedCard] = await req.db.query('SELECT * FROM cards WHERE id = ?', [cardId]);
+    await req.db.transaction(async (tx) => {
+      await tx.execute(
+        `UPDATE cards SET ${updates.join(', ')} WHERE id = ?`,
+        values
+      );
+
+      const [resCard] = await tx.query('SELECT * FROM cards WHERE id = ?', [cardId]);
+      updatedCard = resCard;
+
+      if (list_id !== undefined && list_id !== oldCard.list_id) {
+        const newListRes = await tx.query('SELECT name FROM lists WHERE id = ?', [list_id]);
+        const newListName = newListRes[0]?.name || 'another list';
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'moved_card', {
+          title: updatedCard.title,
+          from: oldCard.list_name,
+          to: newListName
+        }, tx);
+        await notify(
+          {
+            eventType: 'card.moved',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName }
+          },
+          tx
+        );
+      }
+
+      if (title !== undefined && title !== oldCard.title) {
+        await notify(
+          {
+            eventType: 'card.renamed',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: title, oldTitle: oldCard.title }
+          },
+          tx
+        );
+      }
+
+      if (description !== undefined && description !== oldCard.description) {
+        await notify(
+          {
+            eventType: 'card.description_changed',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title }
+          },
+          tx
+        );
+      }
+
+      if (due_date !== undefined && due_date !== oldCard.due_date) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'due_date_changed', {
+          title: updatedCard.title,
+          due_date: due_date
+        }, tx);
+
+        let dueEventType = 'card.due_date_changed';
+        if (!oldCard.due_date && due_date) dueEventType = 'card.due_date_set';
+        else if (oldCard.due_date && !due_date) dueEventType = 'card.due_date_removed';
+
+        await notify(
+          {
+            eventType: dueEventType,
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title, dueDate: due_date }
+          },
+          tx
+        );
+      }
+
+      if (is_complete !== undefined && Boolean(is_complete) !== Boolean(oldCard.is_complete)) {
+        await logActivity(
+          oldCard.board_id,
+          cardId,
+          req.user.id,
+          is_complete ? 'marked_complete' : 'marked_incomplete',
+          { title: updatedCard.title }
+        , tx);
+        await notify(
+          {
+            eventType: is_complete ? 'card.completed' : 'card.reopened',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title }
+          },
+          tx
+        );
+      }
+
+      if (req.body.cover_url !== undefined && req.body.cover_url !== oldCard.cover_url) {
+        await notify(
+          {
+            eventType: 'card.cover_changed',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title }
+          },
+          tx
+        );
+      }
+
+      if (is_archived !== undefined && Boolean(is_archived) !== Boolean(oldCard.is_archived)) {
+        await notify(
+          {
+            eventType: is_archived ? 'card.archived' : 'card.restored',
+            actorUserId: req.user.id,
+            boardId: oldCard.board_id,
+            cardId,
+            tenantId: req.tenant?.id || null,
+            meta: { cardTitle: updatedCard.title }
+          },
+          tx
+        );
+      }
+    });
+
     const fullCard = await getFullCard(cardId, req.db);
 
     if (list_id !== undefined || position !== undefined) {
@@ -290,126 +418,7 @@ router.patch('/:id', requireAuth, requirePermission('card.edit'), validate(updat
       , req.tenant ? req.tenant.id : null);
     }
 
-    if (list_id !== undefined && list_id !== oldCard.list_id) {
-      const newListRes = await req.db.query('SELECT name FROM lists WHERE id = ?', [list_id]);
-      const newListName = newListRes[0]?.name || 'another list';
-      await logActivity(oldCard.board_id, cardId, req.user.id, 'moved_card', {
-        title: updatedCard.title,
-        from: oldCard.list_name,
-        to: newListName
-      }, req.db);
-      await notify(
-        {
-          eventType: 'card.moved',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName }
-        },
-        req.db
-      );
-    }
-
-    if (title !== undefined && title !== oldCard.title) {
-      await notify(
-        {
-          eventType: 'card.renamed',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: title, oldTitle: oldCard.title }
-        },
-        req.db
-      );
-    }
-
-    if (description !== undefined && description !== oldCard.description) {
-      await notify(
-        {
-          eventType: 'card.description_changed',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title }
-        },
-        req.db
-      );
-    }
-
-    if (due_date !== undefined && due_date !== oldCard.due_date) {
-      await logActivity(oldCard.board_id, cardId, req.user.id, 'due_date_changed', {
-        title: updatedCard.title,
-        due_date: due_date
-      }, req.db);
-
-      let dueEventType = 'card.due_date_changed';
-      if (!oldCard.due_date && due_date) dueEventType = 'card.due_date_set';
-      else if (oldCard.due_date && !due_date) dueEventType = 'card.due_date_removed';
-
-      await notify(
-        {
-          eventType: dueEventType,
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title, dueDate: due_date }
-        },
-        req.db
-      );
-    }
-
-    if (is_complete !== undefined && Boolean(is_complete) !== Boolean(oldCard.is_complete)) {
-      await logActivity(
-        oldCard.board_id,
-        cardId,
-        req.user.id,
-        is_complete ? 'marked_complete' : 'marked_incomplete',
-        { title: updatedCard.title }
-      , req.db);
-      await notify(
-        {
-          eventType: is_complete ? 'card.completed' : 'card.reopened',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title }
-        },
-        req.db
-      );
-    }
-
-    if (cover_url !== undefined && cover_url !== oldCard.cover_url) {
-      await notify(
-        {
-          eventType: 'card.cover_changed',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title }
-        },
-        req.db
-      );
-    }
-
-    if (is_archived !== undefined && Boolean(is_archived) !== Boolean(oldCard.is_archived)) {
-      await notify(
-        {
-          eventType: is_archived ? 'card.archived' : 'card.restored',
-          actorUserId: req.user.id,
-          boardId: oldCard.board_id,
-          cardId,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: updatedCard.title }
-        },
-        req.db
-      );
-    }
+    await processOutbox(req.db, req.tenant?.id);
 
     return res.json({ card: fullCard || updatedCard });
   } catch (err) {
@@ -1085,78 +1094,88 @@ router.post('/:id/comments', requireAuth, requirePermission('card.comment'), asy
   try {
     const cleanBody = sanitizeDescription(body.trim());
 
-    const comExec = await req.db.execute(
-      'INSERT INTO comments (card_id, user_id, body) VALUES (?, ?, ?)',
-      [cardId, req.user.id, cleanBody]
-    );
-    const [comment] = await req.db.query('SELECT * FROM comments WHERE id = ?', [comExec.insertId]);
+    let comment;
+    let author_name = 'Unknown';
+    let boardId;
+    let fullCard;
 
-    const userRes = await req.db.query('SELECT name FROM users WHERE id = ?', [req.user.id]);
-    const author_name = userRes[0]?.name || 'Unknown';
+    await req.db.transaction(async (tx) => {
+      const comExec = await tx.execute(
+        'INSERT INTO comments (card_id, user_id, body) VALUES (?, ?, ?)',
+        [cardId, req.user.id, cleanBody]
+      );
+      const [resComment] = await tx.query('SELECT * FROM comments WHERE id = ?', [comExec.insertId]);
+      comment = resComment;
 
-    const cardRes = await req.db.query(
-      'SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
-      [cardId]
-    );
+      const userRes = await tx.query('SELECT name FROM users WHERE id = ?', [req.user.id]);
+      author_name = userRes[0]?.name || 'Unknown';
 
-    const boardId = cardRes[0]?.board_id;
-    if (boardId) {
-      await logActivity(boardId, cardId, req.user.id, 'added_comment', {
-        body: cleanBody.substring(0, 60)
-      }, req.db);
+      const cardRes = await tx.query(
+        'SELECT l.board_id, c.title FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+        [cardId]
+      );
 
-      const newComment = { ...comment, author_name };
-      const fullCard = await getFullCard(cardId, req.db);
-      broadcastBoardEvent(boardId, 'comment:added', { cardId, comment: newComment, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+      boardId = cardRes[0]?.board_id;
+      if (boardId) {
+        await logActivity(boardId, cardId, req.user.id, 'added_comment', {
+          body: cleanBody.substring(0, 60)
+        }, tx);
 
-      // Parse @mentions
-      const mentionRegex = /@([a-zA-Z0-9._-]+)/g;
-      let match;
-      const mentionedNames = new Set();
-      while ((match = mentionRegex.exec(cleanBody)) !== null) {
-        mentionedNames.add(match[1].toLowerCase());
-      }
+        // Parse @mentions
+        const mentionRegex = /@([a-zA-Z0-9._-]+)/g;
+        let match;
+        const mentionedNames = new Set();
+        while ((match = mentionRegex.exec(cleanBody)) !== null) {
+          mentionedNames.add(match[1].toLowerCase());
+        }
 
-      const mentionedUserIds = [];
-      if (mentionedNames.size > 0) {
-        const usersRes = await req.db.query('SELECT id, name, email FROM users');
-        usersRes.forEach((u) => {
-          const uName = (u.name || '').toLowerCase().replace(/\s+/g, '');
-          const uEmailPrefix = (u.email || '').split('@')[0].toLowerCase();
-          if (mentionedNames.has(uName) || mentionedNames.has(uEmailPrefix)) {
-            mentionedUserIds.push(u.id);
-          }
-        });
-      }
+        const mentionedUserIds = [];
+        if (mentionedNames.size > 0) {
+          const usersRes = await tx.query('SELECT id, name, email FROM users');
+          usersRes.forEach((u) => {
+            const uName = (u.name || '').toLowerCase().replace(/\s+/g, '');
+            const uEmailPrefix = (u.email || '').split('@')[0].toLowerCase();
+            if (mentionedNames.has(uName) || mentionedNames.has(uEmailPrefix)) {
+              mentionedUserIds.push(u.id);
+            }
+          });
+        }
 
-      if (mentionedUserIds.length > 0) {
+        if (mentionedUserIds.length > 0) {
+          await notify(
+            {
+              eventType: 'comment.mention',
+              actorUserId: req.user.id,
+              boardId,
+              cardId,
+              mentionedUserIds,
+              tenantId: req.tenant?.id || null,
+              meta: { cardTitle: cardRes[0]?.title || 'Card', actorName: author_name }
+            },
+            tx
+          );
+        }
+
         await notify(
           {
-            eventType: 'comment.mention',
+            eventType: 'comment.added',
             actorUserId: req.user.id,
             boardId,
             cardId,
             mentionedUserIds,
             tenantId: req.tenant?.id || null,
-            meta: { cardTitle: fullCard?.title || 'Card', actorName: author_name }
+            meta: { cardTitle: cardRes[0]?.title || 'Card', actorName: author_name, commentPreview: cleanBody.substring(0, 80) }
           },
-          req.db
+          tx
         );
       }
+    });
 
-      await notify(
-        {
-          eventType: 'comment.added',
-          actorUserId: req.user.id,
-          boardId,
-          cardId,
-          mentionedUserIds,
-          tenantId: req.tenant?.id || null,
-          meta: { cardTitle: fullCard?.title || 'Card', actorName: author_name }
-        },
-        req.db
-      );
+    if (boardId) {
+      fullCard = await getFullCard(cardId, req.db);
+      broadcastBoardEvent(boardId, 'comment:added', { cardId, comment: { ...comment, author_name }, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
+    await processOutbox(req.db, req.tenant?.id);
 
     return res.status(201).json({ comment: { ...comment, author_name } });
   } catch (err) {
@@ -1360,54 +1379,112 @@ router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: 'No fields to update', code: 'BAD_REQUEST' } });
     }
 
+    let updatedItem;
+    let card_id, board_id;
     values.push(itemId);
-    await req.db.execute(
-      `UPDATE checklist_items SET ${updates.join(', ')} WHERE id = ?`,
-      values
-    );
 
-    const [updatedItem] = await req.db.query('SELECT * FROM checklist_items WHERE id = ?', [itemId]);
+    await req.db.transaction(async (tx) => {
+      await tx.execute(
+        `UPDATE checklist_items SET ${updates.join(', ')} WHERE id = ?`,
+        values
+      );
 
-    const chRes = await req.db.query(
-      `SELECT c.id as card_id, l.board_id 
-       FROM checklist_items ci
-       JOIN checklists ch ON ci.checklist_id = ch.id
-       JOIN cards c ON ch.card_id = c.id
-       JOIN lists l ON c.list_id = l.id
-       WHERE ci.id = ?`,
-      [itemId]
-    );
+      const [resItem] = await tx.query('SELECT * FROM checklist_items WHERE id = ?', [itemId]);
+      updatedItem = resItem;
 
-    if (chRes.length > 0) {
-      const { card_id, board_id } = chRes[0];
+      const chRes = await tx.query(
+        `SELECT c.id as card_id, l.board_id 
+         FROM checklist_items ci
+         JOIN checklists ch ON ci.checklist_id = ch.id
+         JOIN cards c ON ch.card_id = c.id
+         JOIN lists l ON c.list_id = l.id
+         WHERE ci.id = ?`,
+        [itemId]
+      );
 
-      if (text !== undefined && is_checked === undefined) {
-        const detailRes = await req.db.query(
-          `SELECT ch.title as checklist_title, c.title as card_title
-           FROM checklist_items ci
-           JOIN checklists ch ON ci.checklist_id = ch.id
-           JOIN cards c ON ch.card_id = c.id
-           WHERE ci.id = ?`,
-          [itemId]
-        );
-        if (detailRes.length > 0) {
-          await notify({
-            db: req.db,
-            tenantId: req.tenant?.id,
-            boardId,
-            cardId: card_id,
-            eventType: 'checklist_item.edited',
-            actorId: req.user.id,
-            data: { itemText: sanitizePlain(text), checklistTitle: detailRes[0].checklist_title, cardTitle: detailRes[0].card_title }
-          });
+      if (chRes.length > 0) {
+        card_id = chRes[0].card_id;
+        board_id = chRes[0].board_id;
+
+        if (text !== undefined && is_checked === undefined) {
+          const detailRes = await tx.query(
+            `SELECT ch.title as checklist_title, c.title as card_title
+             FROM checklist_items ci
+             JOIN checklists ch ON ci.checklist_id = ch.id
+             JOIN cards c ON ch.card_id = c.id
+             WHERE ci.id = ?`,
+            [itemId]
+          );
+          if (detailRes.length > 0) {
+            await notify({
+              db: tx,
+              tenantId: req.tenant?.id,
+              boardId,
+              cardId: card_id,
+              eventType: 'checklist_item.edited',
+              actorId: req.user.id,
+              data: { itemText: sanitizePlain(text), checklistTitle: detailRes[0].checklist_title, cardTitle: detailRes[0].card_title }
+            });
+          }
+        }
+
+        if (is_checked !== undefined) {
+          await logActivity(board_id, card_id, req.user.id, 'checklist_toggled', {
+            item_text: updatedItem.text,
+            is_checked: is_checked
+          }, tx);
+
+          const detailRes = await tx.query(
+            `SELECT ch.id as checklist_id, ch.title as checklist_title, c.title as card_title
+             FROM checklist_items ci
+             JOIN checklists ch ON ci.checklist_id = ch.id
+             JOIN cards c ON ch.card_id = c.id
+             WHERE ci.id = ?`,
+            [itemId]
+          );
+
+          if (detailRes.length > 0) {
+            const { checklist_id, checklist_title, card_title } = detailRes[0];
+            const eventType = is_checked ? 'checklist_item.completed' : 'checklist_item.reopened';
+
+            await notify(
+              {
+                eventType,
+                actorUserId: req.user.id,
+                boardId: board_id,
+                cardId: card_id,
+                tenantId: req.tenant?.id || null,
+                meta: { itemText: updatedItem.text, checklistTitle: checklist_title, cardTitle: card_title }
+              },
+              tx
+            );
+
+            if (is_checked) {
+              const countsRes = await tx.query(
+                `SELECT COUNT(*) as total, SUM(CASE WHEN is_checked = 1 THEN 1 ELSE 0 END) as checked_count
+                 FROM checklist_items WHERE checklist_id = ?`,
+                [checklist_id]
+              );
+              const total = Number(countsRes[0]?.total || 0);
+              const checked_count = Number(countsRes[0]?.checked_count || 0);
+              if (total > 0 && total === checked_count) {
+                await notify({
+                  eventType: 'checklist.completed_all',
+                  actorUserId: req.user.id,
+                  boardId: board_id,
+                  cardId: card_id,
+                  tenantId: req.tenant?.id || null,
+                  meta: { checklistTitle: checklist_title, cardTitle: card_title }
+                }, tx);
+              }
+            }
+          }
         }
       }
+    });
 
+    if (board_id && card_id) {
       if (is_checked !== undefined) {
-        await logActivity(board_id, card_id, req.user.id, 'checklist_toggled', {
-          item_text: updatedItem.text,
-          is_checked: is_checked
-        }, req.db);
         broadcastBoardEvent(
           board_id,
           'checklist_item:toggled',
@@ -1421,55 +1498,11 @@ router.patch('/checklist-items/:id', requireAuth, async (req, res, next) => {
           req.tenant ? req.tenant.id : null,
           clientMutationId
         );
-
-        const detailRes = await req.db.query(
-          `SELECT ch.id as checklist_id, ch.title as checklist_title, c.title as card_title
-           FROM checklist_items ci
-           JOIN checklists ch ON ci.checklist_id = ch.id
-           JOIN cards c ON ch.card_id = c.id
-           WHERE ci.id = ?`,
-          [itemId]
-        );
-
-        if (detailRes.length > 0) {
-          const { checklist_id, checklist_title, card_title } = detailRes[0];
-          const eventType = is_checked ? 'checklist_item.completed' : 'checklist_item.reopened';
-
-          await notify(
-            {
-              eventType,
-              actorUserId: req.user.id,
-              boardId: board_id,
-              cardId: card_id,
-              tenantId: req.tenant?.id || null,
-              meta: { itemText: updatedItem.text, checklistTitle: checklist_title, cardTitle: card_title }
-            },
-            req.db
-          );
-
-          if (is_checked) {
-            const countsRes = await req.db.query(
-              `SELECT COUNT(*) as total, SUM(CASE WHEN is_checked = 1 THEN 1 ELSE 0 END) as checked_count
-               FROM checklist_items WHERE checklist_id = ?`,
-              [checklist_id]
-            );
-            const total = Number(countsRes[0]?.total || 0);
-            const checked_count = Number(countsRes[0]?.checked_count || 0);
-            if (total > 0 && total === checked_count) {
-              await notify({
-                eventType: 'checklist.completed_all',
-                actorUserId: req.user.id,
-                boardId: board_id,
-                cardId: card_id,
-                meta: { checklistTitle: checklist_title, cardTitle: card_title }
-              });
-            }
-          }
-        }
       }
       const fullCard = await getFullCard(card_id, req.db);
       broadcastBoardEvent(board_id, 'card:updated', { cardId: card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
+    await processOutbox(req.db, req.tenant?.id);
 
     return res.json({ item: updatedItem });
   } catch (err) {

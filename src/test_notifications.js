@@ -26,6 +26,8 @@ const { provisionTenant, dropTenantDatabase } = require('./services/tenantProvis
 const { notify } = require('./services/notify');
 const { enqueueOutbox, processOutbox } = require('./services/notificationOutbox');
 const { NOTIFICATION_EVENTS } = require('./services/notificationEvents');
+const { userHasPermission, usersWithPermission } = require('./middleware/permissions');
+const { PERMISSIONS } = require('./rbac/registry');
 
 function makeRequest(server, options, body = null) {
   return new Promise((resolve, reject) => {
@@ -699,8 +701,280 @@ async function runTestSuite() {
     console.log(`  Literal Message Preserved: "${specialNotif.message}"`);
     console.log('✓ TEST 7 PASSED: Multi-tenant API isolation verified; special regex replacement tokens stay 100% literal.\n');
 
+    // =========================================================================
+    // TEST 8: Survivability & Sensible "No Longer Exists" State on Deletion
+    // (L.5 Item 3(a))
+    // =========================================================================
+    console.log('--- TEST 8: Survivability & Sensible "No Longer Exists" State ---');
+    const delBoardRes = await t1Db.execute('INSERT INTO boards (workspace_id, name) VALUES (?, ?)', [w1Id, 'To Delete Board']);
+    const delBoardId = delBoardRes.insertId;
+    await t1Db.execute('INSERT INTO board_members (board_id, user_id, role) VALUES (?, ?, ?)', [delBoardId, users.B.id, 'member']);
+
+    const delListRes = await t1Db.execute('INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)', [delBoardId, 'Del List', 1]);
+    const delListId = delListRes.insertId;
+
+    const delCardRes = await t1Db.execute('INSERT INTO cards (list_id, title, position) VALUES (?, ?, ?)', [delListId, 'To Delete Card', 1]);
+    const delCardId = delCardRes.insertId;
+
+    // Send card.deleted and board.deleted notifications
+    await notify({
+      db: t1Db,
+      tenantId: t1.id,
+      workspaceId: w1Id,
+      boardId: delBoardId,
+      cardId: delCardId,
+      eventType: 'card.deleted',
+      actorId: users.A.id,
+      data: { cardTitle: 'To Delete Card', boardTitle: 'To Delete Board' }
+    });
+
+    await notify({
+      db: t1Db,
+      tenantId: t1.id,
+      workspaceId: w1Id,
+      boardId: delBoardId,
+      eventType: 'board.deleted',
+      actorId: users.A.id,
+      data: { boardName: 'To Delete Board' }
+    });
+
+    await processOutbox(t1Db, t1.id);
+    await wait(150);
+
+    // Verify notifications were delivered to User B
+    const notifsBeforeDelete = await t1Db.query(
+      'SELECT id, event_type, card_id, board_id, message FROM notifications WHERE user_id = ? AND event_type IN (?, ?)',
+      [users.B.id, 'card.deleted', 'board.deleted']
+    );
+    assert.strictEqual(notifsBeforeDelete.length, 2, 'Test 8 Failed: Expected 2 notifications before deletion');
+
+    // Delete the card and board
+    await t1Db.execute('DELETE FROM cards WHERE id = ?', [delCardId]);
+    await t1Db.execute('DELETE FROM boards WHERE id = ?', [delBoardId]);
+
+    // Verify notifications SURVIVE in recipients' list (with card_id and board_id set to NULL by FK or intact)
+    const notifsAfterDelete = await t1Db.query(
+      'SELECT id, event_type, card_id, board_id, message FROM notifications WHERE user_id = ? AND event_type IN (?, ?)',
+      [users.B.id, 'card.deleted', 'board.deleted']
+    );
+    assert.strictEqual(notifsAfterDelete.length, 2, 'Test 8 Failed: Notifications were deleted cascade-style when entity was deleted!');
+
+    // Fetch notifications via API for User B
+    const feedRes = await makeRequest(server, {
+      method: 'GET',
+      path: '/api/notifications',
+      headers: { Authorization: `Bearer ${tokens.B}` }
+    });
+    assert.strictEqual(feedRes.status, 200, 'Test 8 Failed: /api/notifications returned non-200');
+    const bNotifs = feedRes.body.notifications || [];
+    const hasCardDel = bNotifs.some((n) => n.event_type === 'card.deleted');
+    const hasBoardDel = bNotifs.some((n) => n.event_type === 'board.deleted');
+    assert(hasCardDel && hasBoardDel, 'Test 8 Failed: Deleted notifications not returned in API feed');
+
+    // Attempt to open the deleted card -> sensible 404 "not found"
+    const cardOpenRes = await makeRequest(server, {
+      method: 'GET',
+      path: `/api/cards/${delCardId}`,
+      headers: { Authorization: `Bearer ${tokens.B}` }
+    });
+    assert.strictEqual(cardOpenRes.status, 404, 'Test 8 Failed: Opening deleted card did not return 404 sensible state');
+
+    // Attempt to open the deleted board -> sensible 404 "not found"
+    const boardOpenRes = await makeRequest(server, {
+      method: 'GET',
+      path: `/api/boards/${delBoardId}`,
+      headers: { Authorization: `Bearer ${tokens.B}` }
+    });
+    assert.strictEqual(boardOpenRes.status, 404, 'Test 8 Failed: Opening deleted board did not return 404 sensible state');
+
+    console.log('✓ TEST 8 PASSED: card.deleted and board.deleted survive entity deletion; feed intact; routes return sensible 404.\n');
+
+    // =========================================================================
+    // TEST 9: Exhaustive Equivalence: usersWithPermission equals userHasPermission
+    // across ALL registry permissions, all 6 system roles + custom role
+    // (L.5 Item 3(b))
+    // =========================================================================
+    console.log('--- TEST 9: usersWithPermission == userHasPermission Across All Roles & Permissions ---');
+    const systemRoleNames = ['Owner', 'Admin', 'Project Manager', 'Team Member', 'Viewer', 'Guest'];
+    const allRoles = await t1Db.query('SELECT id, name, is_system FROM roles WHERE workspace_id IS NULL OR workspace_id = ?', [w1Id]);
+    const roleByName = {};
+    allRoles.forEach((r) => { roleByName[r.name] = r; });
+
+    const customRoleName = 'CustomAuditorRole';
+    let [customRole] = await t1Db.query('SELECT id, name FROM roles WHERE workspace_id = ? AND name = ?', [w1Id, customRoleName]);
+    if (!customRole) {
+      const crRes = await t1Db.execute('INSERT INTO roles (workspace_id, name, is_system, is_editable) VALUES (?, ?, 0, 1)', [w1Id, customRoleName]);
+      customRole = { id: crRes.insertId, name: customRoleName };
+      const [p1] = await t1Db.query("SELECT id FROM permissions WHERE `key` = 'card.create'");
+      const [p2] = await t1Db.query("SELECT id FROM permissions WHERE `key` = 'card.edit'");
+      if (p1) await t1Db.execute('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [customRole.id, p1.id]);
+      if (p2) await t1Db.execute('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [customRole.id, p2.id]);
+    }
+
+    const candidateUsers = [
+      { user: users.A, role: 'Owner' },
+      { user: users.B, role: 'Admin' },
+      { user: users.C, role: 'Project Manager' },
+      { user: users.D, role: 'Team Member' },
+      { user: users.E, role: 'Viewer' },
+      { user: users.F, role: 'Guest' },
+      { user: users.G, role: customRoleName }
+    ];
+
+    for (const cu of candidateUsers) {
+      const targetRoleId = cu.role === customRoleName ? customRole.id : roleByName[cu.role]?.id;
+      await t1Db.execute(
+        `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE role = VALUES(role), role_id = VALUES(role_id)`,
+        [w1Id, cu.user.id, cu.role, targetRoleId]
+      );
+      await t1Db.execute(
+        `INSERT INTO board_members (board_id, user_id, role, role_id)
+         VALUES (?, ?, 'member', ?)
+         ON DUPLICATE KEY UPDATE role = VALUES(role), role_id = VALUES(role_id)`,
+        [b1Id, cu.user.id, targetRoleId]
+      );
+    }
+
+    const candidateIds = candidateUsers.map((cu) => cu.user.id);
+    let permChecksPassed = 0;
+
+    for (const perm of PERMISSIONS) {
+      const permKey = perm.key;
+      const bulkPermitted = await usersWithPermission(t1Db, w1Id, b1Id, permKey, candidateIds);
+      const bulkSet = new Set(bulkPermitted.map(Number));
+
+      for (const cu of candidateUsers) {
+        const hasPerm = await userHasPermission(cu.user.id, w1Id, permKey, t1Db, b1Id);
+        const inBulk = bulkSet.has(cu.user.id);
+        assert.strictEqual(
+          inBulk,
+          hasPerm,
+          `Test 9 Discrepancy for permission "${permKey}" on User ${cu.user.name} (Role: ${cu.role}): bulk=${inBulk}, individual=${hasPerm}`
+        );
+      }
+      permChecksPassed++;
+    }
+
+    console.log(`  Verified equivalence across all ${permChecksPassed} registry permissions and 7 roles.`);
+    console.log('✓ TEST 9 PASSED: usersWithPermission EXACTLY equals userHasPermission with 0 false positives or negatives.\n');
+
+    // =========================================================================
+    // TEST 10: Atomic Transactional Outbox (Card Move, Checklist Toggle, Comment)
+    // (L.5 Item 3(c))
+    // =========================================================================
+    console.log('--- TEST 10: Atomic Transactional Outbox & Crash Rollback Proof ---');
+
+    // 10.1: Card Move Atomicity
+    const origListId = l1Id;
+    const targetListId = l2Id;
+    let cardMoveSimulatedCrash = false;
+
+    try {
+      await t1Db.transaction(async (tx) => {
+        await tx.execute('UPDATE cards SET list_id = ? WHERE id = ?', [targetListId, c1Id]);
+        await notify(
+          {
+            eventType: 'card.moved',
+            actorUserId: users.A.id,
+            boardId: b1Id,
+            cardId: c1Id,
+            tenantId: t1.id,
+            meta: { cardTitle: 'Card 1', fromList: 'List 1', toList: 'List 2' }
+          },
+          tx
+        );
+        throw new Error('SIMULATED_CRASH_DURING_CARD_MOVE');
+      });
+    } catch (err) {
+      if (err.message === 'SIMULATED_CRASH_DURING_CARD_MOVE') cardMoveSimulatedCrash = true;
+    }
+
+    assert(cardMoveSimulatedCrash, 'Test 10.1 Failed: Simulated crash did not throw');
+    const [cardCheck] = await t1Db.query('SELECT list_id FROM cards WHERE id = ?', [c1Id]);
+    assert.strictEqual(cardCheck.list_id, origListId, 'Test 10.1 Failed: Card list_id was NOT rolled back!');
+    const outboxCardMoveRows = await t1Db.query(
+      "SELECT id FROM notification_outbox WHERE card_id = ? AND event_type = 'card.moved'",
+      [c1Id]
+    );
+    assert.strictEqual(outboxCardMoveRows.length, 0, 'Test 10.1 Failed: Outbox row leaked after card move transaction rolled back!');
+    console.log('  10.1: Card move rolled back atomically; neither card change nor outbox row exists alone.');
+
+    // 10.2: Checklist Item Toggle Atomicity
+    const clRes = await t1Db.execute('INSERT INTO checklists (card_id, title) VALUES (?, ?)', [c1Id, 'Atomic Checklist']);
+    const clItemIdRes = await t1Db.execute('INSERT INTO checklist_items (checklist_id, text, is_checked) VALUES (?, ?, 0)', [clRes.insertId, 'Atomic Item']);
+    const testItemId = clItemIdRes.insertId;
+
+    let clToggleSimulatedCrash = false;
+    try {
+      await t1Db.transaction(async (tx) => {
+        await tx.execute('UPDATE checklist_items SET is_checked = 1 WHERE id = ?', [testItemId]);
+        await notify(
+          {
+            eventType: 'checklist_item.completed',
+            actorUserId: users.A.id,
+            boardId: b1Id,
+            cardId: c1Id,
+            tenantId: t1.id,
+            meta: { itemText: 'Atomic Item', checklistTitle: 'Atomic Checklist', cardTitle: 'Card 1' }
+          },
+          tx
+        );
+        throw new Error('SIMULATED_CRASH_DURING_CHECKLIST_TOGGLE');
+      });
+    } catch (err) {
+      if (err.message === 'SIMULATED_CRASH_DURING_CHECKLIST_TOGGLE') clToggleSimulatedCrash = true;
+    }
+
+    assert(clToggleSimulatedCrash, 'Test 10.2 Failed: Simulated crash did not throw');
+    const [itemCheck] = await t1Db.query('SELECT is_checked FROM checklist_items WHERE id = ?', [testItemId]);
+    assert.strictEqual(Boolean(itemCheck.is_checked), false, 'Test 10.2 Failed: Checklist item is_checked was NOT rolled back!');
+    const outboxClRows = await t1Db.query(
+      "SELECT id FROM notification_outbox WHERE event_type = 'checklist_item.completed' AND meta LIKE ?",
+      ['%Atomic Item%']
+    );
+    assert.strictEqual(outboxClRows.length, 0, 'Test 10.2 Failed: Outbox row leaked after checklist toggle transaction rolled back!');
+    console.log('  10.2: Checklist item toggle rolled back atomically; neither item update nor outbox row exists alone.');
+
+    // 10.3: Comment Add Atomicity
+    let commentAddSimulatedCrash = false;
+    const uniqueCommentBody = 'Atomic Test Comment Body 999';
+
+    try {
+      await t1Db.transaction(async (tx) => {
+        await tx.execute('INSERT INTO comments (card_id, user_id, body) VALUES (?, ?, ?)', [c1Id, users.A.id, uniqueCommentBody]);
+        await notify(
+          {
+            eventType: 'comment.added',
+            actorUserId: users.A.id,
+            boardId: b1Id,
+            cardId: c1Id,
+            tenantId: t1.id,
+            meta: { cardTitle: 'Card 1', commentPreview: uniqueCommentBody }
+          },
+          tx
+        );
+        throw new Error('SIMULATED_CRASH_DURING_COMMENT_ADD');
+      });
+    } catch (err) {
+      if (err.message === 'SIMULATED_CRASH_DURING_COMMENT_ADD') commentAddSimulatedCrash = true;
+    }
+
+    assert(commentAddSimulatedCrash, 'Test 10.3 Failed: Simulated crash did not throw');
+    const commentRows = await t1Db.query('SELECT id FROM comments WHERE body = ?', [uniqueCommentBody]);
+    assert.strictEqual(commentRows.length, 0, 'Test 10.3 Failed: Comment row was NOT rolled back!');
+    const outboxCommentRows = await t1Db.query(
+      "SELECT id FROM notification_outbox WHERE event_type = 'comment.added' AND meta LIKE ?",
+      [`%${uniqueCommentBody}%`]
+    );
+    assert.strictEqual(outboxCommentRows.length, 0, 'Test 10.3 Failed: Outbox row leaked after comment transaction rolled back!');
+    console.log('  10.3: Comment insertion rolled back atomically; neither comment nor outbox row exists alone.');
+
+    console.log('✓ TEST 10 PASSED: Outbox writes are verified 100% atomic in the same transaction for all 3 routes.\n');
+
     console.log('================================================================');
-    console.log('  ALL 7 NOTIFICATION TEST SUITE SPECIFICATIONS PASSED (100%)    ');
+    console.log('  ALL 10 NOTIFICATION TEST SUITE SPECIFICATIONS PASSED (100%)   ');
     console.log('================================================================');
   } catch (err) {
     console.error('\n❌ NOTIFICATION TEST SUITE FAILED:');

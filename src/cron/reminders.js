@@ -44,6 +44,7 @@ async function checkDueSoonCards(firstArg = null, secondArg = null, thirdArg = n
         boardId: card.board_id,
         cardId: card.id,
         tenantId,
+        dedupeKey: `card_due_soon_${card.id}_${card.due_date}`,
         meta: { cardTitle: card.title, relativeDueTime: `soon (${timeStr})` }
       },
       activeDb
@@ -92,6 +93,7 @@ async function checkOverdueCards(firstArg = null, secondArg = null, thirdArg = n
         boardId: card.board_id,
         cardId: card.id,
         tenantId,
+        dedupeKey: `card_overdue_${card.id}_${card.due_date}`,
         meta: { cardTitle: card.title }
       },
       activeDb
