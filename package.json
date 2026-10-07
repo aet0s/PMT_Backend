@@ -23,7 +23,7 @@
     "test:part-e": "node src/test_part_e_rbac.js",
     "test:rate-limit": "node src/test_rate_limit_env.js",
     "test:prod-rate-limit": "node src/test_prod_rate_limit.js",
-    "test:all": "node src/test_backend.js && node src/test_phase2_multitenant.js && node src/test_part_a.js && node src/test_part_b.js && node src/test_part_c.js && node src/test_part_c5.js && node src/test_part_e_rbac.js && node src/test_rate_limit_env.js && node src/test_prod_rate_limit.js",
+    "test:all": "npm run test:l0 && node src/test_backend.js && node src/test_phase2_multitenant.js && node src/test_part_a.js && node src/test_part_b.js && node src/test_part_c.js && node src/test_part_c5.js && node src/test_part_e_rbac.js && node src/test_rate_limit_env.js && node src/test_prod_rate_limit.js",
     "rbac:audit": "node src/scripts/rbacAudit.js",
     "contract:check": "node src/scripts/checkApiContract.js",
     "coverage:matrix": "node src/scripts/generateCoverageMatrix.js",
