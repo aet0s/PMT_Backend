@@ -63,8 +63,14 @@ async function getFullCard(cardId, dbInstance = null) {
     );
     card.labels = labelsRes;
 
+    const assignersRes = await db.query(
+      'SELECT u.id, u.name, u.email FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
+      [cardId]
+    );
+    card.assigners = assignersRes;
+
     const membersRes = await db.query(
-      'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ?',
+      'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
       [cardId]
     );
     card.members = membersRes;
@@ -153,6 +159,13 @@ router.post('/', requireAuth, requirePermission('card.create'), validate(createC
       [list_id, title, cleanDescription, position, due_date]
     );
     const cardId = cardExec.insertId;
+
+    // Automatically set creator as default assigner
+    await req.db.execute(
+      'INSERT IGNORE INTO card_assigners (card_id, user_id) VALUES (?, ?)',
+      [cardId, req.user.id]
+    );
+
     const [card] = await req.db.query('SELECT * FROM cards WHERE id = ?', [cardId]);
 
     await logActivity(boardId, card.id, req.user.id, 'created_card', { title: card.title }, req.db);
@@ -511,6 +524,228 @@ router.post('/:id/members', requireAuth, requirePermission('card.assign_members'
     }
 
     return res.json({ action, user_id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/cards/:id/assigners (Toggle assigner on card)
+router.post('/:id/assigners', requireAuth, requirePermission('card.edit'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const { user_id } = req.body;
+  const originId = req.headers['x-origin-id'];
+
+  try {
+    const cardRes = await req.db.query(
+      'SELECT c.title, l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+      [cardId]
+    );
+    if (cardRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+    }
+    const boardId = cardRes[0]?.board_id;
+    const cardTitle = cardRes[0]?.title || 'Card';
+
+    const targetUserRes = await req.db.query('SELECT name, email FROM users WHERE id = ?', [user_id]);
+    const targetUser = targetUserRes[0];
+    const targetUserName = targetUser?.name || 'User';
+
+    const existing = await req.db.query(
+      'SELECT * FROM card_assigners WHERE card_id = ? AND user_id = ?',
+      [cardId, user_id]
+    );
+
+    let action = '';
+    if (existing.length > 0) {
+      await req.db.execute('DELETE FROM card_assigners WHERE card_id = ? AND user_id = ?', [cardId, user_id]);
+      action = 'removed';
+      if (boardId) {
+        await logActivity(boardId, cardId, req.user.id, 'assigner_removed', { assigner_name: targetUserName }, req.db);
+      }
+    } else {
+      await req.db.execute('INSERT IGNORE INTO card_assigners (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
+      action = 'added';
+      if (boardId) {
+        await logActivity(boardId, cardId, req.user.id, 'assigner_added', { assigner_name: targetUserName }, req.db);
+      }
+    }
+
+    if (boardId) {
+      const fullCard = await getFullCard(cardId, req.db);
+      broadcastBoardEvent(
+        boardId,
+        'card:updated',
+        { cardId, card: fullCard },
+        originId,
+        req.tenant ? req.tenant.id : null
+      );
+    }
+
+    return res.json({ action, user_id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/cards/:id/copy (Deep copy card)
+router.post('/:id/copy', requireAuth, async (req, res, next) => {
+  const sourceCardId = Number(req.params.id);
+  const { list_id, title } = req.body;
+  const originId = req.headers['x-origin-id'];
+
+  if (!list_id) {
+    return res.status(400).json({ error: { message: 'Target list_id is required', code: 'BAD_REQUEST' } });
+  }
+
+  try {
+    // 1. Fetch source card with full details
+    const sourceCard = await getFullCard(sourceCardId, req.db);
+    if (!sourceCard) {
+      return res.status(404).json({ error: { message: 'Source card not found', code: 'NOT_FOUND' } });
+    }
+
+    // 2. Fetch target list & board
+    const listRes = await req.db.query(
+      `SELECT l.id, l.name, l.board_id, b.workspace_id, b.name as board_name 
+       FROM lists l 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE l.id = ? AND l.is_archived = 0`,
+      [list_id]
+    );
+    if (listRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Target list not found', code: 'NOT_FOUND' } });
+    }
+    const targetList = listRes[0];
+    const targetBoardId = targetList.board_id;
+    const targetWorkspaceId = targetList.workspace_id;
+
+    // Check permission on target workspace / board
+    const hasCreatePerm = await userHasPermission(req.user.id, targetWorkspaceId, 'card.create', req.db, targetBoardId);
+    if (!hasCreatePerm) {
+      return res.status(403).json({ error: { message: 'No permission to create cards in target board', code: 'FORBIDDEN' } });
+    }
+
+    // 3. Calculate position in target list
+    const maxPosRes = await req.db.query(
+      'SELECT MAX(position) as max_pos FROM cards WHERE list_id = ?',
+      [list_id]
+    );
+    const maxPos = maxPosRes[0]?.max_pos;
+    const position = maxPos ? Number(maxPos) + 1000.0 : 1000.0;
+
+    const newTitle = title?.trim() ? sanitizePlain(title.trim()) : `(Copy) ${sourceCard.title}`;
+
+    // 4. Insert new card
+    const cardExec = await req.db.execute(
+      `INSERT INTO cards (list_id, title, description, position, start_date, due_date, is_complete) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        list_id,
+        newTitle,
+        sourceCard.description || '',
+        position,
+        sourceCard.start_date || null,
+        sourceCard.due_date || null,
+        sourceCard.is_complete ? 1 : 0
+      ]
+    );
+    const newCardId = cardExec.insertId;
+
+    // 5. Add creator as default assigner
+    await req.db.execute(
+      'INSERT IGNORE INTO card_assigners (card_id, user_id) VALUES (?, ?)',
+      [newCardId, req.user.id]
+    );
+
+    // 6. Copy Checklists & Items
+    if (Array.isArray(sourceCard.checklists) && sourceCard.checklists.length > 0) {
+      for (const chk of sourceCard.checklists) {
+        const chkExec = await req.db.execute(
+          'INSERT INTO checklists (card_id, title, position) VALUES (?, ?, ?)',
+          [newCardId, chk.title, chk.position || 1000.0]
+        );
+        const newChkId = chkExec.insertId;
+        if (Array.isArray(chk.items) && chk.items.length > 0) {
+          for (const it of chk.items) {
+            await req.db.execute(
+              'INSERT INTO checklist_items (checklist_id, text, is_checked, position) VALUES (?, ?, ?, ?)',
+              [newChkId, it.text, it.is_checked ? 1 : 0, it.position || 1000.0]
+            );
+          }
+        }
+      }
+    }
+
+    // 7. Copy Attachments / Images
+    if (Array.isArray(sourceCard.attachments) && sourceCard.attachments.length > 0) {
+      for (const att of sourceCard.attachments) {
+        await req.db.execute(
+          `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            newCardId,
+            req.user.id,
+            att.file_name,
+            att.file_url,
+            att.file_type || 'application/octet-stream',
+            att.file_size_bytes || 0
+          ]
+        );
+      }
+    }
+
+    // 8. Copy Labels: resolve on target board or create if missing
+    if (Array.isArray(sourceCard.labels) && sourceCard.labels.length > 0) {
+      for (const srcLabel of sourceCard.labels) {
+        const existingLabelRes = await req.db.query(
+          'SELECT id FROM labels WHERE board_id = ? AND LOWER(name) = LOWER(?) LIMIT 1',
+          [targetBoardId, srcLabel.name]
+        );
+
+        let targetLabelId;
+        if (existingLabelRes.length > 0) {
+          targetLabelId = existingLabelRes[0].id;
+        } else {
+          const newLabelExec = await req.db.execute(
+            'INSERT INTO labels (board_id, name, color) VALUES (?, ?, ?)',
+            [targetBoardId, srcLabel.name, srcLabel.color || '#3b82f6']
+          );
+          targetLabelId = newLabelExec.insertId;
+        }
+
+        await req.db.execute(
+          'INSERT IGNORE INTO card_labels (card_id, label_id) VALUES (?, ?)',
+          [newCardId, targetLabelId]
+        );
+      }
+    }
+
+    // 9. Members & comments explicitly NOT copied
+
+    // 10. Log Activity on target board
+    await logActivity(targetBoardId, newCardId, req.user.id, 'created_card', { title: newTitle, copied_from: sourceCard.title }, req.db);
+
+    // 11. Notifications
+    await notify(
+      {
+        eventType: 'card.created',
+        actorUserId: req.user.id,
+        boardId: targetBoardId,
+        cardId: newCardId,
+        workspaceId: targetWorkspaceId,
+        tenantId: req.tenant?.id || null,
+        meta: { cardTitle: newTitle, boardName: targetList.board_name || 'Board' }
+      },
+      req.db
+    );
+
+    // 12. Fetch full new card
+    const fullNewCard = await getFullCard(newCardId, req.db);
+
+    // 13. Broadcast socket event to target board
+    broadcastBoardEvent(targetBoardId, 'card:created', { card: fullNewCard }, originId, req.tenant ? req.tenant.id : null);
+
+    return res.status(201).json({ card: fullNewCard });
   } catch (err) {
     next(err);
   }

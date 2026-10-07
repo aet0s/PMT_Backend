@@ -31,11 +31,11 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
       case 'cardMembers': {
         if (ctx.cardId) {
           const res = await db.query(
-            'SELECT user_id FROM card_members WHERE card_id = ?',
-            [ctx.cardId]
+            'SELECT user_id FROM card_members WHERE card_id = ? UNION SELECT user_id FROM card_assigners WHERE card_id = ?',
+            [ctx.cardId, ctx.cardId]
           );
           userIds = res.map((r) => r.user_id);
-          // If no members are assigned to this card, fallback to board members so updates are not lost
+          // If no members or assigners are on this card, fallback to board members so updates are not lost
           if (userIds.length === 0 && ctx.boardId) {
             const bRes = await db.query(
               'SELECT user_id FROM board_members WHERE board_id = ?',
@@ -55,7 +55,7 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
       case 'cardMembersExcludingMentioned': {
         if (ctx.cardId) {
           const mentioned = Array.isArray(ctx.mentionedUserIds) ? ctx.mentionedUserIds : [];
-          let query = 'SELECT user_id FROM card_members WHERE card_id = ?';
+          let query = 'SELECT user_id FROM (SELECT user_id, card_id FROM card_members UNION SELECT user_id, card_id FROM card_assigners) combined WHERE card_id = ?';
           const params = [ctx.cardId];
 
           if (mentioned.length > 0) {

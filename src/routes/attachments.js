@@ -21,8 +21,14 @@ async function getFullCard(cardId, db) {
   );
   card.labels = labelsRes;
 
+  const assignersRes = await db.query(
+    'SELECT u.id, u.name, u.email FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
+    [cardId]
+  );
+  card.assigners = assignersRes;
+
   const membersRes = await db.query(
-    'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ?',
+    'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
     [cardId]
   );
   card.members = membersRes;

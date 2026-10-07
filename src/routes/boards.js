@@ -197,6 +197,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     let cards = [];
     let cardLabelsMap = {};
+    let cardAssignersMap = {};
     let cardMembersMap = {};
     let cardChecklistsMap = {};
     let cardCommentsMap = {};
@@ -225,6 +226,20 @@ router.get('/:id', requireAuth, async (req, res, next) => {
         clRes.forEach((row) => {
           if (!cardLabelsMap[row.card_id]) cardLabelsMap[row.card_id] = [];
           cardLabelsMap[row.card_id].push({ id: row.id, name: row.name, color: row.color });
+        });
+
+        // Fetch Card Assigners
+        const caRes = await req.db.query(
+          `SELECT ca.card_id, u.id, u.name, u.email 
+           FROM card_assigners ca
+           JOIN users u ON ca.user_id = u.id
+           WHERE ca.card_id IN (?)
+           ORDER BY u.name ASC`,
+          [cardIds]
+        );
+        caRes.forEach((row) => {
+          if (!cardAssignersMap[row.card_id]) cardAssignersMap[row.card_id] = [];
+          cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
         });
 
         // Fetch Card Members
@@ -327,6 +342,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
       const cardDetail = {
         ...c,
         labels: cardLabelsMap[c.id] || [],
+        assigners: cardAssignersMap[c.id] || [],
         members: cardMembersMap[c.id] || [],
         checklists: Object.values(cardChecklistsMap[c.id] || {}),
         comments: cardCommentsMap[c.id] || [],
