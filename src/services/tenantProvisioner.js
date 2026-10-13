@@ -130,6 +130,8 @@ async function provisionTenant({
 
     // 6. Connect to newly created tenant DB to seed initial owner and workspace
     const tenantDb = getTenantDbByName(dbName);
+    const { syncPermissionCatalog } = require('../rbac/catalogSync');
+    await syncPermissionCatalog(tenantDb);
 
     // Create owner user
     let passwordHash = ownerPasswordHash;
@@ -144,11 +146,12 @@ async function provisionTenant({
     );
     const ownerUserId = userRes.insertId;
 
-    // Fetch Super Admin role
+    // Fetch Owner role
     const roles = await tenantDb.query(
-      "SELECT id FROM roles WHERE name = 'Super Admin' AND is_system = 1 AND workspace_id IS NULL"
+      "SELECT id, name FROM roles WHERE (name = 'Owner' OR name = 'Super Admin') AND is_system = 1 AND workspace_id IS NULL ORDER BY (name = 'Owner') DESC LIMIT 1"
     );
-    const superAdminRoleId = roles[0] ? roles[0].id : 1;
+    const ownerRoleId = roles[0] ? roles[0].id : 1;
+    const ownerRoleName = roles[0] ? roles[0].name : 'Owner';
 
     // Create default workspace
     const wsRes = await tenantDb.execute(
@@ -157,11 +160,11 @@ async function provisionTenant({
     );
     const workspaceId = wsRes.insertId;
 
-    // Add owner as Super Admin in workspace
+    // Add owner as Owner in workspace
     await tenantDb.execute(
       `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
-       VALUES (?, ?, 'Super Admin', ?)`,
-      [workspaceId, ownerUserId, superAdminRoleId]
+       VALUES (?, ?, ?, ?)`,
+      [workspaceId, ownerUserId, ownerRoleName, ownerRoleId]
     );
 
     // Create sample project board

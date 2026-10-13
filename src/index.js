@@ -300,6 +300,8 @@ async function start() {
 
   try {
     await db.ensureRuntimeSchema();
+    const { syncAllTenantsPermissionCatalog } = require('./rbac/catalogSync');
+    await syncAllTenantsPermissionCatalog();
   } catch (migErr) {
     console.error('\n❌ [FATAL] Boot schema migration failed. Aborting startup to prevent serving traffic on an unmigrated or corrupted schema:');
     console.error(`  ✖ ${migErr.message}\n`);

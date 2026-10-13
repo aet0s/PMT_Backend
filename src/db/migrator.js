@@ -113,6 +113,19 @@ async function migrateSingleTenant(dbName) {
   console.log(`=== Running Tenant Migrations on ${dbName} ===`);
   const applied = await runMigrationsOnDb(dbName, 'tenant');
   console.log(`Applied ${applied.length} tenant migration(s) on ${dbName}.`);
+
+  try {
+    const { syncPermissionCatalog } = require('../rbac/catalogSync');
+    const tenantConn = await mysql.createConnection(getDbConfig(dbName));
+    try {
+      await syncPermissionCatalog(tenantConn);
+    } finally {
+      await tenantConn.end();
+    }
+  } catch (syncErr) {
+    console.warn(`[WARN] syncPermissionCatalog failed on ${dbName}:`, syncErr.message);
+  }
+
   return applied;
 }
 
