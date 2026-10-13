@@ -52,7 +52,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       WHERE ${archivedCondition} 
         AND w.is_archived = 0
         AND (
-          r.name IN ('Owner', 'Super Admin', 'Admin')
+          (r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0))
           OR EXISTS (
             SELECT 1 FROM role_permissions rp
             JOIN permissions p ON rp.permission_id = p.id
@@ -346,11 +346,24 @@ router.get('/:id', requireAuth, async (req, res, next) => {
       meta_json: parseJson(act.meta_json)
     }));
 
+    // Calculate sequential task numbers for board cards
+    const sortedForNumbering = [...cards].sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (timeA !== timeB) return timeA - timeB;
+      return a.id - b.id;
+    });
+    const cardTaskNumberMap = {};
+    sortedForNumbering.forEach((c, index) => {
+      cardTaskNumberMap[c.id] = index + 1;
+    });
+
     // Assemble nested structure
     const cardsByListId = {};
     cards.forEach((c) => {
       const cardDetail = {
         ...c,
+        task_number: cardTaskNumberMap[c.id] || 1,
         labels: cardLabelsMap[c.id] || [],
         assigners: cardAssignersMap[c.id] || [],
         members: cardMembersMap[c.id] || [],
@@ -767,6 +780,88 @@ router.post('/:id/labels', requireAuth, requirePermission('label.create'), async
     }
 
     return res.status(201).json({ label });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/boards/:id/labels/:labelId - Edit label title or color
+router.patch('/:id/labels/:labelId', requireAuth, requirePermission('label.edit'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  const labelId = Number(req.params.labelId);
+  const { name, color } = req.body;
+
+  try {
+    const [existing] = await req.db.query('SELECT * FROM labels WHERE id = ? AND board_id = ?', [labelId, boardId]);
+    if (!existing) {
+      return res.status(404).json({ error: { message: 'Label not found', code: 'NOT_FOUND' } });
+    }
+
+    const updates = [];
+    const params = [];
+    if (name !== undefined) {
+      updates.push('name = ?');
+      params.push(sanitizePlain(name));
+    }
+    if (color !== undefined) {
+      updates.push('color = ?');
+      params.push(color);
+    }
+
+    if (updates.length > 0) {
+      params.push(labelId);
+      await req.db.execute(`UPDATE labels SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    const [updatedLabel] = await req.db.query('SELECT * FROM labels WHERE id = ?', [labelId]);
+
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
+    if (bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId,
+        eventType: 'board.label_updated',
+        actorId: req.user.id,
+        data: { boardName: bRes.name, labelName: updatedLabel.name }
+      });
+    }
+
+    return res.json({ label: updatedLabel });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/boards/:id/labels/:labelId - Delete board label
+router.delete('/:id/labels/:labelId', requireAuth, requirePermission('label.delete'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  const labelId = Number(req.params.labelId);
+
+  try {
+    const [existing] = await req.db.query('SELECT * FROM labels WHERE id = ? AND board_id = ?', [labelId, boardId]);
+    if (!existing) {
+      return res.status(404).json({ error: { message: 'Label not found', code: 'NOT_FOUND' } });
+    }
+
+    await req.db.execute('DELETE FROM card_labels WHERE label_id = ?', [labelId]);
+    await req.db.execute('DELETE FROM labels WHERE id = ?', [labelId]);
+
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
+    if (bRes) {
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        workspaceId: bRes.workspace_id,
+        boardId,
+        eventType: 'board.label_deleted',
+        actorId: req.user.id,
+        data: { boardName: bRes.name, labelName: existing.name }
+      });
+    }
+
+    return res.json({ message: 'Label deleted successfully' });
   } catch (err) {
     next(err);
   }

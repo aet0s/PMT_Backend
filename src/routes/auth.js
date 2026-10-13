@@ -142,7 +142,7 @@ function normalizeEmail(email) {
 
 const { getCookieOptions, getClearCookieOptions } = require('../utils/cookieOptions');
 
-const COOKIE_OPTIONS = getCookieOptions(15 * 60 * 1000); // 15 minutes
+const COOKIE_OPTIONS = getCookieOptions(5 * 24 * 60 * 60 * 1000); // 5 days
 const REFRESH_COOKIE_OPTIONS = getCookieOptions(30 * 24 * 60 * 60 * 1000); // 30 days
 
 // -------------------------------------------------------------
@@ -1328,7 +1328,24 @@ router.delete('/sessions/:id', requireAuth, async (req, res, next) => {
     }
 
     const sessionOwnerId = sessionRes[0].user_id;
-    if (sessionOwnerId !== req.user.id) {
+    if (sessionOwnerId === req.user.id) {
+      let wsId = req.workspaceId;
+      if (!wsId) {
+        const wsRes = await req.db.query(
+          'SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1',
+          [req.user.id]
+        );
+        wsId = wsRes[0]?.workspace_id;
+      }
+      if (wsId) {
+        const hasPerm = await userHasPermission(req.user.id, wsId, 'session.revoke_own', req.db);
+        if (!hasPerm) {
+          return res.status(403).json({
+            error: { message: 'You do not have permission to revoke sessions', code: 'PERMISSION_DENIED' }
+          });
+        }
+      }
+    } else {
       // Find workspaceId to check session.revoke_others
       let wsId = req.workspaceId;
       if (!wsId) {
@@ -1360,6 +1377,22 @@ router.delete('/sessions/:id', requireAuth, async (req, res, next) => {
 // -------------------------------------------------------------
 router.post('/sessions/revoke-others', requireAuth, async (req, res, next) => {
   try {
+    let wsId = req.workspaceId;
+    if (!wsId) {
+      const wsRes = await req.db.query(
+        'SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1',
+        [req.user.id]
+      );
+      wsId = wsRes[0]?.workspace_id;
+    }
+    if (wsId) {
+      const hasPerm = await userHasPermission(req.user.id, wsId, 'session.revoke_own', req.db);
+      if (!hasPerm) {
+        return res.status(403).json({
+          error: { message: 'You do not have permission to revoke sessions', code: 'PERMISSION_DENIED' }
+        });
+      }
+    }
     await revokeAllExceptCurrent(req.db, req.user.id, req.user.sessionId, req);
     return res.json({ message: 'All other sessions have been revoked' });
   } catch (err) {
@@ -1568,7 +1601,7 @@ router.get('/activity', requireAuth, async (req, res, next) => {
         const adminCheck = await req.db.query(
           `SELECT 1 FROM workspace_members wm
            JOIN roles r ON wm.role_id = r.id
-           WHERE wm.user_id = ? AND r.name IN ('Owner', 'Super Admin', 'Admin')
+           WHERE wm.user_id = ? AND r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0)
            LIMIT 1`,
           [req.user.id]
         );

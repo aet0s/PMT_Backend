@@ -156,18 +156,24 @@ ON DUPLICATE KEY UPDATE
   scope = VALUES(scope),
   dangerous = VALUES(dangerous);
 
--- 3. Ensure 6 system roles exist
-INSERT IGNORE INTO roles (name, is_system, is_editable, workspace_id) VALUES
-  ('Owner', 1, 0, NULL),
-  ('Admin', 1, 1, NULL),
-  ('Project Manager', 1, 1, NULL),
-  ('Team Member', 1, 1, NULL),
-  ('Viewer', 1, 1, NULL),
-  ('Guest', 1, 1, NULL);
-
 -- Legacy role migration: align existing Super Admin and Manager
-UPDATE roles SET name = 'Owner', is_editable = 0 WHERE name = 'Super Admin' AND is_system = 1 AND workspace_id IS NULL;
-UPDATE roles SET name = 'Project Manager' WHERE name = 'Manager' AND is_system = 1 AND workspace_id IS NULL;
+UPDATE roles SET name = 'Owner', is_editable = 0, rank = 100 WHERE name = 'Super Admin' AND is_system = 1 AND workspace_id IS NULL;
+UPDATE roles SET name = 'Project Manager', rank = 60 WHERE name = 'Manager' AND is_system = 1 AND workspace_id IS NULL;
+
+-- 3. Ensure 6 system roles exist (only insert if not already present)
+INSERT INTO roles (name, is_system, is_editable, rank, workspace_id)
+SELECT val.name, val.is_system, val.is_editable, val.rank, NULL
+FROM (
+  SELECT 'Owner' as name, 1 as is_system, 0 as is_editable, 100 as rank UNION ALL
+  SELECT 'Admin', 1, 1, 80 UNION ALL
+  SELECT 'Project Manager', 1, 1, 60 UNION ALL
+  SELECT 'Team Member', 1, 1, 40 UNION ALL
+  SELECT 'Viewer', 1, 1, 20 UNION ALL
+  SELECT 'Guest', 1, 1, 10
+) val
+WHERE NOT EXISTS (
+  SELECT 1 FROM roles r WHERE r.name = val.name AND r.workspace_id IS NULL
+);
 
 -- 4. Seed role permissions for all 6 system roles
 

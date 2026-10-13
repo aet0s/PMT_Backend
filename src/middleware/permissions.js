@@ -429,7 +429,7 @@ async function countOwners(workspaceId, dbInstance = null) {
     `SELECT COUNT(*) as count
      FROM workspace_members wm
      JOIN roles r ON wm.role_id = r.id
-     WHERE wm.workspace_id = ? AND r.name IN ('Owner', 'Super Admin')`,
+     WHERE wm.workspace_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`,
     [workspaceId]
   );
   return Number(res[0]?.count || 0);

@@ -111,6 +111,30 @@ async function getFullCard(cardId, dbInstance = null) {
     );
     card.attachments = attRes;
 
+    try {
+      const boardRes = await db.query(
+        'SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+        [cardId]
+      );
+      if (boardRes.length > 0) {
+        const boardId = boardRes[0].board_id;
+        const countRes = await db.query(
+          `SELECT COUNT(*) as task_num 
+           FROM cards c2 
+           JOIN lists l2 ON c2.list_id = l2.id 
+           WHERE l2.board_id = ? 
+             AND c2.is_archived = 0
+             AND (c2.created_at < ? OR (c2.created_at = ? AND c2.id <= ?))`,
+          [boardId, card.created_at, card.created_at, card.id]
+        );
+        card.task_number = Math.max(1, Number(countRes[0]?.task_num) || 1);
+      } else {
+        card.task_number = 1;
+      }
+    } catch (countErr) {
+      card.task_number = 1;
+    }
+
     return card;
   } catch (err) {
     console.error('Failed to fetch full card:', err);
@@ -1233,6 +1257,59 @@ router.post('/:id/comments', requireAuth, requirePermission('comment.create'), a
     await processOutbox(req.db, req.tenant?.id);
 
     return res.status(201).json({ comment: { ...comment, author_name } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/cards/comments/:id
+router.patch('/comments/:id', requireAuth, async (req, res, next) => {
+  const commentId = Number(req.params.id);
+  const { body } = req.body;
+  const originId = req.headers['x-origin-id'];
+
+  if (!body || !body.trim()) {
+    return res.status(400).json({ error: { message: 'Comment text cannot be empty', code: 'BAD_REQUEST' } });
+  }
+
+  try {
+    const comRes = await req.db.query(
+      `SELECT co.id, co.user_id, co.card_id, l.board_id, b.workspace_id 
+       FROM comments co 
+       JOIN cards c ON co.card_id = c.id 
+       JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE co.id = ?`,
+      [commentId]
+    );
+    if (comRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Comment not found', code: 'NOT_FOUND' } });
+    }
+    const com = comRes[0];
+    const cardId = com.card_id;
+    const boardId = com.board_id;
+    const workspaceId = com.workspace_id;
+
+    if (com.user_id !== req.user.id) {
+      return res.status(403).json({ error: { message: 'Only author can edit comment', code: 'PERMISSION_DENIED' } });
+    }
+
+    const hasEditOwn = await userHasPermission(req.user.id, workspaceId, 'comment.edit_own', req.db, boardId);
+    if (!hasEditOwn) {
+      return res.status(403).json({ error: { message: 'Permission denied to edit comment', code: 'PERMISSION_DENIED' } });
+    }
+
+    const cleanBody = sanitizeDescription(body.trim());
+    await req.db.execute('UPDATE comments SET body = ? WHERE id = ?', [cleanBody, commentId]);
+
+    const [updatedComment] = await req.db.query('SELECT * FROM comments WHERE id = ?', [commentId]);
+
+    if (cardId) {
+      const fullCard = await getFullCard(cardId, req.db);
+      broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+    }
+
+    return res.json({ comment: updatedComment });
   } catch (err) {
     next(err);
   }

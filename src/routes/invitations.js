@@ -222,7 +222,7 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   let resolvedRoleName = 'Team Member';
   if (resolvedRoleId) {
     const roleRes = await db.query(
-      'SELECT id, name FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
+      'SELECT id, name, is_system, is_editable, COALESCE(rank, 30) as rank FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
       [resolvedRoleId, workspaceId]
     );
     if (roleRes.length === 0) {
@@ -231,7 +231,8 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       err.code = 'BAD_REQUEST';
       throw err;
     }
-    if (isOwnerRole(roleRes[0].name)) {
+    const selRole = roleRes[0];
+    if (selRole.is_system === 1 && (selRole.is_editable === 0 || selRole.rank >= 100)) {
       const err = new Error('Cannot invite a member with Owner role');
       err.status = 403;
       err.code = 'FORBIDDEN';
@@ -250,6 +251,25 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
     'SELECT id, name, email FROM users WHERE email = ?',
     [normalizedEmail]
   );
+  if (existingUserRes.length > 0) {
+    const err = new Error('This user is already a member of the company. You can assign workspaces and boards directly from the Members menu.');
+    err.status = 400;
+    err.code = 'USER_ALREADY_MEMBER';
+    throw err;
+  }
+
+  // Enforce single active invitation per email across company
+  const anyExistingInvite = await db.query(
+    "SELECT id, workspace_id, token, expires_at FROM pending_invitations WHERE email = ? AND status = 'pending'",
+    [normalizedEmail]
+  );
+  const activePending = anyExistingInvite.find((inv) => !inv.expires_at || new Date(inv.expires_at) > new Date());
+  if (activePending) {
+    const err = new Error('An invitation has already been sent to this email address. Only one active invitation can be sent per email.');
+    err.status = 409;
+    err.code = 'INVITATION_ALREADY_EXISTS';
+    throw err;
+  }
 
   let token;
   let invitationId;
@@ -258,28 +278,13 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   const rawToken = crypto.randomBytes(20).toString('hex');
   const signedToken = signInviteToken(rawToken, tenantSlug);
 
-  const existingInvite = await db.query(
-    "SELECT id, token FROM pending_invitations WHERE email = ? AND workspace_id = ? AND status = 'pending'",
-    [normalizedEmail, workspaceId]
+  token = signedToken;
+  const insRes = await db.execute(
+    `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, role_id, status, expires_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+    [normalizedEmail, workspaceId, user.id, token, resolvedRoleId, expiresAt]
   );
-
-  if (existingInvite.length > 0) {
-    invitationId = existingInvite[0].id;
-    token = signedToken;
-    await db.execute(
-      'UPDATE pending_invitations SET token = ?, role_id = ?, expires_at = ?, created_at = CURRENT_TIMESTAMP(3) WHERE id = ?',
-      [token, resolvedRoleId, expiresAt, invitationId]
-    );
-    await db.execute('DELETE FROM invitation_boards WHERE invitation_id = ?', [invitationId]);
-  } else {
-    token = signedToken;
-    const insRes = await db.execute(
-      `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, role_id, status, expires_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-      [normalizedEmail, workspaceId, user.id, token, resolvedRoleId, expiresAt]
-    );
-    invitationId = insRes.insertId;
-  }
+  invitationId = insRes.insertId;
 
   for (const bId of boardIds) {
     await db.execute(

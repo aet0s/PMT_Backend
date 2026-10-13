@@ -51,6 +51,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces',                                             { permission: 'workspace.view',             scope: 'company' }],
   ['POST /api/workspaces',                                            { permission: 'workspace.create',           scope: 'company' }],
   ['PATCH /api/workspaces/:id',                                       { permission: 'workspace.edit',             scope: 'company', note: 'fine-grained: workspace.edit, workspace.archive' }],
+  ['POST /api/workspaces/:id/auto-archive',                           { permission: 'task.archive',                scope: 'company', note: 'auto-archive completed cards' }],
   ['DELETE /api/workspaces/:id',                                      { permission: 'workspace.delete',           scope: 'company' }],
   // my-permissions is self-evaluation — no workspace RBAC key; auth only
   ['GET /api/workspaces/:id/my-permissions',                          { selfScoped: 'User reads their own effective permissions for a workspace', scope: 'company' }],
@@ -60,13 +61,22 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/workspaces/:id/members',                                { permission: 'member.invite',              scope: 'company' }],
   ['POST /api/workspaces/:id/invitations',                            { permission: 'member.invite',              scope: 'company' }],
   ['GET /api/workspaces/:id/invitations',                             { permission: 'member.view',                scope: 'company' }],
-  ['GET /api/workspaces/:id/activity',                                { permission: 'workspace.view',             scope: 'company' }],
+  ['GET /api/workspaces/:id/activity',                                { permission: 'activity.view',              scope: 'company' }],
   ['GET /api/workspaces/:id/reports',                                 { selfScoped: 'report.view — scoped to workspace members', scope: 'company' }],
   ['GET /api/workspaces/:id/archived',                                { permission: 'archive.view',               scope: 'company' }],
   ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company', note: 'accepts member.assign_role or role.assign' }],
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-password',{ permission: 'member.reset_password',      scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-2fa',     { permission: 'member.reset_2fa',           scope: 'company' }],
+  ['GET /api/workspaces/:id/company-members',                         { permission: 'member.view',                scope: 'company' }],
+  ['PATCH /api/workspaces/:id/company-members/:userId/role',          { permission: 'member.assign_role',         scope: 'company' }],
+  ['POST /api/workspaces/:id/company-members/:userId/workspaces',     { permission: 'member.invite',              scope: 'company' }],
+  ['POST /api/workspaces/:id/company-members/:userId/boards',         { permission: 'member.invite',              scope: 'company' }],
+  ['DELETE /api/workspaces/:id/company-members/:userId',              { permission: 'member.remove',              scope: 'company' }],
+  ['GET /api/workspaces/:id/issues',                                  { permission: 'task.view',                  scope: 'company' }],
+  ['GET /api/workspaces/:id/audit',                                   { permission: 'audit.view',                 scope: 'company' }],
+  ['GET /api/workspaces/:id/audit/export',                            { permission: 'audit.export',               scope: 'company' }],
+  ['GET /api/workspaces/:id/search',                                  { permission: 'search.use',                 scope: 'company' }],
 
   // ─── Roles ────────────────────────────────────────────────────────────────
   ['PATCH /api/roles/:id',   { permission: 'role.edit',   scope: 'company', note: 'enforced inline in handler' }],
@@ -88,6 +98,8 @@ const ROUTE_PERMISSIONS = new Map([
   ['DELETE /api/boards/:id/members/:userId', { permission: 'project.manage_members',scope: 'project' }],
   ['GET /api/boards/:id/labels',             { permission: 'label.view',            scope: 'project', note: 'requires label.view or project.view' }],
   ['POST /api/boards/:id/labels',            { permission: 'label.create',          scope: 'project' }],
+  ['PATCH /api/boards/:id/labels/:labelId',   { permission: 'label.edit',            scope: 'project' }],
+  ['DELETE /api/boards/:id/labels/:labelId',  { permission: 'label.delete',          scope: 'project' }],
 
   // ─── Lists ────────────────────────────────────────────────────────────────
   ['POST /api/lists',        { permission: 'list.create', scope: 'project' }],
@@ -113,6 +125,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/attachments/link',  { permission: 'attachment.upload',     scope: 'project' }],
   ['DELETE /api/cards/attachments/:id',     { permission: 'attachment.delete_own', scope: 'project', note: 'enforces attachment.delete_own or attachment.delete_any' }],
   ['POST /api/cards/:id/comments',          { permission: 'comment.create',        scope: 'project' }],
+  ['PATCH /api/cards/comments/:id',         { permission: 'comment.edit_own',      scope: 'project' }],
   ['DELETE /api/cards/comments/:id',        { permission: 'comment.delete_own',    scope: 'project', note: 'enforces comment.delete_own or comment.delete_any' }],
 
   // ─── Checklists ───────────────────────────────────────────────────────────
@@ -168,8 +181,9 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/files/avatar',  { selfScoped: 'User uploads their own avatar',                                                                           scope: 'company' }],
   ['GET /api/files/:tenantId/*', { selfScoped: 'file.view — tenant isolation + inline per-attachment authorization in handler',                        scope: 'project' }],
 
-  // ─── System Health ────────────────────────────────────────────────────────
+  // ─── System Health & Time ─────────────────────────────────────────────────
   ['GET /api/health', { publicReason: 'Public infrastructure health check', scope: 'company' }],
+  ['GET /api/time',   { publicReason: 'Public server time and IST timezone synchronization', scope: 'company' }],
 
   // ─── Test / Dev Only Endpoints ────────────────────────────────────────────
   ['POST /api/dev/reset-rate-limit', { publicReason: 'Test environment rate limit reset helper', scope: 'company', testOnly: true }],

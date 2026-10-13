@@ -35,8 +35,7 @@ function getReadTimeAccessFilter(userId) {
         LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
         WHERE b.id = n.board_id
           AND (
-            r.name IN ('Owner', 'Super Admin', 'Admin')
-            OR r.name = 'Viewer'
+            (r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0 OR r.rank = 20))
             OR EXISTS (
               SELECT 1 FROM role_permissions rp
               JOIN permissions p ON rp.permission_id = p.id

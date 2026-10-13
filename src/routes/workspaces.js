@@ -16,9 +16,17 @@ const { notify } = require('../services/notify');
 const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
-const { canResetTarget, isOwnerRole, getRoleRank } = require('../utils/roleRank');
+const { canResetTarget, isOwnerRole, getRoleRank, isReservedRoleName } = require('../utils/roleRank');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { createInvitationHelper } = require('./invitations');
+const {
+  PERMISSIONS,
+  LEGACY_PERMISSION_ALIASES,
+  getTransitivePrerequisites
+} = require('../rbac/registry');
+
+const validPermMap = new Map();
+PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
 
 const router = express.Router();
 
@@ -28,13 +36,16 @@ const createWorkspaceSchema = z.object({
 
 const updateWorkspaceSchema = z.object({
   name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
+  description: z.string().transform((v) => sanitizePlain(v)).optional(),
+  settings: z.any().optional(),
   is_archived: z.boolean().optional(),
   require_2fa_for_admins: z.boolean().optional()
 });
 
 const createRoleSchema = z.object({
   name: z.string().min(1, 'Role name is required').transform((v) => sanitizePlain(v)),
-  permission_keys: z.array(z.string()).default([])
+  permission_keys: z.array(z.string()).optional().default([]),
+  clone_role_id: z.number().int().positive().optional()
 });
 
 const assignRoleSchema = z.object({
@@ -108,8 +119,44 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
     }
 
+    // Check if current user is a Company Owner or Company Admin
+    const companyAdminRows = await req.db.query(
+      `SELECT r.name as role_name, r.id as role_id, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ? AND r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0)
+       ORDER BY (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100) DESC
+       LIMIT 1`,
+      [req.user.id]
+    );
+
+    if (companyAdminRows.length > 0) {
+      const adminRoleName = (companyAdminRows[0].rank >= 100 || companyAdminRows[0].is_editable === 0) ? 'Owner' : 'Admin';
+      const roleRow = await req.db.query(
+        'SELECT id FROM roles WHERE is_system = 1 AND name = ? AND workspace_id IS NULL LIMIT 1',
+        [adminRoleName]
+      );
+      const adminRoleId = roleRow[0]?.id;
+
+      // Auto-ensure Company Owner / Admin is a member of all unarchived workspaces in this company
+      const unassignedWorkspaces = await req.db.query(
+        `SELECT w.id FROM workspaces w
+         LEFT JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
+         WHERE w.is_archived = 0 AND wm.user_id IS NULL`,
+        [req.user.id]
+      );
+
+      for (const uWs of unassignedWorkspaces) {
+        await req.db.execute(
+          `INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id)
+           VALUES (?, ?, ?, ?)`,
+          [uWs.id, req.user.id, adminRoleName, adminRoleId]
+        );
+      }
+    }
+
     const wsRes = await req.db.query(
-      `SELECT w.id, w.name, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
+      `SELECT w.id, w.name, w.description, w.settings, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
        LEFT JOIN roles r ON wm.role_id = r.id
@@ -117,16 +164,44 @@ router.get('/', requireAuth, async (req, res, next) => {
        ORDER BY w.id ASC`,
       [req.user.id]
     );
-    return res.json({ workspaces: wsRes });
+    const workspacesWithParsedSettings = wsRes.map((w) => {
+      let parsed = w.settings;
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch {}
+      }
+      return { ...w, settings: parsed };
+    });
+    return res.json({ workspaces: workspacesWithParsedSettings });
   } catch (err) {
     next(err);
   }
 });
 
-// POST /api/workspaces - Create new workspace and assign Super Admin to creator
+// POST /api/workspaces - Create new workspace and ensure Admin/Owner visibility
 router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, next) => {
   const name = sanitizePlain(req.body.name);
   try {
+    // Check permission to create workspace:
+    // User must have workspace.create in at least one workspace or be an Owner/Admin
+    const canCreateRes = await req.db.query(
+      `SELECT 1
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       LEFT JOIN role_permissions rp ON r.id = rp.role_id
+       LEFT JOIN permissions p ON rp.permission_id = p.id
+       WHERE wm.user_id = ?
+         AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)) OR p.key = 'workspace.create')
+       LIMIT 1`,
+      [req.user.id]
+    );
+
+    const existingWsCount = (await req.db.query('SELECT COUNT(*) as count FROM workspaces'))[0]?.count || 0;
+    if (existingWsCount > 0 && canCreateRes.length === 0) {
+      return res.status(403).json({
+        error: { message: 'You do not have permission to create workspaces', code: 'PERMISSION_DENIED' }
+      });
+    }
+
     const wsExec = await req.db.execute(
       'INSERT INTO workspaces (name) VALUES (?)',
       [name]
@@ -134,19 +209,86 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
     const workspaceId = wsExec.insertId;
     const [workspace] = await req.db.query('SELECT id, name, created_at FROM workspaces WHERE id = ?', [workspaceId]);
 
-    // Find Owner/Super Admin system role ID
-    const ownerRoleRes = await req.db.query(
-      "SELECT id, name FROM roles WHERE is_system = 1 AND name IN ('Owner', 'Super Admin') AND workspace_id IS NULL ORDER BY (name = 'Owner') DESC LIMIT 1"
+    // Fetch system role IDs
+    const sysRoles = await req.db.query(
+      "SELECT id, name FROM roles WHERE is_system = 1 AND workspace_id IS NULL"
     );
-    const ownerRoleId = ownerRoleRes[0]?.id;
-    const ownerRoleName = ownerRoleRes[0]?.name || 'Owner';
+    const roleIdMap = {};
+    sysRoles.forEach((r) => { roleIdMap[r.name] = r.id; });
+    const ownerRoleId = roleIdMap['Owner'] || roleIdMap['Super Admin'];
+    const adminRoleId = roleIdMap['Admin'];
+    const pmRoleId = roleIdMap['Project Manager'];
 
-    await req.db.execute(
-      'INSERT INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
-      [workspace.id, req.user.id, ownerRoleName, ownerRoleId]
+    // Discover all existing Company Owners and Company Admins in this tenant
+    const companyAdmins = await req.db.query(
+      `SELECT DISTINCT wm.user_id, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0)`
     );
 
-    return res.status(201).json({ workspace: { ...workspace, role: ownerRoleName, role_id: ownerRoleId } });
+    const adminUserRoles = new Map(); // userId -> 'Owner' or 'Admin'
+    for (const row of companyAdmins) {
+      if (row.is_editable === 0 || row.rank >= 100) {
+        adminUserRoles.set(row.user_id, 'Owner');
+      } else if (!adminUserRoles.has(row.user_id) && row.rank >= 80) {
+        adminUserRoles.set(row.user_id, 'Admin');
+      }
+    }
+
+    // Automatically enrol Company Owners as Owner and Company Admins as Admin in the new workspace
+    for (const [adminUserId, rName] of adminUserRoles.entries()) {
+      const rId = rName === 'Owner' ? ownerRoleId : adminRoleId;
+      await req.db.execute(
+        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+        [workspaceId, adminUserId, rName, rId]
+      );
+    }
+
+    // Determine the creator's role in the new workspace
+    let creatorRoleName = adminUserRoles.get(req.user.id);
+    let creatorRoleId = creatorRoleName === 'Owner' ? ownerRoleId : adminRoleId;
+
+    if (!creatorRoleName) {
+      if (adminUserRoles.size === 0) {
+        // Initial first workspace for brand new tenant
+        creatorRoleName = 'Owner';
+        creatorRoleId = ownerRoleId;
+      } else {
+        // Creator is a Project Manager / team member with workspace.create permission
+        const userCurrentRoleRes = await req.db.query(
+          `SELECT r.name, r.id FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.user_id = ? ORDER BY r.id ASC LIMIT 1`,
+          [req.user.id]
+        );
+        creatorRoleName = userCurrentRoleRes[0]?.name || 'Project Manager';
+        creatorRoleId = roleIdMap[creatorRoleName] || pmRoleId;
+      }
+
+      await req.db.execute(
+        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+        [workspaceId, req.user.id, creatorRoleName, creatorRoleId]
+      );
+    }
+
+    // Real-time notification to all Company Owners and Admins
+    for (const [adminUserId] of adminUserRoles.entries()) {
+      sendUserEvent(adminUserId, 'workspace:created', { workspace: { ...workspace, role: adminUserRoles.get(adminUserId) } }, req.tenant?.id);
+      sendUserEvent(adminUserId, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
+    }
+    if (!adminUserRoles.has(req.user.id)) {
+      sendUserEvent(req.user.id, 'workspace:created', { workspace: { ...workspace, role: creatorRoleName } }, req.tenant?.id);
+      sendUserEvent(req.user.id, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
+    }
+
+    await logAuthEvent(req.db, {
+      userId: req.user.id,
+      email: req.user.email,
+      eventType: 'workspace.created',
+      req,
+      metadata: { workspace_id: workspaceId, name }
+    });
+
+    return res.status(201).json({ workspace: { ...workspace, role: creatorRoleName, role_id: creatorRoleId } });
   } catch (err) {
     next(err);
   }
@@ -155,11 +297,11 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
 // PATCH /api/workspaces/:id - Update workspace
 router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
-  const { name, is_archived, require_2fa_for_admins } = req.body;
+  const { name, description, settings, is_archived, require_2fa_for_admins } = req.body;
 
   try {
     const isArchive = is_archived !== undefined;
-    const isEdit = name !== undefined || require_2fa_for_admins !== undefined;
+    const isEdit = name !== undefined || description !== undefined || settings !== undefined || require_2fa_for_admins !== undefined;
 
     if (isArchive) {
       const canArchive = await userHasPermission(req.user.id, workspaceId, 'workspace.archive', req.db);
@@ -180,6 +322,14 @@ router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, r
     if (name !== undefined) {
       updates.push('name = ?');
       values.push(sanitizePlain(name));
+    }
+    if (description !== undefined) {
+      updates.push('description = ?');
+      values.push(sanitizePlain(description));
+    }
+    if (settings !== undefined) {
+      updates.push('settings = ?');
+      values.push(typeof settings === 'object' && settings !== null ? JSON.stringify(settings) : settings);
     }
     if (is_archived !== undefined) {
       updates.push('is_archived = ?');
@@ -204,10 +354,71 @@ router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, r
       return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
     }
 
-    const [updatedWs] = await req.db.query('SELECT id, name, is_archived, require_2fa_for_admins, created_at FROM workspaces WHERE id = ?', [workspaceId]);
-    const wsPayload = { ...updatedWs, require_2fa_for_admins: !!updatedWs.require_2fa_for_admins };
+    const [updatedWs] = await req.db.query('SELECT id, name, description, settings, is_archived, require_2fa_for_admins, created_at FROM workspaces WHERE id = ?', [workspaceId]);
+    let parsedSettings = updatedWs.settings;
+    if (typeof parsedSettings === 'string') {
+      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+    }
+    const wsPayload = {
+      ...updatedWs,
+      settings: parsedSettings,
+      require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
+    };
     broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
     return res.json({ workspace: wsPayload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/auto-archive - Auto-archive completed tasks older than N days
+router.post('/:id/auto-archive', requireAuth, async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const days = req.body.days !== undefined ? Number(req.body.days) : 7;
+
+  try {
+    const canArchive = (await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db)) ||
+                       (await userHasPermission(req.user.id, workspaceId, 'workspace.edit_settings', req.db));
+    if (!canArchive) {
+      return res.status(403).json({ error: { message: 'Permission denied to archive tasks', code: 'PERMISSION_DENIED' } });
+    }
+
+    let intervalClause = '';
+    const params = [workspaceId];
+    if (days > 0) {
+      intervalClause = 'AND c.created_at < DATE_SUB(NOW(), INTERVAL ? DAY)';
+      params.push(days);
+    }
+
+    const cardsToArchive = await req.db.query(
+      `SELECT c.id, c.title, l.board_id
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ?
+         AND c.is_complete = 1
+         AND c.is_archived = 0
+         ${intervalClause}`,
+      params
+    );
+
+    if (cardsToArchive.length > 0) {
+      const cardIds = cardsToArchive.map((c) => c.id);
+      await req.db.query(
+        `UPDATE cards SET is_archived = 1 WHERE id IN (${cardIds.map(() => '?').join(',')})`,
+        cardIds
+      );
+
+      for (const card of cardsToArchive) {
+        broadcastWorkspaceEvent(workspaceId, 'card:archived', { cardId: card.id, boardId: card.board_id }, req.headers['x-origin-id'], req.tenant?.id);
+      }
+    }
+
+    return res.json({
+      success: true,
+      archived_count: cardsToArchive.length,
+      days
+    });
   } catch (err) {
     next(err);
   }
@@ -292,14 +503,72 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
 // POST /api/workspaces/:id/roles - Create custom role
 router.post('/:id/roles', requireAuth, requirePermission('role.create'), validate(createRoleSchema), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
-  const { name, permission_keys } = req.body;
+  const { name, permission_keys, clone_role_id } = req.body;
 
   try {
+    const cleanName = name.trim();
+    if (isReservedRoleName(cleanName)) {
+      return res.status(400).json({
+        error: { message: 'Role name is reserved for system roles', code: 'RESERVED_ROLE_NAME' }
+      });
+    }
+
+    const dupCheck = await req.db.query(
+      'SELECT id FROM roles WHERE workspace_id = ? AND LOWER(name) = LOWER(?) LIMIT 1',
+      [workspaceId, cleanName]
+    );
+    if (dupCheck.length > 0) {
+      return res.status(400).json({
+        error: { message: 'A role with this name already exists in this workspace', code: 'DUPLICATE_ROLE_NAME' }
+      });
+    }
+
+    let rawKeys = Array.isArray(permission_keys) ? [...permission_keys] : [];
+    if (clone_role_id) {
+      const clonePermsRes = await req.db.query(
+        `SELECT p.key FROM role_permissions rp
+         JOIN permissions p ON rp.permission_id = p.id
+         WHERE rp.role_id = ?`,
+        [clone_role_id]
+      );
+      const cloneKeys = clonePermsRes.map((r) => r.key);
+      rawKeys = Array.from(new Set([...cloneKeys, ...rawKeys]));
+    }
+
+    // Validate unknown and planned keys
+    for (const rawKey of rawKeys) {
+      const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
+      const meta = validPermMap.get(canonical);
+      if (!meta) {
+        return res.status(400).json({
+          error: { message: `Unknown permission key: ${rawKey}`, code: 'UNKNOWN_PERMISSION_KEY' }
+        });
+      }
+      if (meta.planned) {
+        return res.status(400).json({
+          error: { message: `Planned permission key cannot be assigned: ${rawKey}`, code: 'PLANNED_PERMISSION_KEY' }
+        });
+      }
+    }
+
+    // Auto-include transitive prerequisites
+    const requestedKeys = new Set(
+      rawKeys.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
+    );
+    for (const k of Array.from(requestedKeys)) {
+      const prereqs = getTransitivePrerequisites(k);
+      prereqs.forEach((p) => requestedKeys.add(p));
+    }
+    const canonicalKeys = Array.from(requestedKeys);
+
     // Privilege escalation check: caller cannot grant permissions they do not possess
     const callerPerms = await getUserPermissions(req.user.id, workspaceId, req.db);
-    if (!isOwnerRole(callerPerms.role?.name)) {
-      const callerPermSet = new Set(callerPerms.permissions);
-      const unauthorizedPerm = (permission_keys || []).find((k) => !callerPermSet.has(k));
+    const callerIsOwner = callerPerms.role?.is_system === 1 && (callerPerms.role?.is_editable === 0 || callerPerms.role?.rank >= 100);
+    if (!callerIsOwner) {
+      const callerPermSet = new Set(
+        callerPerms.permissions.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
+      );
+      const unauthorizedPerm = canonicalKeys.find((k) => !callerPermSet.has(k));
       if (unauthorizedPerm) {
         return res.status(403).json({
           error: {
@@ -313,7 +582,7 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
     const roleExec = await req.db.execute(
       `INSERT INTO roles (workspace_id, name, is_system, is_editable, created_by_user_id)
        VALUES (?, ?, 0, 1, ?)`,
-      [workspaceId, name.trim(), req.user.id]
+      [workspaceId, cleanName, req.user.id]
     );
 
     const roleId = roleExec.insertId;
@@ -322,10 +591,10 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
       [roleId]
     );
 
-    if (Array.isArray(permission_keys) && permission_keys.length > 0) {
+    if (canonicalKeys.length > 0) {
       const permsRes = await req.db.query(
         'SELECT id, `key` FROM permissions WHERE `key` IN (?)',
-        [permission_keys]
+        [canonicalKeys]
       );
 
       for (const p of permsRes) {
@@ -339,7 +608,7 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
     const createdRole = {
       ...role,
       member_count: 0,
-      permission_keys: permission_keys || []
+      permission_keys: canonicalKeys
     };
     broadcastWorkspaceEvent(workspaceId, 'workspace:role_created', { role: createdRole }, req.headers['x-origin-id'], req.tenant?.id);
 
@@ -351,8 +620,8 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
       metadata: {
         workspace_id: workspaceId,
         role_id: roleId,
-        role_name: name.trim(),
-        permission_count: (permission_keys || []).length
+        role_name: cleanName,
+        permission_count: canonicalKeys.length
       }
     });
 
@@ -468,7 +737,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
 
     // 1. Fetch current role of target user
     const targetMemberRes = await req.db.query(
-      `SELECT r.id as role_id, r.name as role_name
+      `SELECT r.id as role_id, r.name as role_name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
        FROM workspace_members wm
        JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
@@ -479,23 +748,25 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
       return res.status(404).json({ error: { message: 'Workspace member not found', code: 'NOT_FOUND' } });
     }
 
-    const currentRoleName = targetMemberRes[0].role_name;
+    const targetRole = targetMemberRes[0];
+    const targetIsOwner = isOwnerRole(targetRole);
+    const targetRank = getRoleRank(targetRole);
 
     // Fetch caller role & ranks
     const callerMemberRes = await req.db.query(
-      `SELECT r.id as role_id, r.name as role_name
+      `SELECT r.id as role_id, r.name as role_name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
        FROM workspace_members wm
        JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, req.user.id]
     );
-    const callerRoleName = callerMemberRes[0]?.role_name || 'Team Member';
-    const callerRank = getRoleRank(callerRoleName);
-    const targetRank = getRoleRank(currentRoleName);
+    const callerRole = callerMemberRes[0] || { role_name: 'Team Member', is_system: 0, is_editable: 1, rank: 30 };
+    const callerIsOwner = isOwnerRole(callerRole);
+    const callerRank = getRoleRank(callerRole);
 
     // Rule: Owner role is locked and cannot be changed by non-owners
-    if (isOwnerRole(currentRoleName)) {
-      if (!isOwnerRole(callerRoleName)) {
+    if (targetIsOwner) {
+      if (!callerIsOwner) {
         return res.status(403).json({
           error: {
             message: 'Only an Owner may modify the Owner role',
@@ -513,7 +784,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
 
     // 2. Fetch new role details
     const newRoleRes = await req.db.query(
-      'SELECT id, name, is_system FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
+      'SELECT id, name, is_system, is_editable, COALESCE(rank, 30) as rank FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)',
       [role_id, workspaceId]
     );
 
@@ -522,20 +793,21 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     }
 
     const newRole = newRoleRes[0];
-    const newRank = getRoleRank(newRole.name);
+    const newRoleIsOwner = isOwnerRole(newRole);
+    const newRank = getRoleRank(newRole);
 
-    // Anti-escalation Rule 4: Cannot assign a role with higher rank than caller's own rank
-    if (!isOwnerRole(callerRoleName) && newRank > callerRank) {
+    // Anti-escalation Rule 4: Cannot assign a role with higher or equal rank than caller's own rank
+    if (!callerIsOwner && newRank >= callerRank) {
       return res.status(403).json({
         error: {
-          message: 'Cannot assign a role with higher rank than your own',
+          message: 'Cannot assign a role with equal or higher rank than your own',
           code: 'PRIVILEGE_ESCALATION_FORBIDDEN'
         }
       });
     }
 
     // Only Owner may assign Owner role
-    if (isOwnerRole(newRole.name) && !isOwnerRole(callerRoleName)) {
+    if (newRoleIsOwner && !callerIsOwner) {
       return res.status(403).json({
         error: {
           message: 'Only an Owner may assign the Owner role',
@@ -545,7 +817,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     }
 
     // Anti-escalation Rule 3: Cannot change the role of someone with equal or higher rank (unless caller is Owner)
-    if (!isOwnerRole(callerRoleName) && callerRank <= targetRank) {
+    if (!callerIsOwner && callerRank <= targetRank) {
       return res.status(403).json({
         error: {
           message: 'You cannot change the role of a member with equal or higher rank',
@@ -555,14 +827,15 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     }
 
     // Anti-escalation Rule 5: Cannot assign a role with permissions caller does not possess
-    if (!isOwnerRole(callerRoleName)) {
+    if (!callerIsOwner) {
+      const { LEGACY_PERMISSION_ALIASES } = require('../rbac/registry');
       const newRolePermsRes = await req.db.query(
         'SELECT p.key FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = ?',
         [newRole.id]
       );
-      const newRolePermKeys = newRolePermsRes.map((p) => p.key);
+      const newRolePermKeys = newRolePermsRes.map((p) => LEGACY_PERMISSION_ALIASES[p.key] || p.key);
       const callerPerms = await getUserPermissions(req.user.id, workspaceId, req.db);
-      const callerPermSet = new Set(callerPerms.permissions);
+      const callerPermSet = new Set(callerPerms.permissions.map((k) => LEGACY_PERMISSION_ALIASES[k] || k));
       const unauthorizedPerm = newRolePermKeys.find((k) => !callerPermSet.has(k));
       if (unauthorizedPerm) {
         return res.status(403).json({
@@ -587,10 +860,10 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     );
     const oldBoardIds = oldBoardsRes.map((r) => r.board_id);
 
-    // Update member role_id
+    // Update member role_id and role name
     await req.db.execute(
-      'UPDATE workspace_members SET role_id = ? WHERE workspace_id = ? AND user_id = ?',
-      [role_id, workspaceId, targetUserId]
+      'UPDATE workspace_members SET role_id = ?, role = ? WHERE workspace_id = ? AND user_id = ?',
+      [role_id, newRole.name, workspaceId, targetUserId]
     );
 
     // Update board permissions if provided
@@ -684,8 +957,6 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
         },
         req.db
       );
-      // Revoke all sessions for target user so old permissions cannot be refreshed
-      await revokeAllSessions(req.db, targetUserId, 'ROLE_CHANGE', req);
     }
 
     broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', { workspaceId, targetUserId, roleId: role_id }, req.headers['x-origin-id'], req.tenant?.id);
@@ -784,7 +1055,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
     const ownedOtherWs = await req.db.query(
       `SELECT COUNT(*) as count FROM workspace_members wm 
        JOIN roles r ON wm.role_id = r.id 
-       WHERE wm.user_id = ? AND r.name IN ('Owner', 'Super Admin')`,
+       WHERE wm.user_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`,
       [targetUserId]
     );
 
@@ -1187,7 +1458,7 @@ router.get('/:id/archived', requireAuth, requirePermission('archive.view'), asyn
 });
 
 // GET /api/workspaces/:id/activity - Workspace Activity Feed with server-side pagination (20 per page)
-router.get('/:id/activity', requireAuth, requirePermission('workspace.view'), async (req, res, next) => {
+router.get('/:id/activity', requireAuth, requirePermission('activity.view'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(20, Math.max(1, parseInt(req.query.limit, 10) || 20)); // Exactly 20 per page default/max
@@ -1796,6 +2067,851 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       members_workload: membersWorkload,
       overdue_tasks_list: overdueTasksList,
       velocity: past7Days
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================================
+// COMPANY MEMBERS DIRECTORY & MANAGEMENT ENDPOINTS
+// ============================================================================
+
+// GET /api/workspaces/:id/company-members - Directory of all users, workspaces, boards, and pending invites
+router.get('/:id/company-members', requireAuth, requirePermission('member.view'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+
+  try {
+    const isMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    if (isMember.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
+    }
+
+    const hasViewPerm = await userHasPermission(req.user.id, workspaceId, 'member.view', req.db);
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: { message: 'Permission denied: member.view required', code: 'FORBIDDEN' } });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || '').trim().toLowerCase();
+    const filterWsId = req.query.workspace_id && req.query.workspace_id !== 'all' ? Number(req.query.workspace_id) : null;
+
+    let whereClauses = [];
+    let countParams = [];
+    let queryParams = [];
+
+    if (search) {
+      whereClauses.push('(LOWER(u.name) LIKE ? OR LOWER(u.email) LIKE ?)');
+      countParams.push(`%${search}%`, `%${search}%`);
+      queryParams.push(`%${search}%`, `%${search}%`);
+    }
+
+    if (filterWsId) {
+      whereClauses.push('EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = ? AND wm.user_id = u.id)');
+      countParams.push(filterWsId);
+      queryParams.push(filterWsId);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    // 1. Total count of matching users
+    const [countRow] = await req.db.query(
+      `SELECT COUNT(u.id) as total FROM users u ${whereSql}`,
+      countParams
+    );
+    const total = countRow?.total || 0;
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    // 2. Paginated users
+    const usersRes = await req.db.query(
+      `SELECT u.id, u.name, u.email, u.avatar_url, u.created_at
+       FROM users u
+       ${whereSql}
+       ORDER BY u.name ASC
+       LIMIT ? OFFSET ?`,
+      [...queryParams, limit, offset]
+    );
+
+    const userIds = usersRes.map((u) => u.id);
+
+    // 3. Workspace memberships for paginated users across unarchived workspaces
+    const wmRes = userIds.length > 0 ? await req.db.query(
+      `SELECT wm.user_id, wm.workspace_id, wm.role as role_name, wm.role_id,
+              w.name as workspace_name, r.name as resolved_role_name,
+              r.is_system, r.is_editable
+       FROM workspace_members wm
+       JOIN workspaces w ON wm.workspace_id = w.id
+       LEFT JOIN roles r ON wm.role_id = r.id
+       WHERE w.is_archived = 0 AND wm.user_id IN (?)
+       ORDER BY w.name ASC`,
+      [userIds]
+    ) : [];
+
+    // 4. Board memberships for paginated users across unarchived boards
+    const bmRes = userIds.length > 0 ? await req.db.query(
+      `SELECT bm.user_id, bm.board_id, bm.role,
+              b.name as board_name, b.workspace_id,
+              w.name as workspace_name
+       FROM board_members bm
+       JOIN boards b ON bm.board_id = b.id
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.is_archived = 0 AND w.is_archived = 0 AND bm.user_id IN (?)
+       ORDER BY b.name ASC`,
+      [userIds]
+    ) : [];
+
+    // 5. All active workspaces
+    const allWorkspaces = await req.db.query(
+      'SELECT id, name FROM workspaces WHERE is_archived = 0 ORDER BY name ASC'
+    );
+
+    // 6. All active boards
+    const allBoards = await req.db.query(
+      `SELECT b.id, b.name, b.workspace_id, w.name as workspace_name
+       FROM boards b
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.is_archived = 0 AND w.is_archived = 0
+       ORDER BY b.name ASC`
+    );
+
+    // 7. Available roles
+    const rolesRes = await req.db.query(
+      `SELECT id, name, is_system, is_editable
+       FROM roles
+       WHERE workspace_id = ? OR workspace_id IS NULL
+       ORDER BY is_system DESC, name ASC`,
+      [workspaceId]
+    );
+
+    // 8. Pending company invitations
+    const pendingInvitesRes = await req.db.query(
+      `SELECT pi.id, pi.email, pi.workspace_id, pi.token, pi.role_id, pi.status, pi.created_at, pi.expires_at,
+              w.name as workspace_name, r.name as role_name,
+              GROUP_CONCAT(ib.board_id) as board_ids_str
+       FROM pending_invitations pi
+       JOIN workspaces w ON pi.workspace_id = w.id
+       LEFT JOIN roles r ON pi.role_id = r.id
+       LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
+       WHERE pi.status = 'pending'
+       GROUP BY pi.id, pi.email, pi.workspace_id, pi.token, pi.role_id, pi.status, pi.created_at, pi.expires_at, w.name, r.name
+       ORDER BY pi.created_at DESC`
+    );
+
+    const boardMap = {};
+    allBoards.forEach((b) => {
+      boardMap[b.id] = b.name;
+    });
+
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+
+    const invitations = pendingInvitesRes.map((inv) => {
+      const bIds = inv.board_ids_str ? inv.board_ids_str.split(',').map(Number) : [];
+      return {
+        ...inv,
+        role_name: inv.role_name || 'Team Member',
+        board_ids: bIds,
+        board_names: bIds.map((id) => boardMap[id]).filter(Boolean),
+        invite_url: `${clientBase}/register?invite_token=${inv.token}&email=${encodeURIComponent(inv.email)}`
+      };
+    });
+
+    // Build user mapping
+    const userWsMap = {};
+    wmRes.forEach((row) => {
+      if (!userWsMap[row.user_id]) userWsMap[row.user_id] = [];
+      userWsMap[row.user_id].push({
+        id: row.workspace_id,
+        name: row.workspace_name,
+        role: row.resolved_role_name || row.role_name || 'Member',
+        role_id: row.role_id
+      });
+    });
+
+    const userBoardsMap = {};
+    bmRes.forEach((row) => {
+      if (!userBoardsMap[row.user_id]) userBoardsMap[row.user_id] = [];
+      userBoardsMap[row.user_id].push({
+        id: row.board_id,
+        name: row.board_name,
+        workspace_id: row.workspace_id,
+        workspace_name: row.workspace_name,
+        role: row.role
+      });
+    });
+
+    const members = usersRes.map((u) => {
+      const userWorkspaces = userWsMap[u.id] || [];
+      const userBoards = userBoardsMap[u.id] || [];
+
+      // Determine primary role across workspaces
+      let primaryRole = 'Team Member';
+      let isOwner = false;
+      if (userWorkspaces.some((w) => isOwnerRole(w.role))) {
+        primaryRole = 'Owner';
+        isOwner = true;
+      } else if (userWorkspaces.some((w) => w.role === 'Admin')) {
+        primaryRole = 'Admin';
+      } else if (userWorkspaces.length > 0) {
+        primaryRole = userWorkspaces[0].role || 'Team Member';
+      }
+
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        avatar_url: u.avatar_url,
+        created_at: u.created_at,
+        role: primaryRole,
+        is_owner: isOwner,
+        workspaces: userWorkspaces,
+        boards: userBoards
+      };
+    });
+
+    return res.json({
+      members,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages
+      },
+      workspaces: allWorkspaces,
+      boards: allBoards,
+      roles: rolesRes,
+      invitations
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/workspaces/:id/company-members/:userId/role - Change member role across all their workspaces
+router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission(['member.assign_role', 'role.assign']), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const role_id = req.body.role_id !== undefined ? req.body.role_id : req.body.roleId;
+
+  if (!role_id) {
+    return res.status(400).json({ error: { message: 'role_id is required', code: 'BAD_REQUEST' } });
+  }
+
+  try {
+    if (Number(req.user.id) === targetUserId) {
+      return res.status(403).json({
+        error: { message: 'You cannot change your own role', code: 'SELF_ROLE_CHANGE_FORBIDDEN' }
+      });
+    }
+
+    const [roleRow] = await req.db.query('SELECT id, name, is_system, is_editable, COALESCE(rank, 30) as rank FROM roles WHERE id = ?', [role_id]);
+    if (!roleRow) {
+      return res.status(400).json({ error: { message: 'Selected role does not exist', code: 'BAD_REQUEST' } });
+    }
+
+    // Caller rank check
+    const callerMemberRes = await req.db.query(
+      `SELECT r.id, r.name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    const callerRole = callerMemberRes[0] || { is_system: 0, is_editable: 1, rank: 30 };
+    const callerIsOwner = callerRole.is_system === 1 && (callerRole.is_editable === 0 || callerRole.rank >= 100);
+    const callerRank = callerRole.is_system === 1 ? callerRole.rank : 30;
+
+    const newRoleRank = roleRow.is_system === 1 ? roleRow.rank : 30;
+    if (newRoleRank >= callerRank && !callerIsOwner) {
+      return res.status(403).json({
+        error: {
+          message: 'Cannot assign a role at or above your own rank',
+          code: 'CANNOT_ASSIGN_ROLE_AT_OR_ABOVE_OWN_RANK'
+        }
+      });
+    }
+
+    // Target current role check
+    const targetRoles = await req.db.query(
+      `SELECT r.id, r.name as role_name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ?`,
+      [targetUserId]
+    );
+    const targetIsOwner = targetRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
+    const newIsOwner = roleRow.is_system === 1 && (roleRow.is_editable === 0 || roleRow.rank >= 100);
+
+    if (targetIsOwner && !callerIsOwner) {
+      return res.status(403).json({
+        error: { message: 'Only an Owner may modify the Owner role', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
+      });
+    }
+
+    // Safety Floor: Cannot demote the last Owner in the company
+    if (targetIsOwner && !newIsOwner) {
+      const allOwnerRows = await req.db.query(
+        `SELECT DISTINCT wm.user_id
+         FROM workspace_members wm
+         JOIN roles r ON wm.role_id = r.id
+         WHERE r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`
+      );
+      if (allOwnerRows.length <= 1) {
+        return res.status(400).json({
+          error: { message: 'Cannot demote the last Owner of the organization', code: 'SAFETY_FLOOR_VIOLATION' }
+        });
+      }
+    }
+
+    await req.db.execute(
+      'UPDATE workspace_members SET role = ?, role_id = ? WHERE user_id = ?',
+      [roleRow.name, roleRow.id, targetUserId]
+    );
+
+    // Notify user of permission update across workspaces
+    sendUserEvent(targetUserId, 'user:permissions_updated', {
+      workspaceId,
+      targetUserId,
+      roleId: roleRow.id,
+      companyWide: true
+    }, req.tenant?.id);
+
+    return res.json({
+      success: true,
+      message: `Role updated to ${roleRow.name} successfully`,
+      user_id: targetUserId,
+      role: roleRow.name,
+      role_id: roleRow.id
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/company-members/:userId/workspaces - Assign/unassign workspaces for member
+router.post('/:id/company-members/:userId/workspaces', requireAuth, requirePermission(['member.invite', 'workspace.update']), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const workspace_ids = req.body.workspace_ids || req.body.workspaceIds || [];
+  const role_id = req.body.role_id !== undefined ? req.body.role_id : req.body.roleId;
+
+  try {
+    // Resolve default role for new assignments
+    let resolvedRoleId = role_id;
+    let resolvedRoleName = 'Team Member';
+    if (resolvedRoleId) {
+      const [rRow] = await req.db.query('SELECT id, name FROM roles WHERE id = ?', [resolvedRoleId]);
+      if (rRow) {
+        resolvedRoleId = rRow.id;
+        resolvedRoleName = rRow.name;
+      }
+    } else {
+      const [defRow] = await req.db.query("SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' LIMIT 1");
+      if (defRow) {
+        resolvedRoleId = defRow.id;
+        resolvedRoleName = defRow.name;
+      }
+    }
+
+    const currentWsRows = await req.db.query(
+      `SELECT wm.workspace_id, wm.role, wm.role_id, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       LEFT JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ?`,
+      [targetUserId]
+    );
+    const currentWsIds = currentWsRows.map((r) => r.workspace_id);
+
+    const targetSet = new Set(workspace_ids.map(Number));
+
+    // Workspaces to add
+    const toAdd = Array.from(targetSet).filter((id) => !currentWsIds.includes(id));
+    for (const addWsId of toAdd) {
+      await req.db.execute(
+        `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE role = VALUES(role), role_id = VALUES(role_id)`,
+        [addWsId, targetUserId, resolvedRoleName, resolvedRoleId]
+      );
+    }
+
+    // Workspaces to remove
+    const toRemove = currentWsIds.filter((id) => !targetSet.has(id));
+    for (const remWsId of toRemove) {
+      // Safety Floor: cannot remove if sole owner of that workspace
+      const currentMember = currentWsRows.find((r) => r.workspace_id === remWsId);
+      const isOwner = currentMember && currentMember.is_system === 1 && (currentMember.is_editable === 0 || currentMember.rank >= 100);
+      if (isOwner) {
+        const otherOwners = await req.db.query(
+          `SELECT wm.user_id FROM workspace_members wm
+           JOIN roles r ON wm.role_id = r.id
+           WHERE wm.workspace_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100) AND wm.user_id != ?`,
+          [remWsId, targetUserId]
+        );
+        if (otherOwners.length === 0) {
+          continue; // Skip removing sole owner
+        }
+      }
+
+      await req.db.execute(
+        'DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        [remWsId, targetUserId]
+      );
+
+      // Clean up board memberships in this removed workspace
+      await req.db.execute(
+        `DELETE bm FROM board_members bm
+         JOIN boards b ON bm.board_id = b.id
+         WHERE b.workspace_id = ? AND bm.user_id = ?`,
+        [remWsId, targetUserId]
+      );
+    }
+
+    return res.json({ success: true, message: 'Workspace assignments updated successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/company-members/:userId/boards - Assign/unassign boards for member
+router.post('/:id/company-members/:userId/boards', requireAuth, requirePermission(['member.invite', 'project.edit']), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const board_ids = req.body.board_ids || req.body.boardIds || [];
+
+  try {
+    const targetSet = new Set(board_ids.map(Number));
+
+    // Get board parent workspaces to auto-enrol user if needed
+    if (board_ids.length > 0) {
+      const boardParents = await req.db.query(
+        'SELECT id, workspace_id FROM boards WHERE id IN (?)',
+        [Array.from(targetSet)]
+      );
+
+      const [defaultRole] = await req.db.query(
+        "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' LIMIT 1"
+      );
+
+      for (const b of boardParents) {
+        await req.db.execute(
+          `INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id)
+           VALUES (?, ?, ?, ?)`,
+          [b.workspace_id, targetUserId, defaultRole?.name || 'Team Member', defaultRole?.id || null]
+        );
+
+        await req.db.execute(
+          "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
+          [b.id, targetUserId]
+        );
+      }
+    }
+
+    // Remove from unselected boards
+    if (board_ids.length > 0) {
+      await req.db.execute(
+        'DELETE FROM board_members WHERE user_id = ? AND board_id NOT IN (?)',
+        [targetUserId, Array.from(targetSet)]
+      );
+    } else {
+      await req.db.execute(
+        'DELETE FROM board_members WHERE user_id = ?',
+        [targetUserId]
+      );
+    }
+
+    return res.json({ success: true, message: 'Board assignments updated successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/workspaces/:id/company-members/:userId - Remove member from company
+router.delete('/:id/company-members/:userId', requireAuth, requirePermission('member.remove'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+
+  try {
+    if (targetUserId === req.user.id) {
+      return res.status(400).json({ error: { message: 'You cannot remove yourself from the organization', code: 'CANNOT_REMOVE_SELF' } });
+    }
+
+    // Safety Floor: Cannot remove an Owner
+    const targetRoles = await req.db.query(
+      `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ?`,
+      [targetUserId]
+    );
+    const targetIsOwner = targetRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
+
+    if (targetIsOwner) {
+      const callerRoles = await req.db.query(
+        `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+         FROM workspace_members wm
+         JOIN roles r ON wm.role_id = r.id
+         WHERE wm.user_id = ?`,
+        [req.user.id]
+      );
+      const callerIsOwner = callerRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
+      if (!callerIsOwner) {
+        return res.status(403).json({
+          error: { message: 'Only an Owner may remove an Owner from the organization', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
+        });
+      }
+      return res.status(400).json({
+        error: { message: 'Organization owners cannot be removed from company directory', code: 'CANNOT_REMOVE_OWNER' }
+      });
+    }
+
+    // Remove from all board and workspace memberships
+    await req.db.execute('DELETE FROM board_members WHERE user_id = ?', [targetUserId]);
+    await req.db.execute('DELETE FROM workspace_members WHERE user_id = ?', [targetUserId]);
+
+    return res.json({ success: true, message: 'Member removed from company successfully', user_id: targetUserId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Helper function to check if user has company admin/owner status
+async function isCompanyAdminOrOwner(userId, db) {
+  const rows = await db.query(
+    `SELECT r.id
+     FROM workspace_members wm
+     JOIN roles r ON wm.role_id = r.id
+     WHERE wm.user_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)
+     LIMIT 1`,
+    [userId]
+  );
+  return rows.length > 0;
+}
+
+// GET /api/workspaces/:id/audit - View audit logs
+router.get('/:id/audit', requireAuth, requirePermission('audit.view'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  try {
+    const logs = await req.db.query(
+      `SELECT id, user_id, email, event_type, ip_address, user_agent, metadata, created_at
+       FROM auth_audit_log
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [limit]
+    );
+    return res.json({ logs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/audit/export - Export audit logs as CSV
+router.get('/:id/audit/export', requireAuth, requirePermission('audit.export'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const logs = await req.db.query(
+      `SELECT id, user_id, email, event_type, ip_address, user_agent, created_at
+       FROM auth_audit_log
+       ORDER BY created_at DESC
+       LIMIT 5000`
+    );
+    const header = 'id,user_id,email,event_type,ip_address,user_agent,created_at\n';
+    const rows = logs.map(l => `${l.id},${l.user_id || ''},"${l.email || ''}","${l.event_type || ''}","${l.ip_address || ''}","${(l.user_agent || '').replace(/"/g, '""')}","${l.created_at}"`).join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="audit-export-ws-${workspaceId}.csv"`);
+    return res.send(header + rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/search - Global workspace search
+router.get('/:id/search', requireAuth, requirePermission('search.use'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const q = String(req.query.q || '').trim();
+  try {
+    if (!q) {
+      return res.json({ cards: [], boards: [] });
+    }
+    const cards = await req.db.query(
+      `SELECT c.id, c.title, c.board_id, b.name as board_name
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ? AND (c.title LIKE ? OR c.description LIKE ?)
+       LIMIT 50`,
+      [workspaceId, `%${q}%`, `%${q}%`]
+    );
+    const boards = await req.db.query(
+      `SELECT id, name FROM boards WHERE workspace_id = ? AND name LIKE ? LIMIT 20`,
+      [workspaceId, `%${q}%`]
+    );
+    return res.json({ cards, boards });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/issues - Server-side paginated & filtered issue list
+router.get('/:id/issues', requireAuth, async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+
+  try {
+    const isMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    if (isMember.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
+    }
+
+    const hasViewPerm = await userHasPermission(req.user.id, workspaceId, 'task.view', req.db);
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: { message: 'Permission denied: task.view required', code: 'FORBIDDEN' } });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20)); // Exactly 20 per page default
+    const offset = (page - 1) * limit;
+
+    const boardId = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
+    const search = (req.query.search || '').trim().toLowerCase();
+    const listId = req.query.list_id && req.query.list_id !== 'all' ? Number(req.query.list_id) : null;
+    const stage = req.query.stage && req.query.stage !== 'all' ? String(req.query.stage).trim().toLowerCase() : null;
+    const assigneeId = req.query.assignee_id && req.query.assignee_id !== 'all' ? req.query.assignee_id : null;
+    const assignerId = req.query.assigner_id && req.query.assigner_id !== 'all' ? Number(req.query.assigner_id) : null;
+    const dueDate = req.query.due_date && req.query.due_date !== 'all' ? String(req.query.due_date).trim().toLowerCase() : null;
+    const sort = req.query.sort ? String(req.query.sort).trim().toLowerCase() : 'newest';
+
+    // Base conditions: active cards, active lists, active boards in workspace
+    const whereConditions = [
+      'b.workspace_id = ?',
+      'b.is_archived = 0',
+      'l.is_archived = 0',
+      'c.is_archived = 0'
+    ];
+    const queryParams = [workspaceId];
+
+    if (boardId) {
+      whereConditions.push('b.id = ?');
+      queryParams.push(boardId);
+    }
+
+    const isAdmin = await isCompanyAdminOrOwner(req.user.id, req.db);
+    if (!isAdmin) {
+      whereConditions.push(
+        '(EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = ?) OR r.name = "Viewer")'
+      );
+      queryParams.push(req.user.id);
+    }
+
+    if (search) {
+      whereConditions.push('(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.description, "")) LIKE ? OR CAST(c.id AS CHAR) = ?)');
+      const wild = `%${search}%`;
+      queryParams.push(wild, wild, search);
+    }
+
+    if (listId) {
+      whereConditions.push('c.list_id = ?');
+      queryParams.push(listId);
+    }
+
+    if (stage) {
+      if (stage === 'done') {
+        whereConditions.push('(c.is_complete = 1 OR LOWER(l.name) LIKE "%done%" OR LOWER(l.name) LIKE "%completed%")');
+      } else if (stage === 'in_progress') {
+        whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%progress%" OR LOWER(l.name) LIKE "%doing%" OR LOWER(l.name) LIKE "%active%" OR LOWER(l.name) LIKE "%review%"))');
+      } else if (stage === 'todo') {
+        whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%to do%" OR LOWER(l.name) LIKE "%todo%" OR LOWER(l.name) LIKE "%backlog%"))');
+      }
+    }
+
+    if (assigneeId) {
+      if (assigneeId === 'unassigned') {
+        whereConditions.push('NOT EXISTS (SELECT 1 FROM card_members cm WHERE cm.card_id = c.id)');
+      } else {
+        whereConditions.push('EXISTS (SELECT 1 FROM card_members cm WHERE cm.card_id = c.id AND cm.user_id = ?)');
+        queryParams.push(Number(assigneeId));
+      }
+    }
+
+    if (assignerId) {
+      whereConditions.push('EXISTS (SELECT 1 FROM card_assigners ca WHERE ca.card_id = c.id AND ca.user_id = ?)');
+      queryParams.push(assignerId);
+    }
+
+    if (dueDate) {
+      if (dueDate === 'overdue') {
+        whereConditions.push('(c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date < NOW())');
+      } else if (dueDate === 'today') {
+        whereConditions.push('(c.due_date IS NOT NULL AND DATE(c.due_date) = CURDATE())');
+      } else if (dueDate === 'this_week') {
+        whereConditions.push('(c.due_date IS NOT NULL AND YEARWEEK(c.due_date, 1) = YEARWEEK(CURDATE(), 1))');
+      } else if (dueDate === 'next_week') {
+        whereConditions.push('(c.due_date IS NOT NULL AND YEARWEEK(c.due_date, 1) = YEARWEEK(DATE_ADD(CURDATE(), INTERVAL 1 WEEK), 1))');
+      } else if (dueDate === 'no_date') {
+        whereConditions.push('(c.due_date IS NULL)');
+      }
+    }
+
+    const whereSql = whereConditions.join(' AND ');
+
+    // 1. Total count query over FULL dataset (never restricted to 20 rows!)
+    const countSql = `
+      SELECT COUNT(DISTINCT c.id) as total
+      FROM cards c
+      JOIN lists l ON c.list_id = l.id
+      JOIN boards b ON l.board_id = b.id
+      JOIN workspace_members wm ON b.workspace_id = wm.workspace_id AND wm.user_id = ?
+      LEFT JOIN roles r ON wm.role_id = r.id
+      WHERE ${whereSql}
+    `;
+    const countRes = await req.db.query(countSql, [req.user.id, ...queryParams]);
+    const total = Number(countRes[0]?.total || 0);
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    // Sorting
+    let orderSql = 'c.created_at DESC, c.id DESC';
+    if (sort === 'oldest') {
+      orderSql = 'c.created_at ASC, c.id ASC';
+    } else if (sort === 'due_date_asc') {
+      orderSql = 'CASE WHEN c.due_date IS NULL THEN 1 ELSE 0 END, c.due_date ASC, c.id ASC';
+    } else if (sort === 'due_date_desc') {
+      orderSql = 'CASE WHEN c.due_date IS NULL THEN 1 ELSE 0 END, c.due_date DESC, c.id DESC';
+    } else if (sort === 'title_asc') {
+      orderSql = 'c.title ASC, c.id ASC';
+    } else if (sort === 'title_desc') {
+      orderSql = 'c.title DESC, c.id DESC';
+    }
+
+    // 2. Paginated data query
+    const selectSql = `
+      SELECT
+        c.id,
+        c.list_id,
+        c.title,
+        c.description,
+        c.position,
+        c.due_date,
+        c.start_date,
+        c.is_complete,
+        c.is_archived,
+        c.created_at,
+        l.name as list_name,
+        l.board_id,
+        b.name as board_name
+      FROM cards c
+      JOIN lists l ON c.list_id = l.id
+      JOIN boards b ON l.board_id = b.id
+      JOIN workspace_members wm ON b.workspace_id = wm.workspace_id AND wm.user_id = ?
+      LEFT JOIN roles r ON wm.role_id = r.id
+      WHERE ${whereSql}
+      ORDER BY ${orderSql}
+      LIMIT ? OFFSET ?
+    `;
+
+    const cardsRes = await req.db.query(selectSql, [req.user.id, ...queryParams, limit, offset]);
+
+    const cardIds = cardsRes.map((c) => c.id);
+    const cardAssignersMap = {};
+    const cardMembersMap = {};
+    const cardLabelsMap = {};
+
+    if (cardIds.length > 0) {
+      // Fetch Assigners
+      const caRes = await req.db.query(
+        `SELECT ca.card_id, u.id, u.name, u.email 
+         FROM card_assigners ca
+         JOIN users u ON ca.user_id = u.id
+         WHERE ca.card_id IN (?)
+         ORDER BY u.name ASC`,
+        [cardIds]
+      );
+      caRes.forEach((row) => {
+        if (!cardAssignersMap[row.card_id]) cardAssignersMap[row.card_id] = [];
+        cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+      });
+
+      // Fetch Members / Assignees
+      const cmRes = await req.db.query(
+        `SELECT cm.card_id, u.id, u.name, u.email 
+         FROM card_members cm
+         JOIN users u ON cm.user_id = u.id
+         WHERE cm.card_id IN (?)
+         ORDER BY u.name ASC`,
+        [cardIds]
+      );
+      cmRes.forEach((row) => {
+        if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
+        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+      });
+
+      // Fetch Labels
+      const clRes = await req.db.query(
+        `SELECT cl.card_id, l.id, l.name, l.color 
+         FROM card_labels cl
+         JOIN labels l ON cl.label_id = l.id
+         WHERE cl.card_id IN (?)`,
+        [cardIds]
+      );
+      clRes.forEach((row) => {
+        if (!cardLabelsMap[row.card_id]) cardLabelsMap[row.card_id] = [];
+        cardLabelsMap[row.card_id].push({ id: row.id, name: row.name, color: row.color });
+      });
+    }
+
+    const issues = cardsRes.map((c) => ({
+      ...c,
+      listName: c.list_name,
+      boardName: c.board_name,
+      assigners: cardAssignersMap[c.id] || [],
+      members: cardMembersMap[c.id] || [],
+      assigned_users: cardMembersMap[c.id] || [],
+      labels: cardLabelsMap[c.id] || []
+    }));
+
+    // Fetch filter options for the frontend (boards, lists, members in this workspace)
+    const boards = await req.db.query(
+      'SELECT id, name FROM boards WHERE workspace_id = ? AND is_archived = 0 ORDER BY name ASC',
+      [workspaceId]
+    );
+
+    const lists = await req.db.query(
+      `SELECT DISTINCT l.id, l.name, l.board_id
+       FROM lists l
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ? AND b.is_archived = 0 AND l.is_archived = 0
+       ORDER BY l.position ASC, l.name ASC`,
+      [workspaceId]
+    );
+
+    const members = await req.db.query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       JOIN workspace_members wm ON u.id = wm.user_id
+       WHERE wm.workspace_id = ?
+       ORDER BY u.name ASC`,
+      [workspaceId]
+    );
+
+    return res.json({
+      issues,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages
+      },
+      filterOptions: {
+        boards,
+        lists,
+        members
+      }
     });
   } catch (err) {
     next(err);

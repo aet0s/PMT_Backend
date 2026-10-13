@@ -38,6 +38,9 @@ const ROUTE_MANIFEST = [
   { method: 'DELETE', path: '/api/workspaces/:id/members/:userId', permission: 'member.remove', scope: 'company' },
   { method: 'POST', path: '/api/workspaces/:workspaceId/members/:userId/reset-password', permission: 'member.reset_password', scope: 'company' },
   { method: 'POST', path: '/api/workspaces/:workspaceId/members/:userId/reset-2fa', permission: 'member.reset_2fa', scope: 'company' },
+  { method: 'GET', path: '/api/workspaces/:id/audit', permission: 'audit.view', scope: 'company' },
+  { method: 'GET', path: '/api/workspaces/:id/audit/export', permission: 'audit.export', scope: 'company' },
+  { method: 'GET', path: '/api/workspaces/:id/search', permission: 'search.use', scope: 'company' },
 
   // --- Roles ---
   { method: 'PATCH', path: '/api/roles/:id', permission: 'role.edit', scope: 'company' },
@@ -54,6 +57,8 @@ const ROUTE_MANIFEST = [
   { method: 'DELETE', path: '/api/boards/:id/members/:userId', permission: 'project.manage_members', scope: 'project' },
   { method: 'GET', path: '/api/boards/:id/labels', permission: 'label.view', scope: 'project' },
   { method: 'POST', path: '/api/boards/:id/labels', permission: 'label.create', scope: 'project' },
+  { method: 'PATCH', path: '/api/boards/:id/labels/:labelId', permission: 'label.edit', scope: 'project' },
+  { method: 'DELETE', path: '/api/boards/:id/labels/:labelId', permission: 'label.delete', scope: 'project' },
 
   // --- Lists ---
   { method: 'POST', path: '/api/lists', permission: 'list.create', scope: 'project' },
@@ -76,6 +81,7 @@ const ROUTE_MANIFEST = [
   { method: 'POST', path: '/api/cards/:id/attachments/link', permission: 'attachment.upload', scope: 'project' },
   { method: 'DELETE', path: '/api/cards/attachments/:id', permission: 'attachment.delete_own', scope: 'project' },
   { method: 'POST', path: '/api/cards/:id/comments', permission: 'comment.create', scope: 'project' },
+  { method: 'PATCH', path: '/api/cards/comments/:id', permission: 'comment.edit_own', scope: 'project' },
   { method: 'DELETE', path: '/api/cards/comments/:id', permission: 'comment.delete_own', scope: 'project' },
 
   // --- Checklists ---
@@ -114,8 +120,9 @@ const ROUTE_MANIFEST = [
   { method: 'POST', path: '/api/files/avatar', publicReason: 'Self avatar image upload', scope: 'company' },
   { method: 'GET', path: '/api/files/:tenantId/*', permission: 'file.view', scope: 'project' },
 
-  // --- System Health ---
+  // --- System Health & Time ---
   { method: 'GET', path: '/api/health', publicReason: 'Public infrastructure health check', scope: 'company' },
+  { method: 'GET', path: '/api/time', publicReason: 'Public server time and IST timezone synchronization', scope: 'company' },
 
   // --- Test / Dev Only Endpoints ---
   { method: 'POST', path: '/api/dev/reset-rate-limit', publicReason: 'Test environment rate limit reset helper', scope: 'company', testOnly: true }

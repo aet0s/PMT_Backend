@@ -3,11 +3,19 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
-const { isOwnerRole } = require('../utils/roleRank');
+const { isOwnerRole, isReservedRoleName } = require('../utils/roleRank');
 const { broadcastWorkspaceEvent } = require('../socket');
 const { logAuthEvent } = require('../services/authAudit');
+const {
+  PERMISSIONS,
+  LEGACY_PERMISSION_ALIASES,
+  getTransitivePrerequisites
+} = require('../rbac/registry');
 
 const router = express.Router();
+
+const validPermMap = new Map();
+PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
 
 const updateRoleSchema = z.object({
   name: z.string().min(1).optional(),
@@ -27,33 +35,94 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     const role = roleRes[0];
 
-    if (!role.is_editable || isOwnerRole(role.name)) {
+    if (!role.is_editable || role.is_system === 1 || isOwnerRole(role)) {
       return res.status(403).json({
-        error: { message: 'Owner and Super Admin role permissions are locked and cannot be edited', code: 'ROLE_NOT_EDITABLE' }
+        error: { message: 'System role permissions are locked and cannot be edited', code: 'ROLE_NOT_EDITABLE' }
       });
     }
 
-    const workspaceId = role.workspace_id;
-    if (workspaceId) {
-      const hasPerm = (await userHasPermission(req.user.id, workspaceId, 'role.edit', req.db)) ||
-                      (await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db));
+    // Anti-escalation: caller cannot edit their own role
+    const userRoleCheck = await req.db.query(
+      'SELECT 1 FROM workspace_members WHERE user_id = ? AND role_id = ? LIMIT 1',
+      [req.user.id, roleId]
+    );
+    if (userRoleCheck.length > 0) {
+      return res.status(403).json({
+        error: { message: 'You cannot edit your own role', code: 'CANNOT_EDIT_OWN_ROLE' }
+      });
+    }
+
+    const targetWsId = role.workspace_id || req.body.workspace_id || req.headers['x-workspace-id'] ||
+      (await req.db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]))[0]?.workspace_id;
+
+    if (targetWsId) {
+      const hasPerm = (await userHasPermission(req.user.id, targetWsId, 'role.edit', req.db)) ||
+                      (await userHasPermission(req.user.id, targetWsId, 'workspace.manage_roles', req.db));
       if (!hasPerm) {
         return res.status(403).json({
-          error: { message: 'You do not have permission to edit custom roles', code: 'PERMISSION_DENIED' }
+          error: { message: 'You do not have permission to edit roles', code: 'PERMISSION_DENIED' }
         });
       }
     }
 
     if (name && name.trim()) {
-      await req.db.execute('UPDATE roles SET name = ? WHERE id = ?', [name.trim(), roleId]);
+      const cleanName = name.trim();
+      if (isReservedRoleName(cleanName)) {
+        return res.status(400).json({
+          error: { message: 'Role name is reserved for system roles', code: 'RESERVED_ROLE_NAME' }
+        });
+      }
+
+      if (targetWsId) {
+        const dupCheck = await req.db.query(
+          'SELECT id FROM roles WHERE workspace_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1',
+          [targetWsId, cleanName, roleId]
+        );
+        if (dupCheck.length > 0) {
+          return res.status(400).json({
+            error: { message: 'A role with this name already exists in this workspace', code: 'DUPLICATE_ROLE_NAME' }
+          });
+        }
+      }
+
+      await req.db.execute('UPDATE roles SET name = ? WHERE id = ?', [cleanName, roleId]);
     }
 
     if (Array.isArray(permission_keys)) {
-      if (workspaceId) {
-        const callerPerms = await getUserPermissions(req.user.id, workspaceId, req.db);
-        if (!isOwnerRole(callerPerms.role?.name)) {
-          const callerPermSet = new Set(callerPerms.permissions);
-          const unauthorizedPerm = permission_keys.find((k) => !callerPermSet.has(k));
+      // Validate unknown and planned keys
+      for (const rawKey of permission_keys) {
+        const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
+        const meta = validPermMap.get(canonical);
+        if (!meta) {
+          return res.status(400).json({
+            error: { message: `Unknown permission key: ${rawKey}`, code: 'UNKNOWN_PERMISSION_KEY' }
+          });
+        }
+        if (meta.planned) {
+          return res.status(400).json({
+            error: { message: `Planned permission key cannot be assigned: ${rawKey}`, code: 'PLANNED_PERMISSION_KEY' }
+          });
+        }
+      }
+
+      // Auto-include transitive prerequisites as the Role Editor does
+      const requestedKeys = new Set(
+        permission_keys.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
+      );
+      for (const k of Array.from(requestedKeys)) {
+        const prereqs = getTransitivePrerequisites(k);
+        prereqs.forEach((p) => requestedKeys.add(p));
+      }
+      const canonicalKeys = Array.from(requestedKeys);
+
+      if (targetWsId) {
+        const callerPerms = await getUserPermissions(req.user.id, targetWsId, req.db);
+        const callerIsOwner = callerPerms.role?.is_system === 1 && (callerPerms.role?.is_editable === 0 || callerPerms.role?.rank >= 100);
+        if (!callerIsOwner) {
+          const callerPermSet = new Set(
+            callerPerms.permissions.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
+          );
+          const unauthorizedPerm = canonicalKeys.find((k) => !callerPermSet.has(k));
           if (unauthorizedPerm) {
             return res.status(403).json({
               error: {
@@ -68,10 +137,10 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       // Clear existing role permissions
       await req.db.execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
 
-      if (permission_keys.length > 0) {
+      if (canonicalKeys.length > 0) {
         const permsRes = await req.db.query(
           'SELECT id, `key` FROM permissions WHERE `key` IN (?)',
-          [permission_keys]
+          [canonicalKeys]
         );
 
         for (const p of permsRes) {
@@ -98,8 +167,8 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
     const keys = updatedRole.permission_keys_str ? updatedRole.permission_keys_str.split(',') : [];
     const rolePayload = { ...updatedRole, permission_keys: keys };
 
-    if (workspaceId) {
-      broadcastWorkspaceEvent(workspaceId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
+    if (targetWsId) {
+      broadcastWorkspaceEvent(targetWsId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
     }
 
     await logAuthEvent(req.db, {
@@ -108,7 +177,7 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       eventType: 'role.updated',
       req,
       metadata: {
-        workspace_id: workspaceId,
+        workspace_id: targetWsId,
         role_id: roleId,
         role_name: rolePayload.name,
         permission_count: keys.length
@@ -133,16 +202,17 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 
     const role = roleRes[0];
 
-    if (role.is_system || isOwnerRole(role.name)) {
+    if (role.is_system === 1 || isOwnerRole(role)) {
       return res.status(400).json({
         error: { message: 'Owner and built-in system roles cannot be deleted', code: 'ROLE_IS_SYSTEM' }
       });
     }
 
-    const workspaceId = role.workspace_id;
-    if (workspaceId) {
-      const hasPerm = (await userHasPermission(req.user.id, workspaceId, 'role.delete', req.db)) ||
-                      (await userHasPermission(req.user.id, workspaceId, 'workspace.manage_roles', req.db));
+    const targetWsId = role.workspace_id || req.body?.workspace_id || req.headers['x-workspace-id'] ||
+      (await req.db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]))[0]?.workspace_id;
+    if (targetWsId) {
+      const hasPerm = (await userHasPermission(req.user.id, targetWsId, 'role.delete', req.db)) ||
+                      (await userHasPermission(req.user.id, targetWsId, 'workspace.manage_roles', req.db));
       if (!hasPerm) {
         return res.status(403).json({
           error: { message: 'You do not have permission to delete custom roles', code: 'PERMISSION_DENIED' }
@@ -150,26 +220,33 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       }
     }
 
-    // Check if role is assigned to any workspace members
+    // Check if role is assigned to any workspace members or board members
     const memberCountRes = await req.db.query(
       'SELECT COUNT(*) as count FROM workspace_members WHERE role_id = ?',
       [roleId]
     );
     const count = Number(memberCountRes[0]?.count || 0);
 
-    if (count > 0) {
+    const boardMemberCountRes = await req.db.query(
+      'SELECT COUNT(*) as count FROM board_members WHERE role_id = ?',
+      [roleId]
+    );
+    const boardMemberCount = Number(boardMemberCountRes[0]?.count || 0);
+
+    if (count > 0 || boardMemberCount > 0) {
       return res.status(400).json({
         error: {
-          message: `Cannot delete custom role while ${count} member(s) are assigned to it. Reassign members first.`,
+          message: `Cannot delete custom role while ${count + boardMemberCount} member assignment(s) exist. Reassign members first.`,
           code: 'ROLE_IN_USE'
         }
       });
     }
 
+    await req.db.execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
     await req.db.execute('DELETE FROM roles WHERE id = ?', [roleId]);
 
-    if (workspaceId) {
-      broadcastWorkspaceEvent(workspaceId, 'workspace:role_deleted', { roleId }, req.headers['x-origin-id'], req.tenant?.id);
+    if (targetWsId) {
+      broadcastWorkspaceEvent(targetWsId, 'workspace:role_deleted', { roleId }, req.headers['x-origin-id'], req.tenant?.id);
     }
 
     await logAuthEvent(req.db, {
@@ -178,7 +255,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       eventType: 'role.deleted',
       req,
       metadata: {
-        workspace_id: workspaceId,
+        workspace_id: targetWsId,
         role_id: roleId,
         role_name: role.name
       }

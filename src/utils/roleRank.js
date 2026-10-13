@@ -1,30 +1,84 @@
 // server/src/utils/roleRank.js
-// Hierarchy and authority rules for role-based administrative actions (password & 2FA reset).
+// Hierarchy, rank, and authority rules for role-based administrative actions.
+
+const RESERVED_ROLE_NAMES = new Set([
+  'owner',
+  'super admin',
+  'admin',
+  'project manager',
+  'manager',
+  'team member',
+  'member',
+  'viewer',
+  'guest'
+]);
 
 const ROLE_RANKS = {
   'owner': 100,
   'super admin': 100,
   'admin': 80,
-  'manager': 60,
   'project manager': 60,
+  'manager': 60,
   'team member': 40,
   'member': 40,
   'viewer': 20,
   'guest': 10
 };
 
-function getRoleRank(roleName) {
-  if (!roleName) return 0;
-  const normalized = String(roleName).trim().toLowerCase();
-  if (ROLE_RANKS[normalized] !== undefined) {
-    return ROLE_RANKS[normalized];
-  }
-  // Default rank for custom roles: between member and manager (30)
-  return 30;
+/**
+ * Normalizes role name strings against unicode spoofing, zero-width spaces, casing, and whitespace.
+ */
+function normalizeRoleName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
-function isOwnerRole(roleName) {
-  const normalized = String(roleName || '').trim().toLowerCase();
+/**
+ * Checks whether a role name is reserved for built-in system roles.
+ */
+function isReservedRoleName(name) {
+  const normalized = normalizeRoleName(name);
+  return RESERVED_ROLE_NAMES.has(normalized);
+}
+
+/**
+ * Resolves numeric rank. For role objects, trusts rank only if is_system === 1.
+ * Custom roles default to 30.
+ */
+function getRoleRank(roleOrName) {
+  if (!roleOrName) return 0;
+  if (typeof roleOrName === 'object') {
+    if (Boolean(roleOrName.is_system)) {
+      if (typeof roleOrName.rank === 'number' && !isNaN(roleOrName.rank)) return roleOrName.rank;
+      const normalized = normalizeRoleName(roleOrName.name);
+      return ROLE_RANKS[normalized] || 30;
+    }
+    // Custom role: rank is fixed at 30
+    return 30;
+  }
+  const normalized = normalizeRoleName(roleOrName);
+  return ROLE_RANKS[normalized] !== undefined ? ROLE_RANKS[normalized] : 30;
+}
+
+/**
+ * Checks if a role is an Owner role.
+ * If a role object is passed, enforces Boolean(is_system) so custom roles named "Owner" are rejected.
+ */
+function isOwnerRole(roleOrName) {
+  if (!roleOrName) return false;
+  if (typeof roleOrName === 'object') {
+    if (!roleOrName.is_system) return false;
+    if (!roleOrName.is_editable) return true;
+    const rank = getRoleRank(roleOrName);
+    if (rank >= 100) return true;
+    const normalized = normalizeRoleName(roleOrName.name);
+    return normalized === 'owner' || normalized === 'super admin';
+  }
+  const normalized = normalizeRoleName(roleOrName);
   return normalized === 'owner' || normalized === 'super admin';
 }
 
@@ -67,12 +121,15 @@ function canResetTarget(callerRole, targetRole, callerUserId, targetUserId) {
   return {
     allowed: false,
     code: 'INSUFFICIENT_ROLE_RANK',
-    message: "You may only reset credentials for members whose role rank is below yours."
+    message: 'You may only reset credentials for members whose role rank is below yours.'
   };
 }
 
 module.exports = {
+  RESERVED_ROLE_NAMES,
   ROLE_RANKS,
+  normalizeRoleName,
+  isReservedRoleName,
   getRoleRank,
   isOwnerRole,
   canResetTarget

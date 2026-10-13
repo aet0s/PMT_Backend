@@ -183,6 +183,36 @@ app.get('/api/health', (req, res) => {
   res.json({ status: getSystemHealthStatus(), timestamp: new Date().toISOString() });
 });
 
+// Server Time endpoint (Public, returns server timestamp, IST time, and IST time-based greeting)
+app.get('/api/time', (req, res) => {
+  const now = new Date();
+  const istFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false
+  });
+  const parts = istFormatter.formatToParts(now);
+  const hourRaw = parts.find((p) => p.type === 'hour')?.value;
+  const hour = hourRaw ? parseInt(hourRaw, 10) : now.getHours();
+  const istHour = hour === 24 ? 0 : hour;
+
+  let greeting = 'Good Evening';
+  if (istHour < 12) {
+    greeting = 'Good Morning';
+  } else if (istHour < 17) {
+    greeting = 'Good Afternoon';
+  }
+
+  res.json({
+    serverTime: now.toISOString(),
+    timeZone: 'Asia/Kolkata',
+    istHour,
+    greeting
+  });
+});
+
 // Dev/Test helper - ONLY registered when NODE_ENV === 'test'
 if (process.env.NODE_ENV === 'test') {
   const { resetAllRateLimits } = require('./middleware/rateLimit');

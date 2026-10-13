@@ -6,7 +6,7 @@ const { getJwtSecret } = require('../middleware/auth');
 const { getClientIp } = require('../middleware/rateLimit');
 const { logAuthEvent } = require('./authAudit');
 
-const ACCESS_TOKEN_EXPIRY = '15m'; // 15 minutes
+const ACCESS_TOKEN_EXPIRY = '5d'; // 5 days
 const REFRESH_TOKEN_DAYS = 30; // 30 days
 
 function parseDeviceInfo(userAgent) {
@@ -96,7 +96,7 @@ async function createSession(db, user, req, options = {}) {
     familyId,
     accessToken,
     refreshToken: rawRefreshToken,
-    expiresIn: 15 * 60, // 900 seconds
+    expiresIn: 5 * 24 * 60 * 60, // 432,000 seconds (5 days)
     expiresAt
   };
 }
