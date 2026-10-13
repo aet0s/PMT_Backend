@@ -405,7 +405,7 @@ const PREREQUISITE_PERMISSIONS = {
   'task.move': ['task.view', 'project.view'],
   'task.delete': ['task.view', 'project.view'],
   'task.assign': ['task.view', 'project.view'],
-  'task.duplicate': ['task.view', 'project.view'],
+  'task.duplicate': ['task.create', 'task.view', 'project.view'],
   'task.archive': ['task.view', 'project.view'],
   'task.restore': ['task.view', 'project.view'],
   'task.view': ['project.view'],

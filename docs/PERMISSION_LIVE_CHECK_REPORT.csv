@@ -1,0 +1,13 @@
+Module,Permission,Step,Status,LatencyMs,Timestamp,Details
+"role_assignment","role.system.admin","R1: System Role [Admin]","PASS",,"2026-10-13T07:49:54.023Z","{""roleName"":""Admin"",""actualCount"":137,""expectedCount"":137,""missingPerms"":[]}"
+"role_assignment","role.system.project_manager","R1: System Role [Project Manager]","PASS",,"2026-10-13T07:49:54.682Z","{""roleName"":""Project Manager"",""actualCount"":112,""expectedCount"":106,""missingPerms"":[]}"
+"role_assignment","role.system.team_member","R1: System Role [Team Member]","PASS",,"2026-10-13T07:49:55.350Z","{""roleName"":""Team Member"",""actualCount"":39,""expectedCount"":39,""missingPerms"":[]}"
+"role_assignment","role.system.viewer","R1: System Role [Viewer]","PASS",,"2026-10-13T07:49:56.008Z","{""roleName"":""Viewer"",""actualCount"":29,""expectedCount"":29,""missingPerms"":[]}"
+"role_assignment","role.system.guest","R1: System Role [Guest]","PASS",,"2026-10-13T07:49:56.658Z","{""roleName"":""Guest"",""actualCount"":12,""expectedCount"":12,""missingPerms"":[]}"
+"role_assignment","role.mid_session_change","R2: Mid-Session Upgrade & Downgrade Across Both Endpoints","PASS",,"2026-10-13T07:49:57.394Z","{""viewerDenied"":true,""upHttpOk"":true,""teamMemberAllowed"":true,""downHttpOk"":true,""downgradedDenied"":true}"
+"role_assignment","role.multi_user_and_delete_lock","R3: Multi-User Role Edit & Delete Lock while In Use","PASS",,"2026-10-13T07:49:58.775Z","{""bothInherit"":true,""deleteBlocked"":true,""deleteStatus"":400}"
+"scoping","scoping.board_membership","R4: Board-Level Membership & Dynamic Add/Remove","PASS",,"2026-10-13T07:49:59.504Z","{""b1Ok"":true,""b2Denied"":true,""b1RemovedDenied"":true}"
+"scoping","scoping.multi_workspace","R5: Cross-Workspace Role Isolation","PASS",,"2026-10-13T07:50:00.192Z","{""w1Allowed"":true,""w2Denied"":true,""w2Status"":403}"
+"company_routes","member.company_routes","R6: Company-Level Members Directory Gating","PASS",,"2026-10-13T07:50:01.519Z","{""allowedStatus"":200,""deniedStatus"":403}"
+"security","security.anti_escalation_and_name_attacks","R7: Name Attacks & Privilege Escalation Prevention","PASS",,"2026-10-13T07:50:02.282Z","{""allNameAttacksBlocked"":true,""escalationBlocked"":true,""escalateStatus"":403,""editOwnBlocked"":true,""editOwnStatus"":403}"
+"security","security.realtime_revocation","R8: Realtime Permission Revocation & Immediate Denial","PASS",,"2026-10-13T07:50:03.404Z","{""httpDenied"":true,""liveSocketReceived"":true,""status"":403}"

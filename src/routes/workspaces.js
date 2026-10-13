@@ -2322,10 +2322,10 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
       [workspaceId, req.user.id]
     );
     const callerRole = callerMemberRes[0] || { is_system: 0, is_editable: 1, rank: 30 };
-    const callerIsOwner = callerRole.is_system === 1 && (callerRole.is_editable === 0 || callerRole.rank >= 100);
-    const callerRank = callerRole.is_system === 1 ? callerRole.rank : 30;
+    const callerIsOwner = isOwnerRole(callerRole);
+    const callerRank = getRoleRank(callerRole);
 
-    const newRoleRank = roleRow.is_system === 1 ? roleRow.rank : 30;
+    const newRoleRank = getRoleRank(roleRow);
     if (newRoleRank >= callerRank && !callerIsOwner) {
       return res.status(403).json({
         error: {
@@ -2343,8 +2343,8 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
        WHERE wm.user_id = ?`,
       [targetUserId]
     );
-    const targetIsOwner = targetRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
-    const newIsOwner = roleRow.is_system === 1 && (roleRow.is_editable === 0 || roleRow.rank >= 100);
+    const targetIsOwner = targetRoles.some((r) => isOwnerRole(r));
+    const newIsOwner = isOwnerRole(roleRow);
 
     if (targetIsOwner && !callerIsOwner) {
       return res.status(403).json({

@@ -4,7 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
 const { isOwnerRole, isReservedRoleName } = require('../utils/roleRank');
-const { broadcastWorkspaceEvent } = require('../socket');
+const { broadcastWorkspaceEvent, sendUserEvent } = require('../socket');
 const { logAuthEvent } = require('../services/authAudit');
 const {
   PERMISSIONS,
@@ -169,6 +169,21 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     if (targetWsId) {
       broadcastWorkspaceEvent(targetWsId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
+    }
+
+    try {
+      const affectedUsers = await req.db.query(
+        'SELECT DISTINCT user_id FROM workspace_members WHERE role_id = ? UNION SELECT DISTINCT user_id FROM board_members WHERE role_id = ?',
+        [roleId, roleId]
+      );
+      for (const u of affectedUsers) {
+        sendUserEvent(u.user_id, 'user:permissions_updated', {
+          roleId,
+          workspaceId: targetWsId
+        }, req.tenant?.id);
+      }
+    } catch (sockErr) {
+      console.warn('[WARN] Failed to emit user:permissions_updated on role edit:', sockErr.message);
     }
 
     await logAuthEvent(req.db, {

@@ -39,7 +39,10 @@
     "db:reset-live": "node src/scripts/resetLiveDb.js",
     "check:prod-env": "node src/scripts/checkProdEnv.js",
     "backup": "node src/scripts/backup.js",
-    "backup:restore": "node src/scripts/restoreBackup.js"
+    "backup:restore": "node src/scripts/restoreBackup.js",
+    "permtest:provision": "node src/scripts/permtestProvision.js",
+    "permtest:drop": "node src/scripts/permtestDrop.js",
+    "permcheck": "node src/scripts/permcheck.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

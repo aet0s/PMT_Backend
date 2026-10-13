@@ -1,0 +1,171 @@
+{
+  "meta": {
+    "frontendUrl": "http://localhost:5173",
+    "apiBaseUrl": "http://localhost:5173",
+    "tenantSlug": "permtest_company",
+    "commitHash": "d75ee941e2dc01531656f0a7e43429f34836b8d6",
+    "executionDate": "2026-10-13T07:49:51.280Z",
+    "totalModules": 34,
+    "totalPermissions": 140,
+    "testableCount": 65,
+    "plannedCount": 75,
+    "totalAssertions": 12,
+    "passedCount": 12,
+    "failedCount": 0,
+    "status": "PASSED"
+  },
+  "records": [
+    {
+      "permission": "role.system.admin",
+      "module": "role_assignment",
+      "step": "R1: System Role [Admin]",
+      "status": "PASS",
+      "evidence": {
+        "roleName": "Admin",
+        "actualCount": 137,
+        "expectedCount": 137,
+        "missingPerms": []
+      },
+      "timestamp": "2026-10-13T07:49:54.023Z"
+    },
+    {
+      "permission": "role.system.project_manager",
+      "module": "role_assignment",
+      "step": "R1: System Role [Project Manager]",
+      "status": "PASS",
+      "evidence": {
+        "roleName": "Project Manager",
+        "actualCount": 112,
+        "expectedCount": 106,
+        "missingPerms": []
+      },
+      "timestamp": "2026-10-13T07:49:54.682Z"
+    },
+    {
+      "permission": "role.system.team_member",
+      "module": "role_assignment",
+      "step": "R1: System Role [Team Member]",
+      "status": "PASS",
+      "evidence": {
+        "roleName": "Team Member",
+        "actualCount": 39,
+        "expectedCount": 39,
+        "missingPerms": []
+      },
+      "timestamp": "2026-10-13T07:49:55.350Z"
+    },
+    {
+      "permission": "role.system.viewer",
+      "module": "role_assignment",
+      "step": "R1: System Role [Viewer]",
+      "status": "PASS",
+      "evidence": {
+        "roleName": "Viewer",
+        "actualCount": 29,
+        "expectedCount": 29,
+        "missingPerms": []
+      },
+      "timestamp": "2026-10-13T07:49:56.008Z"
+    },
+    {
+      "permission": "role.system.guest",
+      "module": "role_assignment",
+      "step": "R1: System Role [Guest]",
+      "status": "PASS",
+      "evidence": {
+        "roleName": "Guest",
+        "actualCount": 12,
+        "expectedCount": 12,
+        "missingPerms": []
+      },
+      "timestamp": "2026-10-13T07:49:56.658Z"
+    },
+    {
+      "permission": "role.mid_session_change",
+      "module": "role_assignment",
+      "step": "R2: Mid-Session Upgrade & Downgrade Across Both Endpoints",
+      "status": "PASS",
+      "evidence": {
+        "viewerDenied": true,
+        "upHttpOk": true,
+        "teamMemberAllowed": true,
+        "downHttpOk": true,
+        "downgradedDenied": true
+      },
+      "timestamp": "2026-10-13T07:49:57.394Z"
+    },
+    {
+      "permission": "role.multi_user_and_delete_lock",
+      "module": "role_assignment",
+      "step": "R3: Multi-User Role Edit & Delete Lock while In Use",
+      "status": "PASS",
+      "evidence": {
+        "bothInherit": true,
+        "deleteBlocked": true,
+        "deleteStatus": 400
+      },
+      "timestamp": "2026-10-13T07:49:58.775Z"
+    },
+    {
+      "permission": "scoping.board_membership",
+      "module": "scoping",
+      "step": "R4: Board-Level Membership & Dynamic Add/Remove",
+      "status": "PASS",
+      "evidence": {
+        "b1Ok": true,
+        "b2Denied": true,
+        "b1RemovedDenied": true
+      },
+      "timestamp": "2026-10-13T07:49:59.504Z"
+    },
+    {
+      "permission": "scoping.multi_workspace",
+      "module": "scoping",
+      "step": "R5: Cross-Workspace Role Isolation",
+      "status": "PASS",
+      "evidence": {
+        "w1Allowed": true,
+        "w2Denied": true,
+        "w2Status": 403
+      },
+      "timestamp": "2026-10-13T07:50:00.192Z"
+    },
+    {
+      "permission": "member.company_routes",
+      "module": "company_routes",
+      "step": "R6: Company-Level Members Directory Gating",
+      "status": "PASS",
+      "evidence": {
+        "allowedStatus": 200,
+        "deniedStatus": 403
+      },
+      "timestamp": "2026-10-13T07:50:01.519Z"
+    },
+    {
+      "permission": "security.anti_escalation_and_name_attacks",
+      "module": "security",
+      "step": "R7: Name Attacks & Privilege Escalation Prevention",
+      "status": "PASS",
+      "evidence": {
+        "allNameAttacksBlocked": true,
+        "escalationBlocked": true,
+        "escalateStatus": 403,
+        "editOwnBlocked": true,
+        "editOwnStatus": 403
+      },
+      "timestamp": "2026-10-13T07:50:02.282Z"
+    },
+    {
+      "permission": "security.realtime_revocation",
+      "module": "security",
+      "step": "R8: Realtime Permission Revocation & Immediate Denial",
+      "status": "PASS",
+      "evidence": {
+        "httpDenied": true,
+        "liveSocketReceived": true,
+        "status": 403
+      },
+      "timestamp": "2026-10-13T07:50:03.404Z"
+    }
+  ]
+}
