@@ -11,7 +11,7 @@ const {
 } = require('../../rbac/registry');
 const { createFreshUserViaInvite } = require('./fixtures');
 
-async function ensureDeletableEntity(ownerClient, context, targetCtx, keyOrModule) {
+async function ensureDeletableEntity(ownerClient, tenantDb, context, targetCtx, keyOrModule) {
   if (keyOrModule.includes('task') || keyOrModule === 'task.delete') {
     const cRes = await ownerClient.post('/api/cards', { list_id: context.listId, title: `zz-permtest-card-del-${Date.now()}` });
     targetCtx.deletableCardId = cRes.data?.card?.id || cRes.data?.id;
@@ -28,13 +28,98 @@ async function ensureDeletableEntity(ownerClient, context, targetCtx, keyOrModul
     const lbRes = await ownerClient.post(`/api/boards/${context.boardId}/labels`, { name: `zz-permtest-label-del-${Date.now()}`, color: '#ef4444' });
     targetCtx.deletableLabelId = lbRes.data?.label?.id || lbRes.data?.id;
   }
-  if (keyOrModule.includes('role') || keyOrModule === 'role.delete') {
+  if (keyOrModule.includes('role') || keyOrModule === 'role.delete' || keyOrModule === 'member.assign_role' || keyOrModule === 'role.assign') {
     const rRes = await ownerClient.post(`/api/workspaces/${context.workspaceId}/roles`, { name: `zz-permtest-role-del-${Date.now()}`, permission_keys: ['workspace.view'] });
-    targetCtx.deletableRoleId = rRes.data?.role?.id || rRes.data?.id;
+    const rId = rRes.data?.role?.id || rRes.data?.id;
+    if (tenantDb && rId) {
+      await tenantDb.query('UPDATE roles SET rank = 10 WHERE id = ?', [rId]);
+    }
+    targetCtx.deletableRoleId = rId;
   }
-  if (keyOrModule.includes('project') || keyOrModule === 'project.delete') {
+  if (keyOrModule.includes('project') || keyOrModule === 'project.delete' || keyOrModule.includes('archive')) {
     const bRes = await ownerClient.post('/api/boards', { workspace_id: context.workspaceId, name: `zz-permtest-board-del-${Date.now()}` });
     targetCtx.deletableBoardId = bRes.data?.board?.id || bRes.data?.id;
+    if (targetCtx.ownUserId) {
+      await ownerClient.post(`/api/boards/${targetCtx.deletableBoardId}/members`, {
+        user_id: targetCtx.ownUserId,
+        role: 'member'
+      });
+    }
+    if (keyOrModule.includes('restore') || keyOrModule === 'archive.restore') {
+      await ownerClient.post(`/api/boards/${targetCtx.deletableBoardId}/archive`, {});
+    }
+  }
+  if (keyOrModule.includes('workspace') || keyOrModule === 'workspace.delete' || keyOrModule === 'workspace.archive') {
+    const wsRes = await ownerClient.post('/api/workspaces', { name: `zz-permtest-ws-del-${Date.now()}` });
+    targetCtx.deletableWorkspaceId = wsRes.data?.workspace?.id || wsRes.data?.id;
+    if (tenantDb && targetCtx.ownUserId && targetCtx.roleId) {
+      await tenantDb.query(
+        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, "Custom", ?)',
+        [targetCtx.deletableWorkspaceId, targetCtx.ownUserId, targetCtx.roleId]
+      );
+    }
+    if (tenantDb && context.workspaceId) {
+      await tenantDb.query('UPDATE workspaces SET is_archived = 0 WHERE id = ?', [context.workspaceId]);
+    }
+  }
+  if (keyOrModule.includes('member') || keyOrModule === 'member.remove') {
+    if (tenantDb) {
+      if (context.targetUserId && context.systemRoleMap?.Viewer) {
+        await tenantDb.query(
+          "UPDATE workspace_members SET role_id = ?, role = 'Viewer' WHERE workspace_id = ? AND user_id = ?",
+          [context.systemRoleMap.Viewer, context.workspaceId, context.targetUserId]
+        );
+      }
+      let userExists = false;
+      if (context.removableUserId) {
+        const uRows = await tenantDb.query('SELECT id FROM users WHERE id = ?', [context.removableUserId]);
+        if (uRows.length > 0) userExists = true;
+      }
+      if (!userExists) {
+        const fresh = await createFreshUserViaInvite({
+          ownerClient,
+          apiBaseUrl: context.apiBaseUrl,
+          frontendUrl: context.frontendUrl,
+          tenantSlug: context.tenantSlug,
+          workspaceId: context.workspaceId,
+          roleId: context.systemRoleMap['Viewer'],
+          boardIds: [context.boardId]
+        });
+        context.removableUserId = fresh.user.id;
+        targetCtx.removableUserId = fresh.user.id;
+      } else {
+        await tenantDb.query("INSERT INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, 'Viewer', ?) ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = VALUES(role)", [context.workspaceId, context.removableUserId, context.systemRoleMap['Viewer']]);
+        targetCtx.removableUserId = context.removableUserId;
+      }
+    }
+  }
+  if (keyOrModule.includes('comment')) {
+    if (tenantDb && targetCtx.ownUserId) {
+      const ownC = await tenantDb.query("INSERT INTO comments (card_id, user_id, body) VALUES (?, ?, 'zz-permtest-own-comment')", [context.cardId, targetCtx.ownUserId]);
+      const ownId = ownC?.insertId || ownC?.[0]?.insertId;
+      targetCtx.ownCommentId = ownId;
+      targetCtx.ownDeletableCommentId = ownId;
+    }
+    const ocRes = await ownerClient.post(`/api/cards/${context.cardId}/comments`, { body: `zz-permtest-other-${Date.now()}` });
+    targetCtx.otherCommentId = ocRes.data?.comment?.id;
+  }
+  if (keyOrModule.includes('attachment') || keyOrModule.includes('file')) {
+    if (tenantDb) {
+      const attOwn = await tenantDb.query("INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes) VALUES (?, ?, 'own.txt', '/uploads/own.txt', 'link', 100)", [context.cardId, targetCtx.ownUserId || context.targetUserId]);
+      const ownAttId = attOwn?.insertId || attOwn?.[0]?.insertId;
+      targetCtx.ownAttachmentId = ownAttId;
+      targetCtx.fileId = ownAttId;
+      const attOther = await tenantDb.query("INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes) VALUES (?, ?, 'other.txt', '/uploads/other.txt', 'link', 100)", [context.cardId, context.targetUserId]);
+      const otherAttId = attOther?.insertId || attOther?.[0]?.insertId;
+      targetCtx.otherAttachmentId = otherAttId;
+    }
+  }
+  if (keyOrModule.includes('session')) {
+    if (tenantDb && targetCtx.ownUserId) {
+      const sId = `zz-permtest-sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      await tenantDb.query("INSERT INTO sessions (id, user_id, refresh_token_hash, expires_at) VALUES (?, ?, 'hash', DATE_ADD(NOW(), INTERVAL 1 DAY))", [sId, targetCtx.ownUserId]);
+      targetCtx.ownSessionId = sId;
+    }
   }
   if (keyOrModule.includes('restore') && context.archivedCardId) {
     await ownerClient.patch(`/api/cards/${context.archivedCardId}`, { is_archived: true });
@@ -99,6 +184,9 @@ async function runSuiteN1({
       if (!roleId) {
         throw new Error(`Failed to create role for ${permKey}: ${JSON.stringify(createRoleRes.data)}`);
       }
+      if (tenantDb && roleId) {
+        await tenantDb.query('UPDATE roles SET rank = 50 WHERE id = ?', [roleId]);
+      }
 
       const { client: userClient, user } = await createFreshUserViaInvite({
         ownerClient,
@@ -113,7 +201,8 @@ async function runSuiteN1({
       // Context for user operations
       const userCtx = {
         ...context,
-        ownUserId: user.id
+        ownUserId: user.id,
+        roleId
       };
 
       // Connect socket for user to verify realtime permission updates
@@ -136,9 +225,7 @@ async function runSuiteN1({
       await new Promise((r) => setTimeout(r, 200));
 
       // 2. TOGGLE OFF baseline
-      if (permKey.endsWith('.delete') || permKey.includes('delete_')) {
-        await ensureDeletableEntity(ownerClient, context, userCtx, permKey);
-      }
+      await ensureDeletableEntity(ownerClient, tenantDb, context, userCtx, permKey);
       // Operation should be denied (403 or 404)
       const baselineExec = await op.execute(userClient, userCtx);
       const baselineDenied = [403, 404, 401].includes(baselineExec.status);
@@ -176,9 +263,7 @@ async function runSuiteN1({
       const onMyPerms = onMyPermsRes.data?.permissions || [];
       const onPermPresent = onMyPerms.includes(permKey);
 
-      if (permKey.endsWith('.delete') || permKey.includes('delete_')) {
-        await ensureDeletableEntity(ownerClient, context, userCtx, permKey);
-      }
+      await ensureDeletableEntity(ownerClient, tenantDb, context, userCtx, permKey);
       const onExec = await op.execute(userClient, userCtx);
       const onSucceeded = onExec.status >= 200 && onExec.status < 300;
 
@@ -278,6 +363,9 @@ async function runSuiteN1({
         permission_keys: fullSweepKeys
       });
       const sweepRoleId = sweepRoleRes.data?.role?.id || sweepRoleRes.data?.id;
+      if (tenantDb && sweepRoleId) {
+        await tenantDb.query('UPDATE roles SET rank = 50 WHERE id = ?', [sweepRoleId]);
+      }
 
       const { client: sweepClient, user: sweepUser } = await createFreshUserViaInvite({
         ownerClient,
@@ -289,14 +377,15 @@ async function runSuiteN1({
         boardIds: [context.boardId, context.board2Id]
       });
 
-      const sweepCtx = { ...context, ownUserId: sweepUser.id };
-      await ensureDeletableEntity(ownerClient, context, sweepCtx, moduleName);
+      const sweepCtx = { ...context, ownUserId: sweepUser.id, roleId: sweepRoleId };
+      await ensureDeletableEntity(ownerClient, tenantDb, context, sweepCtx, moduleName);
 
       // All ON: all module ops succeed
       let allOnSuccess = true;
       for (const p of perms) {
         const op = OPERATIONS[p.key];
         if (op) {
+          await ensureDeletableEntity(ownerClient, tenantDb, context, sweepCtx, p.key);
           const res = await op.execute(sweepClient, sweepCtx);
           if (res.status < 200 || res.status >= 300) {
             allOnSuccess = false;
@@ -317,7 +406,7 @@ async function runSuiteN1({
         workspace_id: context.workspaceId
       });
 
-      await ensureDeletableEntity(ownerClient, context, sweepCtx, excludedKey);
+      await ensureDeletableEntity(ownerClient, tenantDb, context, sweepCtx, excludedKey);
       const excludedOpRes = await OPERATIONS[excludedKey].execute(sweepClient, sweepCtx);
       const leaveOneOutExcludedDenied = [403, 404, 401].includes(excludedOpRes.status);
 
@@ -362,7 +451,7 @@ async function runSuiteN1({
     const walkCtx = { ...context, ownUserId: walkUser.id };
 
     let cumulativePass = true;
-    const currentKeys = ['workspace.view'];
+    let currentKeys = ['workspace.view'];
 
     // Progressive walk
     for (let i = 1; i < walkPerms.length; i++) {
@@ -373,25 +462,29 @@ async function runSuiteN1({
       });
 
       const op = OPERATIONS[walkPerms[i]];
+      await ensureDeletableEntity(ownerClient, tenantDb, context, walkCtx, walkPerms[i]);
       const res = await op.execute(walkClient, walkCtx);
       if (res.status < 200 || res.status >= 300) {
         cumulativePass = false;
+        console.log(`[CUMULATIVE PROGRESSIVE FAIL]: ${walkPerms[i]} returned ${res.status}:`, res.data);
       }
     }
 
     // Regressive walk (remove in reverse)
     for (let i = walkPerms.length - 1; i >= 1; i--) {
       const removedKey = walkPerms[i];
-      const remaining = currentKeys.filter((k) => k !== removedKey);
+      currentKeys = currentKeys.filter((k) => k !== removedKey);
       await ownerClient.patch(`/api/roles/${walkRoleId}`, {
-        permission_keys: remaining,
+        permission_keys: currentKeys,
         workspace_id: context.workspaceId
       });
 
       const op = OPERATIONS[removedKey];
+      await ensureDeletableEntity(ownerClient, tenantDb, context, walkCtx, removedKey);
       const res = await op.execute(walkClient, walkCtx);
       if (![403, 404, 401].includes(res.status)) {
         cumulativePass = false;
+        console.log(`[REGRESSIVE REVOCATION FAIL]: ${removedKey} returned ${res.status}:`, res.data);
       }
     }
 

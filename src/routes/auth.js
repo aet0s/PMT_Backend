@@ -1308,6 +1308,22 @@ router.post('/refresh', async (req, res, next) => {
 // -------------------------------------------------------------
 router.get('/sessions', requireAuth, async (req, res, next) => {
   try {
+    let wsId = req.workspaceId;
+    if (!wsId) {
+      const wsRes = await req.db.query(
+        'SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1',
+        [req.user.id]
+      );
+      wsId = wsRes[0]?.workspace_id;
+    }
+    if (wsId) {
+      const hasPerm = await userHasPermission(req.user.id, wsId, 'session.view_own', req.db);
+      if (!hasPerm) {
+        return res.status(403).json({
+          error: { message: 'You do not have permission to view sessions', code: 'PERMISSION_DENIED' }
+        });
+      }
+    }
     const sessions = await listSessions(req.db, req.user.id, req.user.sessionId);
     return res.json({ sessions });
   } catch (err) {

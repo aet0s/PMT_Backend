@@ -49,6 +49,7 @@ const ROUTE_PERMISSIONS = new Map([
 
   // ─── Workspaces ───────────────────────────────────────────────────────────
   ['GET /api/workspaces',                                             { permission: 'workspace.view',             scope: 'company' }],
+  ['GET /api/workspaces/:id',                                         { permission: 'workspace.view',             scope: 'company' }],
   ['POST /api/workspaces',                                            { permission: 'workspace.create',           scope: 'company' }],
   ['PATCH /api/workspaces/:id',                                       { permission: 'workspace.edit',             scope: 'company', note: 'fine-grained: workspace.edit, workspace.archive' }],
   ['POST /api/workspaces/:id/auto-archive',                           { permission: 'task.archive',                scope: 'company', note: 'auto-archive completed cards' }],
@@ -124,6 +125,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/attachments/file',  { permission: 'attachment.upload',     scope: 'project' }],
   ['POST /api/cards/:id/attachments/link',  { permission: 'attachment.upload',     scope: 'project' }],
   ['DELETE /api/cards/attachments/:id',     { permission: 'attachment.delete_own', scope: 'project', note: 'enforces attachment.delete_own or attachment.delete_any' }],
+  ['GET /api/cards/:id/comments',           { permission: 'comment.view',          scope: 'project' }],
   ['POST /api/cards/:id/comments',          { permission: 'comment.create',        scope: 'project' }],
   ['PATCH /api/cards/comments/:id',         { permission: 'comment.edit_own',      scope: 'project' }],
   ['DELETE /api/cards/comments/:id',        { permission: 'comment.delete_own',    scope: 'project', note: 'enforces comment.delete_own or comment.delete_any' }],

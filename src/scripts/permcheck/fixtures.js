@@ -198,6 +198,9 @@ async function setupFixtures({ apiBaseUrl, frontendUrl, ownerEmail, ownerPasswor
   }
 
   const context = {
+    apiBaseUrl,
+    frontendUrl,
+    tenantSlug,
     workspaceId,
     workspace2Id,
     deletableWorkspaceId,

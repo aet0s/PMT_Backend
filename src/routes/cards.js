@@ -1160,6 +1160,24 @@ router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
   }
 });
 
+// GET /api/cards/:id/comments
+router.get('/:id/comments', requireAuth, requirePermission('comment.view'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  try {
+    const comments = await req.db.query(
+      `SELECT c.*, u.name as author_name 
+       FROM comments c 
+       JOIN users u ON c.user_id = u.id 
+       WHERE c.card_id = ? 
+       ORDER BY c.created_at DESC`,
+      [cardId]
+    );
+    return res.json({ comments });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/cards/:id/comments
 router.post('/:id/comments', requireAuth, requirePermission('comment.create'), async (req, res, next) => {
   const cardId = Number(req.params.id);

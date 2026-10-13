@@ -177,6 +177,32 @@ router.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
+// GET /api/workspaces/:id - Get single workspace details
+router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const wsRes = await req.db.query(
+      `SELECT w.id, w.name, w.description, w.settings, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
+       FROM workspaces w
+       JOIN workspace_members wm ON w.id = wm.workspace_id
+       LEFT JOIN roles r ON wm.role_id = r.id
+       WHERE w.id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    if (wsRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+    const w = wsRes[0];
+    let parsed = w.settings;
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch {}
+    }
+    return res.json({ workspace: { ...w, settings: parsed } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/workspaces - Create new workspace and ensure Admin/Owner visibility
 router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, next) => {
   const name = sanitizePlain(req.body.name);
@@ -978,10 +1004,21 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
       });
     }
 
-    const targetMemberRes = await req.db.query(
-      `SELECT r.name as role_name, u.email as user_email
+    const callerMemberRes = await req.db.query(
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable
        FROM workspace_members wm 
-       JOIN roles r ON wm.role_id = r.id 
+       LEFT JOIN roles r ON wm.role_id = r.id 
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    const callerRole = callerMemberRes[0]?.id
+      ? { name: callerMemberRes[0].role_name, rank: callerMemberRes[0].rank, is_system: callerMemberRes[0].is_system, is_editable: callerMemberRes[0].is_editable }
+      : (callerMemberRes[0]?.role_name || callerMemberRes[0]?.legacy_role || 'Team Member');
+
+    const targetMemberRes = await req.db.query(
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable, u.email as user_email
+       FROM workspace_members wm 
+       LEFT JOIN roles r ON wm.role_id = r.id 
        JOIN users u ON wm.user_id = u.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, targetUserId]
@@ -992,16 +1029,12 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
     }
 
     const targetUserEmail = targetMemberRes[0]?.user_email;
+    const targetRole = targetMemberRes[0]?.id
+      ? { name: targetMemberRes[0].role_name, rank: targetMemberRes[0].rank, is_system: targetMemberRes[0].is_system, is_editable: targetMemberRes[0].is_editable }
+      : (targetMemberRes[0]?.role_name || targetMemberRes[0]?.legacy_role || 'Team Member');
 
-    const callerMemberRes = await req.db.query(
-      `SELECT r.name as role_name FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [workspaceId, req.user.id]
-    );
-    const callerRoleName = callerMemberRes[0]?.role_name || 'Team Member';
-    const targetRoleName = targetMemberRes[0]?.role_name || 'Team Member';
-
-    if (isOwnerRole(targetRoleName)) {
-      if (!isOwnerRole(callerRoleName)) {
+    if (isOwnerRole(targetRole)) {
+      if (!isOwnerRole(callerRole)) {
         return res.status(403).json({
           error: { message: 'Only an Owner may remove another Owner', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
         });
@@ -1013,9 +1046,9 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
         });
       }
     } else {
-      const callerRank = getRoleRank(callerRoleName);
-      const targetRank = getRoleRank(targetRoleName);
-      if (!isOwnerRole(callerRoleName) && callerRank <= targetRank) {
+      const callerRank = getRoleRank(callerRole);
+      const targetRank = getRoleRank(targetRole);
+      if (!isOwnerRole(callerRole) && callerRank <= targetRank) {
         return res.status(403).json({
           error: { message: 'You cannot remove a member with equal or higher rank', code: 'INSUFFICIENT_ROLE_RANK' }
         });
@@ -1104,22 +1137,26 @@ router.post('/:workspaceId/members/:userId/reset-password', requireAuth, require
 
     // Evaluate caller and target role ranks
     const callerRoleRes = await req.db.query(
-      `SELECT wm.role as legacy_role, r.name as role_name
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable
        FROM workspace_members wm
        LEFT JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, req.user.id]
     );
-    const callerRole = callerRoleRes[0]?.role_name || callerRoleRes[0]?.legacy_role || 'member';
+    const callerRole = callerRoleRes[0]?.id
+      ? { name: callerRoleRes[0].role_name, rank: callerRoleRes[0].rank, is_system: callerRoleRes[0].is_system, is_editable: callerRoleRes[0].is_editable }
+      : (callerRoleRes[0]?.role_name || callerRoleRes[0]?.legacy_role || 'member');
 
     const targetRoleRes = await req.db.query(
-      `SELECT wm.role as legacy_role, r.name as role_name
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable
        FROM workspace_members wm
        LEFT JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, targetUserId]
     );
-    const targetRole = targetRoleRes[0]?.role_name || targetRoleRes[0]?.legacy_role || 'member';
+    const targetRole = targetRoleRes[0]?.id
+      ? { name: targetRoleRes[0].role_name, rank: targetRoleRes[0].rank, is_system: targetRoleRes[0].is_system, is_editable: targetRoleRes[0].is_editable }
+      : (targetRoleRes[0]?.role_name || targetRoleRes[0]?.legacy_role || 'member');
 
     const authority = canResetTarget(callerRole, targetRole, req.user.id, targetUserId);
     if (!authority.allowed) {
@@ -1200,22 +1237,26 @@ router.post('/:workspaceId/members/:userId/reset-2fa', requireAuth, requirePermi
     const targetUser = memberRes[0];
 
     const callerRoleRes = await req.db.query(
-      `SELECT wm.role as legacy_role, r.name as role_name
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable
        FROM workspace_members wm
        LEFT JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, req.user.id]
     );
-    const callerRole = callerRoleRes[0]?.role_name || callerRoleRes[0]?.legacy_role || 'member';
+    const callerRole = callerRoleRes[0]?.id
+      ? { name: callerRoleRes[0].role_name, rank: callerRoleRes[0].rank, is_system: callerRoleRes[0].is_system, is_editable: callerRoleRes[0].is_editable }
+      : (callerRoleRes[0]?.role_name || callerRoleRes[0]?.legacy_role || 'member');
 
     const targetRoleRes = await req.db.query(
-      `SELECT wm.role as legacy_role, r.name as role_name
+      `SELECT wm.role as legacy_role, r.id, r.name as role_name, r.rank, r.is_system, r.is_editable
        FROM workspace_members wm
        LEFT JOIN roles r ON wm.role_id = r.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
       [workspaceId, targetUserId]
     );
-    const targetRole = targetRoleRes[0]?.role_name || targetRoleRes[0]?.legacy_role || 'member';
+    const targetRole = targetRoleRes[0]?.id
+      ? { name: targetRoleRes[0].role_name, rank: targetRoleRes[0].rank, is_system: targetRoleRes[0].is_system, is_editable: targetRoleRes[0].is_editable }
+      : (targetRoleRes[0]?.role_name || targetRoleRes[0]?.legacy_role || 'member');
 
     const authority = canResetTarget(callerRole, targetRole, req.user.id, targetUserId);
     if (!authority.allowed) {
@@ -2639,7 +2680,7 @@ router.get('/:id/search', requireAuth, requirePermission('search.use'), async (r
       return res.json({ cards: [], boards: [] });
     }
     const cards = await req.db.query(
-      `SELECT c.id, c.title, c.board_id, b.name as board_name
+      `SELECT c.id, c.title, l.board_id, b.name as board_name
        FROM cards c
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id

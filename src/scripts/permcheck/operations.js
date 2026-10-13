@@ -25,8 +25,8 @@ const OPERATIONS = {
   'workspace.archive': {
     module: 'workspace',
     scope: 'company',
-    name: 'POST /api/workspaces/:id/auto-archive',
-    execute: async (client, ctx) => client.post(`/api/workspaces/${ctx.workspaceId}/auto-archive`, { days: 14 })
+    name: 'PATCH /api/workspaces/:id (archive)',
+    execute: async (client, ctx) => client.patch(`/api/workspaces/${ctx.workspaceId}`, { is_archived: true })
   },
   'workspace.delete': {
     module: 'workspace',
@@ -57,7 +57,7 @@ const OPERATIONS = {
     scope: 'company',
     name: 'PATCH /api/workspaces/:id/members/:userId/role',
     execute: async (client, ctx) => client.patch(`/api/workspaces/${ctx.workspaceId}/members/${ctx.targetUserId}/role`, {
-      role_id: ctx.viewerRoleId
+      role_id: ctx.deletableRoleId
     })
   },
   'member.reset_password': {
@@ -71,11 +71,8 @@ const OPERATIONS = {
   'member.reset_2fa': {
     module: 'member',
     scope: 'company',
-    name: 'POST /api/auth/admin/reset-2fa',
-    execute: async (client, ctx) => client.post('/api/auth/admin/reset-2fa', {
-      user_id: ctx.targetUserId,
-      workspace_id: ctx.workspaceId
-    })
+    name: 'POST /api/workspaces/:id/members/:userId/reset-2fa',
+    execute: async (client, ctx) => client.post(`/api/workspaces/${ctx.workspaceId}/members/${ctx.targetUserId}/reset-2fa`, {})
   },
   'member.remove': {
     module: 'member',
@@ -119,7 +116,7 @@ const OPERATIONS = {
     scope: 'company',
     name: 'PATCH /api/workspaces/:id/members/:userId/role (role.assign)',
     execute: async (client, ctx) => client.patch(`/api/workspaces/${ctx.workspaceId}/members/${ctx.targetUserId}/role`, {
-      role_id: ctx.viewerRoleId
+      role_id: ctx.deletableRoleId
     })
   },
 
@@ -347,11 +344,10 @@ const OPERATIONS = {
   'attachment.upload': {
     module: 'attachment',
     scope: 'project',
-    name: 'POST /api/cards/:id/attachments',
-    execute: async (client, ctx) => client.post(`/api/cards/${ctx.cardId}/attachments`, {
-      file_name: 'test.txt',
-      file_url: '/uploads/test.txt',
-      file_size: 1024
+    name: 'POST /api/cards/:id/attachments/link',
+    execute: async (client, ctx) => client.post(`/api/cards/${ctx.cardId}/attachments/link`, {
+      link_url: `https://example.com/test-att-${Date.now()}`,
+      display_name: 'test-attachment'
     })
   },
   'attachment.delete_own': {
@@ -371,14 +367,14 @@ const OPERATIONS = {
   'file.view': {
     module: 'file',
     scope: 'project',
-    name: 'GET /api/files/:id',
-    execute: async (client, ctx) => client.get(`/api/files/${ctx.fileId}`)
+    name: 'GET /api/attachments/:id',
+    execute: async (client, ctx) => client.get(`/api/attachments/${ctx.fileId || ctx.otherAttachmentId}`)
   },
   'file.delete': {
     module: 'file',
     scope: 'project',
-    name: 'DELETE /api/files/:id',
-    execute: async (client, ctx) => client.delete(`/api/files/${ctx.deletableFileId}`)
+    name: 'DELETE /api/attachments/:id',
+    execute: async (client, ctx) => client.delete(`/api/attachments/${ctx.fileId || ctx.otherAttachmentId}`)
   },
 
   // === SESSION MODULE ===
@@ -477,15 +473,15 @@ const OPERATIONS = {
   },
   'archive.restore': {
     module: 'archive',
-    scope: 'company',
-    name: 'POST /api/cards/:id/restore',
-    execute: async (client, ctx) => client.post(`/api/cards/${ctx.archivedCardId}/restore`, {})
+    scope: 'project',
+    name: 'POST /api/boards/:id/restore',
+    execute: async (client, ctx) => client.post(`/api/boards/${ctx.deletableBoardId}/restore`, {})
   },
   'archive.permanent_delete': {
     module: 'archive',
-    scope: 'company',
-    name: 'DELETE /api/workspaces/:id/archived-cards',
-    execute: async (client, ctx) => client.delete(`/api/workspaces/${ctx.workspaceId}/archived-cards`)
+    scope: 'project',
+    name: 'DELETE /api/boards/:id',
+    execute: async (client, ctx) => client.delete(`/api/boards/${ctx.deletableBoardId}`)
   },
 
   // === SEARCH MODULE ===

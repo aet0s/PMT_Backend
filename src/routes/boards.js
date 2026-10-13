@@ -740,7 +740,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
 });
 
 // GET /api/boards/:id/labels
-router.get('/:id/labels', requireAuth, requirePermission(['label.view', 'project.view']), async (req, res, next) => {
+router.get('/:id/labels', requireAuth, requirePermission('label.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);

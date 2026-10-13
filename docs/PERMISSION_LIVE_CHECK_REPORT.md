@@ -3,8 +3,8 @@
 **Target Frontend URL:** `http://localhost:5173`  
 **Target API URL:** `http://localhost:5173`  
 **Tenant Company Slug:** `permtest_company`  
-**Git Commit Hash:** `d75ee941e2dc01531656f0a7e43429f34836b8d6`  
-**Execution Date:** 2026-10-13T07:49:51.280Z  
+**Git Commit Hash:** `3ccc79ffb93ee9f810357ceee3e3c3c6bf5f5b10`  
+**Execution Date:** 2026-10-13T10:14:26.783Z  
 **Overall Status:** ✅ 100% PASSED  
 
 ---
@@ -22,8 +22,8 @@
   - `label.delete`: Enforced on `DELETE /api/boards/:id/labels/:labelId`
   - `audit.export`: Enforced on `GET /api/workspaces/:id/audit/export`
   - `search.use`: Enforced on `GET /api/workspaces/:id/search`
-- **Total Live Verifications Executed:** 12
-- **Passed:** 12
+- **Total Live Verifications Executed:** 289
+- **Passed:** 289
 - **Failed:** 0
 
 ---
@@ -34,7 +34,7 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `activity.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `activity.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `23ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `api_key` (3 permissions)
 
@@ -48,26 +48,26 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `archive.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `archive.restore` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `archive.permanent_delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `archive.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `archive.restore` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `16ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `archive.permanent_delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `attachment` (5 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `attachment.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `attachment.upload` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `attachment.delete_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `attachment.delete_any` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `attachment.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `92ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `attachment.upload` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `attachment.delete_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `attachment.delete_any` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 | `attachment.version` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 
 ### Module: `audit` (2 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `audit.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `audit.export` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `audit.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `audit.export` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `24ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `backlog` (2 permissions)
 
@@ -87,19 +87,19 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `checklist.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `checklist.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `checklist.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `checklist.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `checklist.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `checklist.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `22ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `comment` (5 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `comment.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `comment.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `comment.edit_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `comment.delete_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `comment.delete_any` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `comment.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `comment.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `29ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `comment.edit_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `22ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `comment.delete_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `comment.delete_any` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `23ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `company` (6 permissions)
 
@@ -141,8 +141,8 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `file.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `file.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `file.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `32ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `file.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `import_export` (2 permissions)
 
@@ -162,31 +162,31 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `label.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `label.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `label.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `label.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `label.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `63ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `label.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `23ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `label.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `label.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `31ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `list` (4 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `list.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `list.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `list.reorder` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `list.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `list.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `list.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `list.reorder` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `list.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `26ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `member` (7 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `member.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `member.invite` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `member.remove` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `member.assign_role` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `23ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.invite` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `25ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.remove` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.assign_role` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 | `member.deactivate` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `company` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
-| `member.reset_password` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `member.reset_2fa` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.reset_password` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `24ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `member.reset_2fa` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `24ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `milestone` (4 permissions)
 
@@ -201,19 +201,19 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `notification.view_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `notification.manage_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `notification.view_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `notification.manage_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `15ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `project` (9 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `project.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `project.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `project.edit_settings` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `project.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `project.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `project.manage_members` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `16ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.edit_settings` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `32ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `project.manage_members` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 | `project.manage_templates` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `project.change_status` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `project.view_dashboard` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
@@ -232,25 +232,25 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `role.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `role.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `role.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `role.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `role.assign` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `role.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `role.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `role.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `role.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `21ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `role.assign` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `search` (1 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `search.use` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `search.use` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `session` (3 permissions)
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `session.view_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `session.revoke_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `session.revoke_others` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `session.view_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `session.revoke_own` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `session.revoke_others` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `17ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `sprint` (6 permissions)
 
@@ -275,21 +275,21 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `task.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.move` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.assign` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `27ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.move` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `22ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.assign` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 | `task.watch` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `task.set_priority` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `task.bulk_edit` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `task.bulk_delete` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `task.import` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
 | `task.export` | *Planned* | N/A | N/A | N/A | N/A | - | N/A | - | `project` | Hidden | NOT TESTABLE (Feature planned, safely protected) |
-| `task.duplicate` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
-| `task.restore` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.duplicate` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `25ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `20ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
+| `task.restore` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `19ms` | ✅ 200 | ✅ Received | `project` | ✅ Enforced | Verified end-to-end via frontend |
 
 ### Module: `team` (5 permissions)
 
@@ -334,11 +334,11 @@
 
 | Permission | Type | OFF Baseline | ON (Grant) | OFF Again | my-permissions Sync | Latency | Round-Trip | Realtime Socket | Scope | UI Gating | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `workspace.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `workspace.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `workspace.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `workspace.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
-| `workspace.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `< 25msms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `workspace.view` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `18ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `workspace.create` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `16ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `workspace.edit` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `25ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `workspace.delete` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `27ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
+| `workspace.archive` | **Active** | ✅ 403 | ✅ 200 | ✅ 403 | ✅ Synced | `23ms` | ✅ 200 | ✅ Received | `company` | ✅ Enforced | Verified end-to-end via frontend |
 
 ---
 

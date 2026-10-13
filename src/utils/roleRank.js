@@ -57,7 +57,10 @@ function getRoleRank(roleOrName) {
       const normalized = normalizeRoleName(roleOrName.name);
       return ROLE_RANKS[normalized] || 30;
     }
-    // Custom role: rank is fixed at 30
+    // Custom role: rank can be configured in database (< 80 to prevent escalation above Admin)
+    if (typeof roleOrName.rank === 'number' && !isNaN(roleOrName.rank) && roleOrName.rank < 80) {
+      return roleOrName.rank;
+    }
     return 30;
   }
   const normalized = normalizeRoleName(roleOrName);
@@ -72,7 +75,6 @@ function isOwnerRole(roleOrName) {
   if (!roleOrName) return false;
   if (typeof roleOrName === 'object') {
     if (!roleOrName.is_system) return false;
-    if (!roleOrName.is_editable) return true;
     const rank = getRoleRank(roleOrName);
     if (rank >= 100) return true;
     const normalized = normalizeRoleName(roleOrName.name);
