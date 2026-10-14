@@ -232,28 +232,48 @@ async function runBootMigrations({ timeoutSeconds = 60 } = {}) {
       throw masterErr; // Critical failure: cannot serve traffic on unmigrated master
     }
 
-    // 2. Tenant migrations
+    // 2. Tenant migrations (Auto-fixes all tenants, existing pm_t_* databases, and dev_single)
     if (process.env.DEV_SINGLE_TENANT === '1') {
       const singleDb = process.env.MYSQL_DATABASE || 'pm_dev_single';
       summary.tenants = await migrateSingleTenant(singleDb);
     } else {
-      // Multi-tenant: migrate all active tenants
       const conn = await mysql.createConnection(getDbConfig(masterDb));
-      let tenants = [];
+      const targetDbSet = new Set();
+
       try {
-        const [rows] = await conn.query("SELECT id, db_name, name FROM tenants WHERE status = 'active'");
-        tenants = rows;
+        // Query active tenants from master table
+        const [tables] = await conn.query("SHOW TABLES LIKE 'tenants'");
+        if (tables.length > 0) {
+          const [rows] = await conn.query("SELECT id, db_name, name FROM tenants WHERE status = 'active'");
+          for (const t of rows) {
+            if (t.db_name) targetDbSet.add(t.db_name);
+          }
+        }
+
+        // Also discover any physical pm_t_* tenant databases existing in MySQL
+        const [dbRows] = await conn.query("SHOW DATABASES LIKE 'pm_t_%'");
+        for (const row of dbRows) {
+          const discoveredDb = Object.values(row)[0];
+          if (discoveredDb) targetDbSet.add(discoveredDb);
+        }
+
+        // If no tenant databases exist yet, ensure single dev DB is updated
+        if (targetDbSet.size === 0) {
+          targetDbSet.add(process.env.MYSQL_DATABASE || 'pm_dev_single');
+        }
       } finally {
         await conn.end();
       }
 
-      for (const tenant of tenants) {
+      console.log(`[AUTO-DB-SYNC] Checking and auto-fixing ${targetDbSet.size} tenant database(s)...`);
+
+      for (const dbName of targetDbSet) {
         try {
-          const applied = await migrateSingleTenant(tenant.db_name);
-          summary.tenants.push({ id: tenant.id, db: tenant.db_name, applied });
+          const applied = await migrateSingleTenant(dbName);
+          summary.tenants.push({ db: dbName, applied });
         } catch (tenantErr) {
-          console.error(`[MIGRATE ERROR] Tenant ${tenant.id} (${tenant.db_name}) migration failed: ${tenantErr.message}`);
-          summary.errors.push({ id: tenant.id, db: tenant.db_name, error: tenantErr.message });
+          console.error(`[MIGRATE ERROR] Database ${dbName} migration failed: ${tenantErr.message}`);
+          summary.errors.push({ db: dbName, error: tenantErr.message });
         }
       }
     }
@@ -262,7 +282,7 @@ async function runBootMigrations({ timeoutSeconds = 60 } = {}) {
       console.warn(`[MIGRATE WARNING] Boot migrations completed with ${summary.errors.length} tenant failure(s). System status: DEGRADED.`);
       currentHealthStatus = 'degraded';
     } else {
-      console.log(`[MIGRATE] Boot migrations completed successfully. System status: OK.`);
+      console.log(`[AUTO-DB-SYNC] All databases verified & synchronized successfully. System status: OK.`);
       currentHealthStatus = 'ok';
     }
 
