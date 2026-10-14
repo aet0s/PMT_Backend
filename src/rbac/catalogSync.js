@@ -26,7 +26,13 @@ async function syncPermissionCatalog(db, options = {}) {
   }
 
   try {
-    // 1. Fail-safe column checks for planned and label
+    // 1. Fail-safe column checks for planned, label, and category
+    try {
+      await db.execute('ALTER TABLE permissions MODIFY COLUMN category VARCHAR(100) NULL DEFAULT NULL');
+    } catch (_) {
+      // Ignore if column already modified or not supported
+    }
+
     try {
       await db.execute('ALTER TABLE permissions ADD COLUMN IF NOT EXISTS planned TINYINT(1) NOT NULL DEFAULT 0 AFTER dangerous');
       await db.execute('ALTER TABLE permissions ADD COLUMN IF NOT EXISTS label VARCHAR(100) NULL AFTER description');
@@ -42,10 +48,12 @@ async function syncPermissionCatalog(db, options = {}) {
 
     // 2. Upsert catalog permissions from registry
     for (const perm of PERMISSIONS) {
+      const categoryVal = perm.module || 'general';
       await db.execute(
-        `INSERT INTO permissions (\`key\`, module, label, description, scope, dangerous, planned)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO permissions (\`key\`, category, module, label, description, scope, dangerous, planned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
+           category = COALESCE(VALUES(category), category),
            module = VALUES(module),
            label = VALUES(label),
            description = VALUES(description),
@@ -54,6 +62,7 @@ async function syncPermissionCatalog(db, options = {}) {
            planned = VALUES(planned)`,
         [
           perm.key,
+          categoryVal,
           perm.module,
           perm.label || perm.key,
           perm.description || '',
