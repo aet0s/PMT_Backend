@@ -97,12 +97,33 @@ function invalidateSessionCache(tenantId = null, sessionId = null) {
 }
 
 const requireAuth = async (req, res, next) => {
-  const token = extractToken(req);
+  let token = extractToken(req);
 
   if (!token) {
     return res.status(401).json({
       error: { message: 'Authentication token missing', code: 'UNAUTHORIZED' }
     });
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(token, getJwtSecret());
+  } catch (verifyErr) {
+    // If Bearer token was expired/stale, fall back to cookie token if present and valid
+    if (req.cookies?.token && req.cookies.token !== token) {
+      try {
+        payload = jwt.verify(req.cookies.token, getJwtSecret());
+        token = req.cookies.token;
+      } catch (cookieErr) {
+        return res.status(401).json({
+          error: { message: 'Invalid or expired token', code: 'UNAUTHORIZED' }
+        });
+      }
+    } else {
+      return res.status(401).json({
+        error: { message: 'Invalid or expired token', code: 'UNAUTHORIZED' }
+      });
+    }
   }
 
   if (isTokenBlacklisted(token)) {
@@ -112,7 +133,6 @@ const requireAuth = async (req, res, next) => {
   }
 
   try {
-    const payload = jwt.verify(token, getJwtSecret());
     const userId = Number(payload.sub || payload.userId);
     const tenantId = payload.tid ? Number(payload.tid) : (payload.tenantId ? Number(payload.tenantId) : null);
 

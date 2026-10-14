@@ -188,7 +188,7 @@ function verifyTokenPayload(token, expectedPurpose, expectedEmail) {
 const { getCookieOptions, getClearCookieOptions } = require('../utils/cookieOptions');
 
 const COOKIE_OPTIONS = getCookieOptions(5 * 24 * 60 * 60 * 1000); // 5 days
-const REFRESH_COOKIE_OPTIONS = getCookieOptions(30 * 24 * 60 * 60 * 1000); // 30 days
+const REFRESH_COOKIE_OPTIONS = getCookieOptions(5 * 24 * 60 * 60 * 1000); // 5 days
 
 /**
  * Robustly checks if an email is registered anywhere in the system
@@ -1912,8 +1912,12 @@ router.post('/refresh', async (req, res, next) => {
 
     const rotationResult = await rotateSession(activeDb, refreshToken, req, tenantId);
 
-    res.cookie('token', rotationResult.accessToken, COOKIE_OPTIONS);
-    res.cookie('refreshToken', rotationResult.refreshToken, REFRESH_COOKIE_OPTIONS);
+    const cookieMaxAge = (rotationResult.expiresIn && rotationResult.expiresIn > 0)
+      ? rotationResult.expiresIn * 1000
+      : (5 * 24 * 60 * 60 * 1000);
+
+    res.cookie('token', rotationResult.accessToken, { ...COOKIE_OPTIONS, maxAge: cookieMaxAge });
+    res.cookie('refreshToken', rotationResult.refreshToken, { ...REFRESH_COOKIE_OPTIONS, maxAge: cookieMaxAge });
 
     return res.json({
       user: rotationResult.user,

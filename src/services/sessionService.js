@@ -6,8 +6,8 @@ const { getJwtSecret } = require('../middleware/auth');
 const { getClientIp } = require('../middleware/rateLimit');
 const { logAuthEvent } = require('./authAudit');
 
-const ACCESS_TOKEN_EXPIRY = '5d'; // 5 days
-const REFRESH_TOKEN_DAYS = 30; // 30 days
+const ACCESS_TOKEN_EXPIRY = '5d'; // 5 days max
+const REFRESH_TOKEN_DAYS = 5; // 5 days absolute ceiling
 
 function parseDeviceInfo(userAgent) {
   if (!userAgent) return 'Unknown Device';
@@ -32,7 +32,7 @@ function hashToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
-function generateAccessToken(user, tenantId = null, sessionId = null) {
+function generateAccessToken(user, tenantId = null, sessionId = null, expiresInSeconds = null) {
   const payload = {
     sub: user.id,
     userId: user.id,
@@ -44,7 +44,8 @@ function generateAccessToken(user, tenantId = null, sessionId = null) {
     payload.tid = Number(tenantId);
     payload.tenantId = Number(tenantId);
   }
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: ACCESS_TOKEN_EXPIRY });
+  const expiresIn = (expiresInSeconds && expiresInSeconds > 0) ? expiresInSeconds : (5 * 24 * 60 * 60);
+  return jwt.sign(payload, getJwtSecret(), { expiresIn });
 }
 
 async function createSession(db, user, req, options = {}) {
@@ -59,7 +60,8 @@ async function createSession(db, user, req, options = {}) {
   const userAgent = req ? (req.headers['user-agent'] || 'Unknown') : 'Unknown';
   const deviceInfo = parseDeviceInfo(userAgent);
 
-  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = options.expiresAt || new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
+  const remainingSeconds = Math.max(60, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
 
   await db.execute(
     `INSERT INTO sessions 
@@ -68,7 +70,7 @@ async function createSession(db, user, req, options = {}) {
     [sessionId, user.id, tokenHash, familyId, deviceInfo, ipAddress, userAgent.substring(0, 500), expiresAt]
   );
 
-  const accessToken = generateAccessToken(user, options.tenantId || null, sessionId);
+  const accessToken = generateAccessToken(user, options.tenantId || null, sessionId, remainingSeconds);
 
   // Notify if user has previous sessions (new device/session login)
   try {
@@ -96,7 +98,7 @@ async function createSession(db, user, req, options = {}) {
     familyId,
     accessToken,
     refreshToken: rawRefreshToken,
-    expiresIn: 5 * 24 * 60 * 60, // 432,000 seconds (5 days)
+    expiresIn: remainingSeconds, // Capped to 5-day ceiling
     expiresAt
   };
 }
@@ -120,6 +122,27 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
     const error = new Error('Invalid or non-existent refresh token');
     error.status = 401;
     error.code = 'INVALID_REFRESH_TOKEN';
+    throw error;
+  }
+
+  // Family 5-day maximum lifetime ceiling check (user can stay logged in for at most 5 days from initial login)
+  const [famFirst] = await db.query(
+    'SELECT MIN(created_at) as first_created_at FROM sessions WHERE family_id = ?',
+    [session.family_id]
+  );
+  const familyCreatedAt = famFirst?.first_created_at ? new Date(famFirst.first_created_at) : new Date(session.created_at);
+  const maxFamilyExpiresAt = new Date(familyCreatedAt.getTime() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
+
+  if (Date.now() >= maxFamilyExpiresAt.getTime()) {
+    // 5-day limit reached: revoke family and require full relogin
+    await db.execute(
+      'UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP(3) WHERE family_id = ? AND revoked_at IS NULL',
+      [session.family_id]
+    );
+
+    const error = new Error('Session has reached its 5-day maximum duration. Please sign in again.');
+    error.status = 401;
+    error.code = 'SESSION_MAX_LIFETIME_EXCEEDED';
     throw error;
   }
 
@@ -157,7 +180,8 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
 
       const newSession = await createSession(db, user, req, {
         familyId: session.family_id,
-        tenantId
+        tenantId,
+        expiresAt: maxFamilyExpiresAt
       });
 
       return {
@@ -231,10 +255,11 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
     [session.id]
   );
 
-  // Issue new session in the same family
+  // Issue new session in the same family (capped to 5-day ceiling)
   const newSession = await createSession(db, user, req, {
     familyId: session.family_id,
-    tenantId
+    tenantId,
+    expiresAt: maxFamilyExpiresAt
   });
 
   await logAuthEvent(db, {

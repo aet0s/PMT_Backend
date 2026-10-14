@@ -120,23 +120,49 @@ router.post('/avatar', requireAuth, (req, res, next) => {
 // POST /api/files/preview-token - Generate signed temporary token for external Office viewers
 router.post('/preview-token', requireAuth, async (req, res, next) => {
   try {
-    const { file_url } = req.body || {};
-    if (!file_url || !file_url.startsWith('/api/files/')) {
+    let { file_url } = req.body || {};
+    if (!file_url || typeof file_url !== 'string') {
       return res.status(400).json({ error: { message: 'Invalid file URL', code: 'BAD_REQUEST' } });
     }
-    const cleanPath = file_url.replace('/api/files/', '');
+
+    // Strip origin if full URL was provided (e.g. https://pmtmgmt.solarman.in/api/files/...)
+    if (/^https?:\/\//i.test(file_url)) {
+      try {
+        const parsed = new URL(file_url);
+        file_url = parsed.pathname;
+      } catch (e) {
+        file_url = file_url.replace(/^https?:\/\/[^\/]+/i, '');
+      }
+    }
+
+    // Support /api/files/:tenantId/..., /uploads/:tenantId/..., or relative key
+    let cleanPath = '';
+    if (file_url.startsWith('/api/files/')) {
+      cleanPath = file_url.substring('/api/files/'.length);
+    } else if (file_url.startsWith('/uploads/')) {
+      cleanPath = file_url.substring('/uploads/'.length);
+    } else if (file_url.startsWith('api/files/')) {
+      cleanPath = file_url.substring('api/files/'.length);
+    } else if (file_url.startsWith('uploads/')) {
+      cleanPath = file_url.substring('uploads/'.length);
+    } else {
+      cleanPath = file_url.replace(/^\/+/, '');
+    }
+
     const [tenantIdStr, ...rest] = cleanPath.split('/');
     const tenantId = Number(tenantIdStr);
     const userTenantId = req.tenant ? Number(req.tenant.id) : null;
-    if (userTenantId && tenantId !== userTenantId) {
+    if (userTenantId && tenantId && tenantId !== userTenantId) {
       return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
     }
 
+    const effectiveTenantId = tenantId || userTenantId || 1;
     const subpath = rest.join('/');
+
     const token = jwt.sign(
       {
         purpose: 'file_preview',
-        tenantId,
+        tenantId: effectiveTenantId,
         subpath,
         userId: req.user.id
       },
@@ -144,7 +170,11 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       { expiresIn: '2h' }
     );
 
-    return res.json({ token, expires_in: 7200 });
+    return res.json({
+      token,
+      normalized_path: `/api/files/${effectiveTenantId}/${subpath}`,
+      expires_in: 7200
+    });
   } catch (err) {
     next(err);
   }
@@ -298,6 +328,8 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else if (req.isPreviewToken) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
 
   res.removeHeader('X-Frame-Options');

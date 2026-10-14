@@ -86,12 +86,30 @@ app.use((req, res, next) => {
   next();
 });
 
-// Explicit CORS origin injector to guarantee headers on all responses (including early errors)
+// Explicit CORS origin injector to guarantee headers on all responses (including early errors and preflights)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    
+    // Dynamically reflect requested headers to support extensions, auth headers, and tenant IDs
+    const reqHeaders = req.headers['access-control-request-headers'];
+    if (reqHeaders) {
+      res.setHeader('Access-Control-Allow-Headers', reqHeaders);
+    } else {
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, x-origin-id, x-client-mutation-id, X-Requested-With, Accept, Origin, Cache-Control, X-Request-Id, X-Forwarded-For, x-tenant-id, x-tenant-slug'
+      );
+    }
+    res.setHeader('Access-Control-Max-Age', '86400');
+
+    // Respond immediately to OPTIONS preflight requests
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
   }
   next();
 });
@@ -117,18 +135,6 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'x-origin-id',
-      'x-client-mutation-id',
-      'X-Requested-With',
-      'Accept',
-      'Origin',
-      'Cache-Control',
-      'X-Request-Id',
-      'X-Forwarded-For'
-    ],
     exposedHeaders: ['X-Request-Id'],
     maxAge: 86400
   })
