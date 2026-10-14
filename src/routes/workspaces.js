@@ -13,6 +13,7 @@ const {
 } = require('../middleware/permissions');
 const { sendUserEvent, disconnectUserSockets, broadcastWorkspaceEvent } = require('../socket');
 const { notify } = require('../services/notify');
+const { logActivity } = require('../utils/activity');
 const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
@@ -2529,6 +2530,13 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
       return res.status(400).json({ error: { message: 'You cannot remove yourself from the organization', code: 'CANNOT_REMOVE_SELF' } });
     }
 
+    const [targetUser] = await req.db.query('SELECT id, email, name FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) {
+      return res.status(404).json({ error: { message: 'Member not found', code: 'NOT_FOUND' } });
+    }
+
+    const targetUserEmail = targetUser.email ? targetUser.email.trim().toLowerCase() : null;
+
     // Safety Floor: Cannot remove an Owner
     const targetRoles = await req.db.query(
       `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
@@ -2558,9 +2566,52 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
       });
     }
 
+    // Revoke all sessions, invalidate session cache, and disconnect user sockets immediately
+    await revokeAllSessions(req.db, targetUserId, 'MEMBER_REMOVED', req);
+
     // Remove from all board and workspace memberships
     await req.db.execute('DELETE FROM board_members WHERE user_id = ?', [targetUserId]);
     await req.db.execute('DELETE FROM workspace_members WHERE user_id = ?', [targetUserId]);
+
+    // Delete any pending invitations for this user's email
+    if (targetUserEmail) {
+      await req.db.execute('DELETE FROM pending_invitations WHERE LOWER(email) = ?', [targetUserEmail]);
+    }
+
+    // Clean up master DB tenant_user_directory if multi-tenant
+    if (targetUserEmail) {
+      try {
+        const { getMasterDb } = require('../services/tenantPools');
+        const masterDb = getMasterDb();
+        if (req.tenant?.id) {
+          await masterDb.execute('DELETE FROM tenant_user_directory WHERE LOWER(email) = ? AND tenant_id = ?', [targetUserEmail, req.tenant.id]);
+        }
+      } catch (e) {
+        console.warn(`[COMPANY_MEMBER_REMOVE] Master directory cleanup failed: ${e.message}`);
+      }
+    }
+
+    // Delete user record from database (cascades all user relationships)
+    await req.db.execute('DELETE FROM users WHERE id = ?', [targetUserId]);
+
+    // Notify & log activity
+    try {
+      await logActivity({
+        workspaceId,
+        userId: req.user.id,
+        actionType: 'member_removed',
+        metaJson: {
+          removed_user_id: targetUserId,
+          removed_user_name: targetUser.name,
+          removed_user_email: targetUser.email,
+          scope: 'company'
+        },
+        dbInstance: req.db,
+        tenantId: req.tenant?.id
+      });
+    } catch (e) {}
+
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_removed', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
 
     return res.json({ success: true, message: 'Member removed from company successfully', user_id: targetUserId });
   } catch (err) {
