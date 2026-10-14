@@ -679,27 +679,30 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
   const normalizedEmail = normalizeEmail(email);
 
   // Enforce email verification for self-registration when token is supplied or VERIFICATION_MODE is enabled
+  // For invited members, clicking the email invitation link already proves email ownership, so OTP is bypassed.
   const verificationMode = (process.env.VERIFICATION_MODE || 'off').toLowerCase();
   const isEnforced = verificationMode === 'on' || verificationMode === 'otp';
 
-  if (verificationToken) {
-    const regEntry = registrationOtps.get(normalizedEmail);
-    const tokenValid = verifyTokenPayload(verificationToken, 'registration_verified', normalizedEmail);
-    const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
+  if (!inviteToken) {
+    if (verificationToken) {
+      const regEntry = registrationOtps.get(normalizedEmail);
+      const tokenValid = verifyTokenPayload(verificationToken, 'registration_verified', normalizedEmail);
+      const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
 
-    if (!tokenValid && !entryValid) {
-      return res.status(400).json({
-        error: { message: 'Invalid or expired verification session. Please verify your email again.', code: 'EMAIL_NOT_VERIFIED' }
-      });
-    }
-  } else if (!inviteToken && isEnforced) {
-    const regEntry = registrationOtps.get(normalizedEmail);
-    const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
+      if (!tokenValid && !entryValid) {
+        return res.status(400).json({
+          error: { message: 'Invalid or expired verification session. Please verify your email again.', code: 'EMAIL_NOT_VERIFIED' }
+        });
+      }
+    } else if (isEnforced) {
+      const regEntry = registrationOtps.get(normalizedEmail);
+      const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
 
-    if (!entryValid) {
-      return res.status(400).json({
-        error: { message: 'Please verify your email with the 6-digit verification code first.', code: 'EMAIL_NOT_VERIFIED' }
-      });
+      if (!entryValid) {
+        return res.status(400).json({
+          error: { message: 'Please verify your email with the 6-digit verification code first.', code: 'EMAIL_NOT_VERIFIED' }
+        });
+      }
     }
   }
 
