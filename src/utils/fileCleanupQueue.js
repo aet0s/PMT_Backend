@@ -61,7 +61,11 @@ async function queueFileCleanupRetry(filePath, tenantId = null) {
 async function processFileCleanupQueue() {
   try {
     await ensureCleanupTable();
+    if (!tableEnsured) return;
+
     const db = getQueueDb();
+    if (!db) return;
+
     const rows = await db.query(
       `SELECT id, tenant_id, file_path, attempts, max_attempts
        FROM file_cleanup_queue
