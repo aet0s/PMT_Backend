@@ -381,9 +381,6 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
     [targetUser.id, token]
   );
 
-  const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
-  const wsName = wsRes[0]?.name || 'Workspace';
-
   await notify(
     {
       eventType: 'invite.sent',
