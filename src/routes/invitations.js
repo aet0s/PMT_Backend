@@ -370,8 +370,10 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   if (boardIds.length > 0) {
     for (const boardId of boardIds) {
       await db.execute(
-        "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-        [boardId, targetUser.id]
+        `INSERT INTO board_members (board_id, user_id, role, role_id)
+         VALUES (?, ?, 'member', ?)
+         ON DUPLICATE KEY UPDATE role = 'member', role_id = COALESCE(VALUES(role_id), role_id)`,
+        [boardId, targetUser.id, resolvedRoleId]
       );
     }
   }
@@ -518,8 +520,10 @@ router.post('/accept', requireAuth, async (req, res, next) => {
     if (boardIds.length > 0) {
       for (const boardId of boardIds) {
         await req.db.execute(
-          "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-          [boardId, req.user.id]
+          `INSERT INTO board_members (board_id, user_id, role, role_id)
+           VALUES (?, ?, 'member', ?)
+           ON DUPLICATE KEY UPDATE role = 'member', role_id = COALESCE(VALUES(role_id), role_id)`,
+          [boardId, req.user.id, assignedRoleId]
         );
       }
     }

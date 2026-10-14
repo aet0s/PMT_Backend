@@ -909,8 +909,10 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
       if (invite.board_ids && invite.board_ids.length > 0) {
         for (const boardId of invite.board_ids) {
           await activeDb.execute(
-            "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-            [boardId, user.id]
+            `INSERT INTO board_members (board_id, user_id, role, role_id)
+             VALUES (?, ?, 'member', ?)
+             ON DUPLICATE KEY UPDATE role = 'member', role_id = COALESCE(VALUES(role_id), role_id)`,
+            [boardId, user.id, assignedRoleId]
           );
         }
         createdBoardId = invite.board_ids[0];

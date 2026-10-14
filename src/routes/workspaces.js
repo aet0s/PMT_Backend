@@ -2495,24 +2495,35 @@ router.post('/:id/company-members/:userId/boards', requireAuth, requirePermissio
         );
 
         await req.db.execute(
-          "INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, 'member')",
-          [b.id, targetUserId]
+          `INSERT INTO board_members (board_id, user_id, role, role_id)
+           VALUES (?, ?, 'member', ?)
+           ON DUPLICATE KEY UPDATE role = 'member', role_id = COALESCE(VALUES(role_id), role_id)`,
+          [b.id, targetUserId, defaultRole?.id || null]
         );
       }
     }
 
-    // Remove from unselected boards
+    // Remove from unselected boards (using req.db.query because mysql2 execute does not expand IN (?) arrays)
     if (board_ids.length > 0) {
-      await req.db.execute(
+      await req.db.query(
         'DELETE FROM board_members WHERE user_id = ? AND board_id NOT IN (?)',
         [targetUserId, Array.from(targetSet)]
       );
     } else {
-      await req.db.execute(
+      await req.db.query(
         'DELETE FROM board_members WHERE user_id = ?',
         [targetUserId]
       );
     }
+
+    sendUserEvent(targetUserId, 'user:workspaces_updated', {
+      workspaceId,
+      userId: targetUserId
+    });
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', {
+      workspaceId,
+      userId: targetUserId
+    });
 
     return res.json({ success: true, message: 'Board assignments updated successfully' });
   } catch (err) {
