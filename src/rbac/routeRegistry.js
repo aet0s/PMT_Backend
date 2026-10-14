@@ -118,6 +118,7 @@ const ROUTE_MANIFEST = [
 
   // --- Files & Avatars ---
   { method: 'POST', path: '/api/files/avatar', publicReason: 'Self avatar image upload', scope: 'company' },
+  { method: 'POST', path: '/api/files/preview-token', publicReason: 'Generate temporary viewer token for attachment preview', scope: 'project' },
   { method: 'GET', path: '/api/files/:tenantId/*', permission: 'file.view', scope: 'project' },
 
   // --- System Health & Time ---

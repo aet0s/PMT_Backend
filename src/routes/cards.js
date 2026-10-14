@@ -189,7 +189,10 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
     const cleanDescription = sanitizeDescription(description);
 
     const formattedDueDate = formatSqlDateTime(due_date);
-    const formattedStartDate = formatSqlDateTime(req.body.start_date);
+    const effectiveStartDate = (req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== '')
+      ? req.body.start_date
+      : new Date();
+    const formattedStartDate = formatSqlDateTime(effectiveStartDate);
 
     const cardExec = await req.db.execute(
       'INSERT INTO cards (list_id, title, description, position, start_date, due_date) VALUES (?, ?, ?, ?, ?, ?)',
@@ -558,7 +561,8 @@ router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req,
 
     await req.db.execute('DELETE FROM cards WHERE id = ?', [cardId]);
 
-    await logActivity(boardId, cardId, req.user.id, 'card_deleted', {
+    await logActivity(boardId, null, req.user.id, 'card_deleted', {
+      card_id: cardId,
       card_title: cardTitle,
       title: cardTitle
     }, req.db);
@@ -843,8 +847,8 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
         newTitle,
         sourceCard.description || '',
         position,
-        sourceCard.start_date || null,
-        sourceCard.due_date || null,
+        sourceCard.start_date ? formatSqlDateTime(sourceCard.start_date) : formatSqlDateTime(new Date()),
+        sourceCard.due_date ? formatSqlDateTime(sourceCard.due_date) : null,
         sourceCard.is_complete ? 1 : 0
       ]
     );

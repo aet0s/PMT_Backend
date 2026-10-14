@@ -1622,14 +1622,35 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       boardParam.push(boardId);
     }
 
+    // Helper to categorize task stage by list name and completion flag
+    function classifyTaskStage(listName, isComplete) {
+      if (isComplete) return 'done';
+      const name = (listName || '').toLowerCase().trim();
+      if (name.includes('done') || name.includes('complete') || name.includes('finished') || name.includes('closed') || name.includes('resolved')) {
+        return 'done';
+      }
+      if (name.includes('review') || name.includes('qa') || name.includes('test') || name.includes('verify') || name.includes('audit')) {
+        return 'review';
+      }
+      if (name.includes('progress') || name.includes('doing') || name.includes('wip') || name.includes('working') || name.includes('dev') || name.includes('active')) {
+        return 'in_progress';
+      }
+      if (name.includes('todo') || name.includes('to do') || name.includes('to-do') || name.includes('backlog') || name.includes('open') || name.includes('new') || name.includes('ready') || name.includes('pending')) {
+        return 'todo';
+      }
+      return 'in_progress';
+    }
+
     // 2. High-level summary metrics
     const summaryRes = await req.db.query(
       `SELECT
         COUNT(DISTINCT c.id) as total_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 1 THEN c.id END) as completed_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN c.id END) as due_soon_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND (c.due_date IS NULL OR c.due_date >= NOW()) THEN c.id END) as in_progress_tasks,
+        COUNT(DISTINCT CASE WHEN c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished') THEN c.id END) as completed_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN c.id END) as due_soon_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%review%' OR LOWER(l.name) LIKE '%qa%' OR LOWER(l.name) LIKE '%test%') THEN c.id END) as review_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks,
         COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND c.due_date IS NULL THEN c.id END) as no_due_date_tasks
        FROM cards c
        JOIN lists l ON c.list_id = l.id
@@ -1648,6 +1669,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
     const overdueTasks = Number(summaryRes[0]?.overdue_tasks || 0);
     const dueSoonTasks = Number(summaryRes[0]?.due_soon_tasks || 0);
     const inProgressTasks = Number(summaryRes[0]?.in_progress_tasks || 0);
+    const todoTasks = Number(summaryRes[0]?.todo_tasks || 0);
+    const reviewTasks = Number(summaryRes[0]?.review_tasks || 0);
     const noDueDateTasks = Number(summaryRes[0]?.no_due_date_tasks || 0);
 
     const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 1000) / 10 : 0;
@@ -1679,7 +1702,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
          JOIN lists l ON c.list_id = l.id
          JOIN boards b ON l.board_id = b.id
          WHERE b.workspace_id = ?
-           AND c.is_complete = 1
+           AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished'))
            AND b.is_archived = 0
            AND l.is_archived = 0
            AND c.is_archived = 0
@@ -1692,7 +1715,128 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       avgCycleDays = 0;
     }
 
-    // 4. Boards breakdown
+    // 4. Status / Lists breakdown & Pipeline Cards
+    const statusBreakdownRes = await req.db.query(
+      `SELECT
+        l.id as list_id,
+        l.name as list_name,
+        l.position as list_position,
+        b.id as board_id,
+        b.name as board_name,
+        COUNT(DISTINCT c.id) as task_count,
+        COUNT(DISTINCT CASE WHEN c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished') THEN c.id END) as completed_count,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_count
+       FROM lists l
+       JOIN boards b ON l.board_id = b.id
+       LEFT JOIN cards c ON l.id = c.list_id AND c.is_archived = 0
+       WHERE b.workspace_id = ?
+         AND b.is_archived = 0
+         AND l.is_archived = 0
+         ${boardClause}
+       GROUP BY l.id, l.name, l.position, b.id, b.name
+       ORDER BY b.name ASC, l.position ASC`,
+      [workspaceId, ...boardParam]
+    );
+
+    // Fetch active cards for pipeline visualization with assignees
+    const pipelineCardsRes = await req.db.query(
+      `SELECT
+        c.id,
+        c.title,
+        c.list_id,
+        c.due_date,
+        c.is_complete,
+        c.position,
+        c.created_at,
+        l.name as list_name,
+        b.id as board_id,
+        b.name as board_name,
+        CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+       WHERE b.workspace_id = ?
+         AND c.is_archived = 0
+         ${boardClause}
+       ORDER BY c.position ASC, c.id ASC`,
+      [workspaceId, ...boardParam]
+    );
+
+    const pipelineCardIds = pipelineCardsRes.map((c) => c.id);
+    let cardMembersMap = {};
+    if (pipelineCardIds.length > 0) {
+      const cmRes = await req.db.query(
+        `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url
+         FROM card_members cm
+         JOIN users u ON cm.user_id = u.id
+         WHERE cm.card_id IN (${pipelineCardIds.map(() => '?').join(',')})`,
+        pipelineCardIds
+      );
+      cmRes.forEach((row) => {
+        if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
+        cardMembersMap[row.card_id].push({
+          id: row.id,
+          name: row.name,
+          email: row.email,
+          avatar_url: row.avatar_url
+        });
+      });
+    }
+
+    const listCardsMap = {};
+    pipelineCardsRes.forEach((c) => {
+      if (!listCardsMap[c.list_id]) listCardsMap[c.list_id] = [];
+      const isDone = Boolean(c.is_effectively_complete);
+      listCardsMap[c.list_id].push({
+        id: c.id,
+        title: c.title,
+        due_date: c.due_date,
+        is_complete: isDone,
+        is_overdue: Boolean(c.is_overdue),
+        is_due_soon: Boolean(c.is_due_soon),
+        list_id: c.list_id,
+        list_name: c.list_name,
+        board_id: c.board_id,
+        board_name: c.board_name,
+        stage: classifyTaskStage(c.list_name, isDone),
+        members: cardMembersMap[c.id] || []
+      });
+    });
+
+    const statusBreakdown = statusBreakdownRes.map((s) => {
+      const sStage = classifyTaskStage(s.list_name, false);
+      return {
+        list_id: s.list_id,
+        list_name: s.list_name,
+        list_position: s.list_position,
+        board_id: s.board_id,
+        board_name: s.board_name,
+        stage: sStage,
+        task_count: Number(s.task_count || 0),
+        completed_count: Number(s.completed_count || 0),
+        overdue_count: Number(s.overdue_count || 0),
+        percentage: totalTasks > 0 ? Math.round((Number(s.task_count || 0) / totalTasks) * 100) : 0,
+        cards: listCardsMap[s.list_id] || []
+      };
+    });
+
+    // Stage breakdown across entire workspace
+    const stageBreakdown = {
+      todo: 0,
+      in_progress: 0,
+      review: 0,
+      done: 0
+    };
+    statusBreakdown.forEach((s) => {
+      if (s.stage === 'todo') stageBreakdown.todo += s.task_count;
+      else if (s.stage === 'review') stageBreakdown.review += s.task_count;
+      else if (s.stage === 'done') stageBreakdown.done += s.task_count;
+      else stageBreakdown.in_progress += s.task_count;
+    });
+
+    // 5. Boards breakdown
     const boardsBreakdownRes = await req.db.query(
       `SELECT
         b.id,
@@ -1700,9 +1844,10 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         b.background_color,
         COUNT(DISTINCT bm.user_id) as member_count,
         COUNT(DISTINCT c.id) as total_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 1 THEN c.id END) as completed_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND (c.due_date IS NULL OR c.due_date >= NOW()) THEN c.id END) as in_progress_tasks
+        COUNT(DISTINCT CASE WHEN c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished') THEN c.id END) as completed_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
+        COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks
        FROM boards b
        LEFT JOIN board_members bm ON b.id = bm.board_id
        LEFT JOIN lists l ON b.id = l.board_id AND l.is_archived = 0
@@ -1713,11 +1858,24 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       [workspaceId]
     );
 
+    // Group lists by board
+    const boardListsMap = {};
+    statusBreakdown.forEach((s) => {
+      if (!boardListsMap[s.board_id]) boardListsMap[s.board_id] = [];
+      boardListsMap[s.board_id].push({
+        id: s.list_id,
+        name: s.list_name,
+        task_count: s.task_count,
+        stage: s.stage
+      });
+    });
+
     const boardsBreakdown = boardsBreakdownRes.map((b) => {
       const bTotal = Number(b.total_tasks || 0);
       const bCompleted = Number(b.completed_tasks || 0);
       const bOverdue = Number(b.overdue_tasks || 0);
       const bInProgress = Number(b.in_progress_tasks || 0);
+      const bTodo = Number(b.todo_tasks || 0);
       return {
         id: b.id,
         name: b.name,
@@ -1727,40 +1885,11 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         completed_tasks: bCompleted,
         overdue_tasks: bOverdue,
         in_progress_tasks: bInProgress,
-        completion_rate: bTotal > 0 ? Math.round((bCompleted / bTotal) * 100) : 0
+        todo_tasks: bTodo,
+        completion_rate: bTotal > 0 ? Math.round((bCompleted / bTotal) * 100) : 0,
+        lists: boardListsMap[b.id] || []
       };
     });
-
-    // 5. Status / Lists breakdown
-    const statusBreakdownRes = await req.db.query(
-      `SELECT
-        l.id as list_id,
-        l.name as list_name,
-        b.id as board_id,
-        b.name as board_name,
-        COUNT(DISTINCT c.id) as task_count,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 1 THEN c.id END) as completed_count
-       FROM lists l
-       JOIN boards b ON l.board_id = b.id
-       LEFT JOIN cards c ON l.id = c.list_id AND c.is_archived = 0 ${timeframeClause}
-       WHERE b.workspace_id = ?
-         AND b.is_archived = 0
-         AND l.is_archived = 0
-         ${boardClause}
-       GROUP BY l.id, l.name, b.id, b.name, l.position
-       ORDER BY b.name ASC, l.position ASC`,
-      [workspaceId, ...boardParam]
-    );
-
-    const statusBreakdown = statusBreakdownRes.map((s) => ({
-      list_id: s.list_id,
-      list_name: s.list_name,
-      board_id: s.board_id,
-      board_name: s.board_name,
-      task_count: Number(s.task_count || 0),
-      completed_count: Number(s.completed_count || 0),
-      percentage: totalTasks > 0 ? Math.round((Number(s.task_count || 0) / totalTasks) * 100) : 0
-    }));
 
     // 6. Labels breakdown
     const labelsBreakdownRes = await req.db.query(
@@ -1805,15 +1934,17 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         u.name,
         u.email,
         r.name as role_name,
-        COUNT(DISTINCT c.id) as assigned_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 1 THEN c.id END) as completed_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
-        COUNT(DISTINCT CASE WHEN c.is_complete = 0 AND (c.due_date IS NULL OR c.due_date >= NOW()) THEN c.id END) as in_progress_tasks
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN c.id END) as assigned_tasks,
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN c.id END) as completed_tasks,
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%review%' OR LOWER(l.name) LIKE '%qa%' OR LOWER(l.name) LIKE '%test%') THEN c.id END) as review_tasks,
+        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks
        FROM workspace_members wm
        JOIN users u ON wm.user_id = u.id
        LEFT JOIN roles r ON wm.role_id = r.id
        LEFT JOIN card_members cm ON u.id = cm.user_id
-       LEFT JOIN cards c ON cm.card_id = c.id AND c.is_archived = 0 ${timeframeClause}
+       LEFT JOIN cards c ON cm.card_id = c.id AND c.is_archived = 0
        LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id = wm.workspace_id ${boardClause}
        WHERE wm.workspace_id = ?
@@ -1846,11 +1977,14 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         c.due_date,
         c.is_complete,
         c.created_at,
+        c.list_id,
         l.name as list_name,
+        l.position as list_position,
         b.id as board_id,
         b.name as board_name,
-        CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
-        CASE WHEN c.is_complete = 0 AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+        CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
        FROM card_members cm
        JOIN cards c ON cm.card_id = c.id
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
@@ -1858,7 +1992,6 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
        WHERE b.workspace_id = ?
          AND c.is_archived = 0
          ${boardClause}
-         ${timeframeClause}
        ORDER BY c.due_date ASC, c.created_at DESC`,
       [workspaceId, ...boardParam]
     );
@@ -1866,14 +1999,21 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
     const userTasksMap = {};
     assignedCardsRes.forEach((row) => {
       if (!userTasksMap[row.user_id]) userTasksMap[row.user_id] = [];
+      const isDone = Boolean(row.is_effectively_complete);
+      const isOverdue = Boolean(row.is_overdue);
+      const isDueSoon = Boolean(row.is_due_soon);
+      const stage = classifyTaskStage(row.list_name, isDone);
+
       userTasksMap[row.user_id].push({
         id: row.id,
         title: row.title,
         due_date: row.due_date,
-        is_complete: Boolean(row.is_complete),
-        is_overdue: Boolean(row.is_overdue),
-        is_due_soon: Boolean(row.is_due_soon),
+        is_complete: isDone,
+        is_overdue: isOverdue,
+        is_due_soon: isDueSoon,
+        list_id: row.list_id,
         list_name: row.list_name,
+        stage: stage,
         board_id: row.board_id,
         board_name: row.board_name,
         created_at: row.created_at
@@ -1885,6 +2025,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       const completed = Number(m.completed_tasks || 0);
       const overdue = Number(m.overdue_tasks || 0);
       const inProgress = Number(m.in_progress_tasks || 0);
+      const todo = Number(m.todo_tasks || 0);
+      const review = Number(m.review_tasks || 0);
       const userTasks = userTasksMap[m.id] || [];
 
       // Board distribution for this user
@@ -1905,9 +2047,11 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         email: m.email,
         role: m.role_name || 'Member',
         assigned_tasks: assigned,
+        todo_tasks: todo,
+        in_progress_tasks: inProgress,
+        review_tasks: review,
         completed_tasks: completed,
         overdue_tasks: overdue,
-        in_progress_tasks: inProgress,
         due_soon_tasks: dueSoon,
         completion_rate: assigned > 0 ? Math.round((completed / assigned) * 100) : 0,
         boards: userBoards,
@@ -1931,6 +2075,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
        WHERE b.workspace_id = ?
          AND c.is_archived = 0
          AND c.is_complete = 0
+         AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')
          AND c.due_date IS NOT NULL
          AND c.due_date < NOW()
          ${boardClause}
@@ -2029,8 +2174,10 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       },
       summary: {
         total_tasks: totalTasks,
-        completed_tasks: completedTasks,
+        todo_tasks: todoTasks,
         in_progress_tasks: inProgressTasks,
+        review_tasks: reviewTasks,
+        completed_tasks: completedTasks,
         overdue_tasks: overdueTasks,
         due_soon_tasks: dueSoonTasks,
         no_due_date_tasks: noDueDateTasks,
@@ -2044,6 +2191,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       boards: boardsRes,
       boards_breakdown: boardsBreakdown,
       status_breakdown: statusBreakdown,
+      stage_breakdown: stageBreakdown,
       labels_breakdown: {
         labels: labelsBreakdownRes.map((lb) => ({
           id: lb.id,

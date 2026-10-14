@@ -4,7 +4,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const { requireAuth } = require('../middleware/auth');
+const jwt = require('jsonwebtoken');
+const { requireAuth, getJwtSecret } = require('../middleware/auth');
 const storage = require('../storage');
 
 const router = express.Router();
@@ -116,8 +117,61 @@ router.post('/avatar', requireAuth, (req, res, next) => {
   });
 });
 
+// POST /api/files/preview-token - Generate signed temporary token for external Office viewers
+router.post('/preview-token', requireAuth, async (req, res, next) => {
+  try {
+    const { file_url } = req.body || {};
+    if (!file_url || !file_url.startsWith('/api/files/')) {
+      return res.status(400).json({ error: { message: 'Invalid file URL', code: 'BAD_REQUEST' } });
+    }
+    const cleanPath = file_url.replace('/api/files/', '');
+    const [tenantIdStr, ...rest] = cleanPath.split('/');
+    const tenantId = Number(tenantIdStr);
+    const userTenantId = req.tenant ? Number(req.tenant.id) : null;
+    if (userTenantId && tenantId !== userTenantId) {
+      return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+    }
+
+    const subpath = rest.join('/');
+    const token = jwt.sign(
+      {
+        purpose: 'file_preview',
+        tenantId,
+        subpath,
+        userId: req.user.id
+      },
+      getJwtSecret(),
+      { expiresIn: '2h' }
+    );
+
+    return res.json({ token, expires_in: 7200 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Middleware: allow EITHER valid requireAuth OR valid signed ?token=...
+async function authOrPreviewToken(req, res, next) {
+  if (req.query.token) {
+    try {
+      const payload = jwt.verify(req.query.token, getJwtSecret());
+      if (
+        payload.purpose === 'file_preview' &&
+        Number(payload.tenantId) === Number(req.params.tenantId)
+      ) {
+        req.isPreviewToken = true;
+        req.tenant = { id: payload.tenantId };
+        return next();
+      }
+    } catch {
+      // Invalid token, fall through to requireAuth
+    }
+  }
+  return requireAuth(req, res, next);
+}
+
 // GET /api/files/:tenantId/* - Tenant-isolated file download
-router.get('/:tenantId/*', requireAuth, async (req, res, next) => {
+router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   const requestedTenantId = Number(req.params.tenantId);
   const userTenantId = req.tenant ? Number(req.tenant.id) : null;
 
@@ -134,11 +188,11 @@ router.get('/:tenantId/*', requireAuth, async (req, res, next) => {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
-  // Item 6: Authorize by database record using unified userHasPermission
+  // Authorize by database record using unified userHasPermission (unless validated by preview token)
   try {
     const { userHasPermission } = require('../middleware/permissions');
 
-    if (relativeSubpath.startsWith('cards/')) {
+    if (!req.isPreviewToken && relativeSubpath.startsWith('cards/')) {
       const fileUrl = `/api/files/${requestedTenantId}/${relativeSubpath}`;
       const attRows = await req.db.query(
         `SELECT a.id, a.card_id, l.board_id, b.workspace_id
@@ -203,7 +257,7 @@ router.get('/:tenantId/*', requireAuth, async (req, res, next) => {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
-  // Item 6: Never serve as HTML; enforce nosniff & correct content-type
+  // Enforce correct content-type and security headers
   const ext = path.extname(resolvedPath).toLowerCase();
   const mimeMap = {
     '.jpg': 'image/jpeg',
@@ -211,15 +265,60 @@ router.get('/:tenantId/*', requireAuth, async (req, res, next) => {
     '.png': 'image/png',
     '.webp': 'image/webp',
     '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
     '.pdf': 'application/pdf',
-    '.txt': 'text/plain'
+    '.txt': 'text/plain; charset=utf-8',
+    '.csv': 'text/csv; charset=utf-8',
+    '.tsv': 'text/tab-separated-values; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.xml': 'application/xml; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.html': 'text/plain; charset=utf-8',
+    '.htm': 'text/plain; charset=utf-8',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc': 'application/msword',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.ogg': 'video/ogg',
+    '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.zip': 'application/zip',
+    '.tar': 'application/x-tar',
+    '.gz': 'application/gzip'
   };
   const mimeType = mimeMap[ext] || 'application/octet-stream';
 
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
+  res.removeHeader('X-Frame-Options');
+  res.removeHeader('Cross-Origin-Opener-Policy');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
   res.setHeader('Content-Type', mimeType);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'none'");
-  res.setHeader('Content-Disposition', 'inline');
+
+  // Allow PDF and embedded viewer to load inside iframes
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self' blob: data:; object-src 'self' blob:; frame-ancestors *;"
+  );
+
+  const isDownload = req.query.download === '1' || req.query.download === 'true';
+  const downloadFilename = req.query.filename || path.basename(resolvedPath);
+  res.setHeader(
+    'Content-Disposition',
+    `${isDownload ? 'attachment' : 'inline'}; filename="${encodeURIComponent(downloadFilename)}"`
+  );
 
   return res.sendFile(resolvedPath);
 });

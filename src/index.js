@@ -98,6 +98,7 @@ app.use((req, res, next) => {
 
 // Allow cross-origin embedding for authenticated tenant file route /api/files
 app.use('/api/files', (req, res, next) => {
+  res.removeHeader('X-Frame-Options');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
 });
