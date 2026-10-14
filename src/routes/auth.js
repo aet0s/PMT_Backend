@@ -100,11 +100,29 @@ const registerUserSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
+  verification_token: z.string().optional(),
   invite_token: z.string().optional(),
   company_name: z.string().optional(),
   companyName: z.string().optional(),
   slug: z.string().optional(),
   phone: z.string().optional()
+});
+
+const sendOtpSchema = z.object({
+  email: z.string().email('Invalid email address')
+});
+
+const verifyOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  otp: z.union([z.string(), z.number()]).transform((v) => String(v).trim().replace(/\D/g, '')).refine((v) => v.length === 6, {
+    message: 'OTP must be 6 digits'
+  })
+});
+
+const resetPasswordWithOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  reset_token: z.string().min(1, 'Reset token is required'),
+  new_password: z.string().min(1, 'New password is required')
 });
 
 const loginSchema = z.object({
@@ -140,10 +158,123 @@ function normalizeEmail(email) {
   return (email || '').trim().toLowerCase();
 }
 
+// In-memory OTP stores with expiration & attempt limits
+const registrationOtps = new Map();
+const passwordResetOtps = new Map();
+
+function generateOtp() {
+  return Math.floor(100000 + crypto.randomInt(0, 900000)).toString();
+}
+
+function createVerificationToken(email, purpose) {
+  return jwt.sign(
+    { email: normalizeEmail(email), purpose, jti: crypto.randomUUID() },
+    getJwtSecret(),
+    { expiresIn: '15m' }
+  );
+}
+
+function verifyTokenPayload(token, expectedPurpose, expectedEmail) {
+  try {
+    const payload = jwt.verify(token, getJwtSecret());
+    if (payload.purpose !== expectedPurpose) return false;
+    if (expectedEmail && normalizeEmail(payload.email) !== normalizeEmail(expectedEmail)) return false;
+    return payload;
+  } catch (err) {
+    return false;
+  }
+}
+
 const { getCookieOptions, getClearCookieOptions } = require('../utils/cookieOptions');
 
 const COOKIE_OPTIONS = getCookieOptions(5 * 24 * 60 * 60 * 1000); // 5 days
 const REFRESH_COOKIE_OPTIONS = getCookieOptions(30 * 24 * 60 * 60 * 1000); // 30 days
+
+/**
+ * Robustly checks if an email is registered anywhere in the system
+ * (master directory, tenant owner emails, dev single db, and active tenant databases).
+ */
+async function isEmailAlreadyRegistered(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return false;
+
+  const masterDb = getMasterDb();
+
+  // 1. Check master tenant_user_directory (fast indexed lookup)
+  try {
+    const inDir = await masterDb.query(
+      'SELECT id FROM tenant_user_directory WHERE LOWER(email) = ? LIMIT 1',
+      [normalizedEmail]
+    );
+    if (inDir && inDir.length > 0) return true;
+  } catch (err) {
+    console.warn('[EMAIL_CHECK] Error querying tenant_user_directory:', err.message);
+  }
+
+  // 2. Check master tenants table (owner_email)
+  try {
+    const inTenants = await masterDb.query(
+      "SELECT id FROM tenants WHERE LOWER(owner_email) = ? AND status != 'deleted' LIMIT 1",
+      [normalizedEmail]
+    );
+    if (inTenants && inTenants.length > 0) return true;
+  } catch (err) {
+    console.warn('[EMAIL_CHECK] Error querying tenants owner_email:', err.message);
+  }
+
+  // 3. Check single dev database users table
+  try {
+    const devDb = getDevSingleDb();
+    const inDev = await devDb.query(
+      'SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1',
+      [normalizedEmail]
+    );
+    if (inDev && inDev.length > 0) return true;
+  } catch (err) {}
+
+  // 4. Scan active tenant databases
+  try {
+    const activeTenants = await masterDb.query(
+      "SELECT id FROM tenants WHERE status = 'active'"
+    );
+    for (const t of activeTenants) {
+      try {
+        const tDb = await getTenantDb(t.id);
+        const inTenant = await tDb.query(
+          'SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1',
+          [normalizedEmail]
+        );
+        if (inTenant && inTenant.length > 0) {
+          // Self-heal: ensure global directory has this mapping
+          await masterDb.execute(
+            'INSERT IGNORE INTO tenant_user_directory (email, tenant_id) VALUES (?, ?)',
+            [normalizedEmail, t.id]
+          );
+          return true;
+        }
+      } catch (tErr) {}
+    }
+  } catch (err) {}
+
+  return false;
+}
+
+// -------------------------------------------------------------
+// GET /api/auth/check-email?email=...
+// Fast pre-check to verify if an email is already registered
+// -------------------------------------------------------------
+router.get('/check-email', async (req, res, next) => {
+  const { email } = req.query;
+  if (!email) {
+    return res.status(400).json({ error: { message: 'Email query parameter is required', code: 'BAD_REQUEST' } });
+  }
+  try {
+    const exists = await isEmailAlreadyRegistered(email);
+    return res.json({ email: normalizeEmail(email), registered: exists });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // -------------------------------------------------------------
 // POST /api/auth/register-company
@@ -270,12 +401,9 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
       }
     }
 
-    // Check email uniqueness in master directory
-    const existingUser = await masterDb.query(
-      'SELECT id FROM tenant_user_directory WHERE email = ?',
-      [normalizedEmail]
-    );
-    if (existingUser.length > 0) {
+    // Check email uniqueness across master directory and all tenant databases
+    const emailExists = await isEmailAlreadyRegistered(normalizedEmail);
+    if (emailExists) {
       return res.status(409).json({
         error: { message: `Email "${normalizedEmail}" is already registered.`, code: 'EMAIL_CONFLICT' }
       });
@@ -435,11 +563,110 @@ router.post('/verify-registration', validate(verifyRegistrationSchema), async (r
 });
 
 // -------------------------------------------------------------
+// POST /api/auth/register/send-otp
+// Step 1: Validates email, sends 6-digit OTP via EmailProvider
+// -------------------------------------------------------------
+router.post('/register/send-otp', validate(sendOtpSchema), async (req, res, next) => {
+  const { email } = req.body;
+  const normalizedEmail = normalizeEmail(email);
+
+  try {
+    // Check if email already exists before generating or sending OTP
+    const emailExists = await isEmailAlreadyRegistered(normalizedEmail);
+    if (emailExists) {
+      return res.status(409).json({
+        error: { message: 'An account with this email address already exists. Please sign in.', code: 'EMAIL_IN_USE' }
+      });
+    }
+
+    // Rate limiting: 30-second cooldown between requests
+    const existingEntry = registrationOtps.get(normalizedEmail);
+    if (existingEntry && existingEntry.sentAt && (Date.now() - existingEntry.sentAt < 30 * 1000)) {
+      return res.status(429).json({
+        error: { message: 'Please wait 30 seconds before requesting another code.', code: 'RATE_LIMITED' }
+      });
+    }
+
+    const otp = generateOtp();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+
+    registrationOtps.set(normalizedEmail, {
+      otpHash,
+      attempts: 0,
+      expiresAt,
+      sentAt: Date.now(),
+      verified: false
+    });
+
+    await EmailProvider.sendOtp(normalizedEmail, otp, { purpose: 'registration' });
+
+    return res.json({
+      message: 'A 6-digit verification code has been sent to your email address.',
+      email: normalizedEmail,
+      expiresInMinutes: 10,
+      dev_otp: process.env.NODE_ENV !== 'production' ? otp : undefined
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/auth/register/verify-otp
+// Step 2: Validates OTP and issues a verification token for password setup
+// -------------------------------------------------------------
+router.post('/register/verify-otp', validate(verifyOtpSchema), async (req, res, next) => {
+  const { email, otp } = req.body;
+  const normalizedEmail = normalizeEmail(email);
+
+  const entry = registrationOtps.get(normalizedEmail);
+  if (!entry) {
+    return res.status(400).json({
+      error: { message: 'No active verification session found for this email. Please request a new code.', code: 'OTP_NOT_FOUND' }
+    });
+  }
+
+  if (Date.now() > entry.expiresAt) {
+    registrationOtps.delete(normalizedEmail);
+    return res.status(400).json({
+      error: { message: 'Verification code has expired. Please request a new code.', code: 'OTP_EXPIRED' }
+    });
+  }
+
+  if (entry.attempts >= 5) {
+    registrationOtps.delete(normalizedEmail);
+    return res.status(429).json({
+      error: { message: 'Too many invalid attempts. Please request a new verification code.', code: 'TOO_MANY_ATTEMPTS' }
+    });
+  }
+
+  const isValid = await bcrypt.compare(otp, entry.otpHash);
+  if (!isValid) {
+    entry.attempts += 1;
+    const remaining = 5 - entry.attempts;
+    return res.status(400).json({
+      error: { message: `Invalid verification code. ${remaining} attempt(s) remaining.`, code: 'INVALID_OTP' }
+    });
+  }
+
+  const verificationToken = createVerificationToken(normalizedEmail, 'registration_verified');
+  entry.verified = true;
+  entry.verificationToken = verificationToken;
+
+  return res.json({
+    message: 'Email address verified successfully.',
+    verified: true,
+    verification_token: verificationToken
+  });
+});
+
+// -------------------------------------------------------------
 // POST /api/auth/register
 // User registration (e.g. from invitation link or dev)
 // -------------------------------------------------------------
 router.post('/register', validate(registerUserSchema), async (req, res, next) => {
-  const { name, email, password, invite_token: inviteToken, company_name, companyName, slug, phone } = req.body;
+  const { name, email, password, verification_token: verificationToken, invite_token: inviteToken, company_name, companyName, slug, phone } = req.body;
 
   // Validate Password Policy
   const passwordCheck = validatePassword(password);
@@ -450,6 +677,31 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
   }
 
   const normalizedEmail = normalizeEmail(email);
+
+  // Enforce email verification for self-registration when token is supplied or VERIFICATION_MODE is enabled
+  const verificationMode = (process.env.VERIFICATION_MODE || 'off').toLowerCase();
+  const isEnforced = verificationMode === 'on' || verificationMode === 'otp';
+
+  if (verificationToken) {
+    const regEntry = registrationOtps.get(normalizedEmail);
+    const tokenValid = verifyTokenPayload(verificationToken, 'registration_verified', normalizedEmail);
+    const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
+
+    if (!tokenValid && !entryValid) {
+      return res.status(400).json({
+        error: { message: 'Invalid or expired verification session. Please verify your email again.', code: 'EMAIL_NOT_VERIFIED' }
+      });
+    }
+  } else if (!inviteToken && isEnforced) {
+    const regEntry = registrationOtps.get(normalizedEmail);
+    const entryValid = regEntry && regEntry.verified && (Date.now() < regEntry.expiresAt + 15 * 60 * 1000);
+
+    if (!entryValid) {
+      return res.status(400).json({
+        error: { message: 'Please verify your email with the 6-digit verification code first.', code: 'EMAIL_NOT_VERIFIED' }
+      });
+    }
+  }
 
   try {
     // When multi-tenant mode is active (DEV_SINGLE_TENANT !== '1') and registration is not via invite:
@@ -472,16 +724,14 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
         });
       }
 
-      const masterDb = getMasterDb();
-      const existingUser = await masterDb.query(
-        'SELECT id FROM tenant_user_directory WHERE email = ?',
-        [normalizedEmail]
-      );
-      if (existingUser.length > 0) {
+      const emailExists = await isEmailAlreadyRegistered(normalizedEmail);
+      if (emailExists) {
         return res.status(409).json({
           error: { message: `Email "${normalizedEmail}" is already registered.`, code: 'EMAIL_CONFLICT' }
         });
       }
+
+      const masterDb = getMasterDb();
 
       const orgName = (company_name || companyName || `${name.trim()}'s Team`).trim();
       let baseSlug = slugify(slug || orgName);
@@ -677,9 +927,13 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
 
       createdWorkspaceId = invite.workspace_id;
     } else {
+      const rawCompany = (company_name || companyName || name || 'Company').trim();
+      const cleanCompany = rawCompany.replace(/\s+Workspace$/i, '');
+      const workspaceName = cleanCompany.endsWith("'s") ? `${cleanCompany} Workspace` : `${cleanCompany}'s Workspace`;
+
       const wsRes = await activeDb.execute(
         'INSERT INTO workspaces (name) VALUES (?)',
-        [`${name}'s Workspace`]
+        [workspaceName]
       );
       createdWorkspaceId = wsRes.insertId;
 
@@ -711,6 +965,17 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
          (?, 'In Progress', 2000.0),
          (?, 'Done', 3000.0)`,
         [createdBoardId, createdBoardId, createdBoardId]
+      );
+
+      await activeDb.execute(
+        `INSERT INTO labels (board_id, name, color) VALUES 
+         (?, 'Feature', '#3b82f6'),
+         (?, 'Bug', '#ef4444'),
+         (?, 'Design', '#ec4899'),
+         (?, 'Backend', '#10b981'),
+         (?, 'Frontend', '#8b5cf6'),
+         (?, 'Urgent', '#f59e0b')`,
+        [createdBoardId, createdBoardId, createdBoardId, createdBoardId, createdBoardId, createdBoardId]
       );
     }
 
@@ -964,18 +1229,20 @@ router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, 
     );
 
     if (matchingTenants.length === 0) {
-      // Fallback: check dev single db
-      const devDb = getDevSingleDb();
-      const devUser = await devDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
-      if (devUser.length > 0) {
-        const loginResult = await handleUserLoginVerification(devDb, devUser[0], password, req, null);
-        if (loginResult.token) {
-          res.cookie('token', loginResult.token, COOKIE_OPTIONS);
-          res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
+      if (process.env.DEV_SINGLE_TENANT === '1') {
+        const devDb = getDevSingleDb();
+        const devUser = await devDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+        if (devUser.length > 0) {
+          const loginResult = await handleUserLoginVerification(devDb, devUser[0], password, req, null);
+          if (loginResult.token) {
+            res.cookie('token', loginResult.token, COOKIE_OPTIONS);
+            res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
+          }
+          return res.json(loginResult);
         }
-        return res.json(loginResult);
       }
 
+      await bcrypt.compare(password, DUMMY_HASH);
       return res.status(401).json({ error: { message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' } });
     }
 
@@ -1198,6 +1465,364 @@ router.post('/2fa/verify-login', validate(verifyLogin2FaSchema), async (req, res
       expiresIn: session.expiresIn,
       session_id: session.sessionId,
       used_recovery_code: isRecoveryCode
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// -------------------------------------------------------------
+// Database-persisted Password Reset Helpers
+// -------------------------------------------------------------
+async function getPasswordResetDb() {
+  if (process.env.DEV_SINGLE_TENANT === '1') {
+    return getDevSingleDb();
+  }
+  return getMasterDb();
+}
+
+async function ensurePasswordResetsTable() {
+  try {
+    const db = await getPasswordResetDb();
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS password_resets (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(255) NOT NULL,
+        otp_code VARCHAR(20) NOT NULL,
+        otp_hash VARCHAR(255) NOT NULL,
+        reset_token VARCHAR(500) NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        verified TINYINT(1) NOT NULL DEFAULT 0,
+        expires_at DATETIME(3) NOT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        INDEX idx_pr_email (email),
+        INDEX idx_pr_expires (expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  } catch (err) {
+    console.warn('[PASSWORD_RESETS_INIT] Notice ensuring table:', err.message);
+  }
+}
+
+// -------------------------------------------------------------
+// POST /api/auth/forgot-password/send-otp
+// Step 1: Initiates password reset by sending 6-digit OTP to user email
+// -------------------------------------------------------------
+router.post('/forgot-password/send-otp', validate(sendOtpSchema), async (req, res, next) => {
+  const { email } = req.body;
+  const normalizedEmail = normalizeEmail(email);
+
+  try {
+    let userFound = false;
+
+    // Check directory and databases for user existence
+    try {
+      const masterDb = getMasterDb();
+      const existing = await masterDb.query('SELECT id FROM tenant_user_directory WHERE email = ?', [normalizedEmail]);
+      if (existing && existing.length > 0) userFound = true;
+    } catch {}
+
+    if (!userFound) {
+      try {
+        const devDb = getDevSingleDb();
+        const existing = await devDb.query('SELECT id, name FROM users WHERE email = ?', [normalizedEmail]);
+        if (existing && existing.length > 0) userFound = true;
+      } catch {}
+    }
+
+    // Rate limit check: 30-second cooldown between requests
+    const existingEntry = passwordResetOtps.get(normalizedEmail);
+    if (existingEntry && existingEntry.sentAt && (Date.now() - existingEntry.sentAt < 30 * 1000)) {
+      return res.status(429).json({
+        error: { message: 'Please wait 30 seconds before requesting another code.', code: 'RATE_LIMITED' }
+      });
+    }
+
+    if (userFound) {
+      const otp = generateOtp();
+      const otpHash = await bcrypt.hash(otp, 10);
+      const expiresAtMs = Date.now() + 10 * 60 * 1000;
+      const expiresAtDate = new Date(expiresAtMs);
+
+      passwordResetOtps.set(normalizedEmail, {
+        otp,
+        otpHash,
+        attempts: 0,
+        expiresAt: expiresAtMs,
+        sentAt: Date.now(),
+        verified: false
+      });
+
+      // Persist in MySQL so server reboots do not discard active OTP
+      try {
+        const prDb = await getPasswordResetDb();
+        await ensurePasswordResetsTable();
+        await prDb.execute('DELETE FROM password_resets WHERE email = ?', [normalizedEmail]);
+        await prDb.execute(
+          'INSERT INTO password_resets (email, otp_code, otp_hash, expires_at) VALUES (?, ?, ?, ?)',
+          [normalizedEmail, otp, otpHash, expiresAtDate]
+        );
+      } catch (dbErr) {
+        console.warn('[PASSWORD_RESET_DB_SAVE_WARN]', dbErr.message);
+      }
+
+      await EmailProvider.sendOtp(normalizedEmail, otp, { purpose: 'password_reset' });
+
+      return res.json({
+        message: 'A 6-digit reset code has been sent to your email address.',
+        email: normalizedEmail,
+        expiresInMinutes: 10,
+        dev_otp: process.env.NODE_ENV !== 'production' ? otp : undefined
+      });
+    } else {
+      // Security: Do not reveal whether user email exists in database
+      return res.json({
+        message: 'If an account exists with this email address, a 6-digit reset code has been sent.',
+        email: normalizedEmail,
+        expiresInMinutes: 10
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/auth/forgot-password/verify-otp
+// Step 2: Validates reset OTP and issues temporary password reset token
+// -------------------------------------------------------------
+router.post('/forgot-password/verify-otp', validate(verifyOtpSchema), async (req, res, next) => {
+  const { email, otp } = req.body;
+  const normalizedEmail = normalizeEmail(email);
+  const cleanOtp = String(otp || '').trim().replace(/\D/g, '');
+
+  let entry = passwordResetOtps.get(normalizedEmail);
+  let dbRow = null;
+
+  try {
+    const prDb = await getPasswordResetDb();
+    await ensurePasswordResetsTable();
+    const rows = await prDb.query(
+      'SELECT id, otp_code, otp_hash, attempts, verified, expires_at FROM password_resets WHERE email = ? ORDER BY id DESC LIMIT 1',
+      [normalizedEmail]
+    );
+    if (rows && rows.length > 0) {
+      dbRow = rows[0];
+    }
+  } catch (dbErr) {
+    console.warn('[PASSWORD_RESET_DB_LOAD_WARN]', dbErr.message);
+  }
+
+  // Restore memory entry from database if server restarted
+  if (!entry && dbRow) {
+    entry = {
+      otp: dbRow.otp_code,
+      otpHash: dbRow.otp_hash,
+      attempts: dbRow.attempts,
+      expiresAt: new Date(dbRow.expires_at).getTime(),
+      verified: !!dbRow.verified
+    };
+    passwordResetOtps.set(normalizedEmail, entry);
+  }
+
+  if (!entry && !dbRow) {
+    return res.status(400).json({
+      error: { message: 'No reset request found for this email or the code has expired. Please request a new code.', code: 'OTP_NOT_FOUND' }
+    });
+  }
+
+  const effectiveExpiresAt = entry?.expiresAt || (dbRow ? new Date(dbRow.expires_at).getTime() : 0);
+  if (Date.now() > effectiveExpiresAt) {
+    passwordResetOtps.delete(normalizedEmail);
+    try {
+      const prDb = await getPasswordResetDb();
+      await prDb.execute('DELETE FROM password_resets WHERE email = ?', [normalizedEmail]);
+    } catch {}
+    return res.status(400).json({
+      error: { message: 'Reset code has expired. Please request a new code.', code: 'OTP_EXPIRED' }
+    });
+  }
+
+  const currentAttempts = Math.max(entry?.attempts || 0, dbRow?.attempts || 0);
+  if (currentAttempts >= 5) {
+    passwordResetOtps.delete(normalizedEmail);
+    try {
+      const prDb = await getPasswordResetDb();
+      await prDb.execute('DELETE FROM password_resets WHERE email = ?', [normalizedEmail]);
+    } catch {}
+    return res.status(429).json({
+      error: { message: 'Too many invalid attempts. Please request a new reset code.', code: 'TOO_MANY_ATTEMPTS' }
+    });
+  }
+
+  const expectedCode = entry?.otp || dbRow?.otp_code;
+  const expectedHash = entry?.otpHash || dbRow?.otp_hash;
+  const isDirectMatch = expectedCode && cleanOtp === expectedCode;
+  const isBcryptMatch = expectedHash ? await bcrypt.compare(cleanOtp, expectedHash) : false;
+  const isValid = isDirectMatch || isBcryptMatch;
+
+  if (!isValid) {
+    const newAttempts = currentAttempts + 1;
+    if (entry) entry.attempts = newAttempts;
+    try {
+      const prDb = await getPasswordResetDb();
+      await prDb.execute('UPDATE password_resets SET attempts = attempts + 1 WHERE email = ?', [normalizedEmail]);
+    } catch {}
+    const remaining = Math.max(0, 5 - newAttempts);
+    return res.status(400).json({
+      error: { message: `Invalid reset code. ${remaining} attempt(s) remaining.`, code: 'INVALID_OTP' }
+    });
+  }
+
+  const resetToken = createVerificationToken(normalizedEmail, 'password_reset_verified');
+  if (entry) {
+    entry.verified = true;
+    entry.resetToken = resetToken;
+  }
+
+  try {
+    const prDb = await getPasswordResetDb();
+    await prDb.execute(
+      'UPDATE password_resets SET verified = 1, reset_token = ? WHERE email = ?',
+      [resetToken, normalizedEmail]
+    );
+  } catch {}
+
+  return res.json({
+    message: 'Reset code verified successfully.',
+    verified: true,
+    reset_token: resetToken
+  });
+});
+
+// -------------------------------------------------------------
+// POST /api/auth/forgot-password/verify-token
+// Validates whether a reset token is valid and unexpired
+// -------------------------------------------------------------
+router.post('/forgot-password/verify-token', async (req, res) => {
+  const { token, email } = req.body;
+  if (!token) {
+    return res.status(400).json({
+      error: { message: 'Reset token is required.', code: 'MISSING_RESET_TOKEN' }
+    });
+  }
+  const payload = verifyTokenPayload(token, 'password_reset_verified', email);
+  let dbValid = false;
+  if (email) {
+    try {
+      const prDb = await getPasswordResetDb();
+      const rows = await prDb.query(
+        'SELECT id FROM password_resets WHERE email = ? AND reset_token = ? AND verified = 1 AND expires_at > CURRENT_TIMESTAMP(3)',
+        [normalizeEmail(email), token]
+      );
+      if (rows && rows.length > 0) dbValid = true;
+    } catch {}
+  }
+  if (!payload && !dbValid) {
+    return res.status(400).json({
+      error: { message: 'Password reset token is invalid or has expired. Please request a new link.', code: 'INVALID_RESET_TOKEN' }
+    });
+  }
+  return res.json({
+    valid: true,
+    email: payload?.email || email,
+    message: 'Reset token is valid.'
+  });
+});
+
+// -------------------------------------------------------------
+// POST /api/auth/forgot-password/reset
+// Step 3: Resets password using verified token and enforces strong password policy
+// -------------------------------------------------------------
+router.post('/forgot-password/reset', validate(resetPasswordWithOtpSchema), async (req, res, next) => {
+  const { email, reset_token, new_password } = req.body;
+  const normalizedEmail = normalizeEmail(email);
+
+  // Validate reset token
+  const tokenValid = verifyTokenPayload(reset_token, 'password_reset_verified', normalizedEmail);
+  const entry = passwordResetOtps.get(normalizedEmail);
+  const entryValid = entry && entry.verified && (Date.now() < entry.expiresAt + 15 * 60 * 1000);
+  let dbValid = false;
+  try {
+    const prDb = await getPasswordResetDb();
+    const rows = await prDb.query(
+      'SELECT id FROM password_resets WHERE email = ? AND reset_token = ? AND verified = 1',
+      [normalizedEmail, reset_token]
+    );
+    if (rows && rows.length > 0) dbValid = true;
+  } catch {}
+
+  if (!tokenValid && !entryValid && !dbValid) {
+    return res.status(400).json({
+      error: { message: 'Invalid or expired password reset session. Please request a new code.', code: 'INVALID_RESET_TOKEN' }
+    });
+  }
+
+  // Validate Password Policy
+  const passwordCheck = validatePassword(new_password);
+  if (!passwordCheck.isValid) {
+    return res.status(400).json({
+      error: { message: passwordCheck.error, code: 'PASSWORD_TOO_WEAK' }
+    });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(new_password, BCRYPT_ROUNDS);
+
+    if (process.env.DEV_SINGLE_TENANT === '1') {
+      const devDb = getDevSingleDb();
+      const userRes = await devDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+      if (userRes.length === 0) {
+        return res.status(404).json({ error: { message: 'User account not found', code: 'USER_NOT_FOUND' } });
+      }
+      const user = userRes[0];
+      await devDb.execute(
+        'UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, lockout_count = 0 WHERE id = ?',
+        [passwordHash, user.id]
+      );
+      await revokeAllSessions(devDb, user.id, 'PASSWORD_RESET', req);
+      await logAuthEvent(devDb, {
+        userId: user.id,
+        email: user.email,
+        eventType: 'PASSWORD_RESET',
+        req
+      });
+    } else {
+      const masterDb = getMasterDb();
+      const usersInDir = await masterDb.query(
+        'SELECT id, tenant_id FROM tenant_user_directory WHERE email = ?',
+        [normalizedEmail]
+      );
+      if (usersInDir.length === 0) {
+        return res.status(404).json({ error: { message: 'User account not found', code: 'USER_NOT_FOUND' } });
+      }
+      for (const row of usersInDir) {
+        if (row.tenant_id) {
+          try {
+            const tenantDb = await getTenantDb(row.tenant_id);
+            const [u] = await tenantDb.query('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
+            if (u) {
+              await tenantDb.execute(
+                'UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, lockout_count = 0 WHERE id = ?',
+                [passwordHash, u.id]
+              );
+              await revokeAllSessions(tenantDb, u.id, 'PASSWORD_RESET', req);
+            }
+          } catch (tErr) {
+            console.error('Failed updating tenant password during reset:', tErr.message);
+          }
+        }
+      }
+    }
+
+    passwordResetOtps.delete(normalizedEmail);
+    try {
+      const prDb = await getPasswordResetDb();
+      await prDb.execute('DELETE FROM password_resets WHERE email = ?', [normalizedEmail]);
+    } catch {}
+
+    return res.json({
+      message: 'Password reset successfully. You can now log in with your new password.'
     });
   } catch (err) {
     next(err);
@@ -1593,20 +2218,26 @@ router.get('/2fa/status', requireAuth, async (req, res, next) => {
 router.get('/activity', requireAuth, async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20)); // Exactly 20 per page default
     const offset = (page - 1) * limit;
     const workspaceId = req.query.workspace_id ? Number(req.query.workspace_id) : null;
+    const boardId = req.query.board_id ? Number(req.query.board_id) : null;
+    const targetUserId = req.query.user_id ? Number(req.query.user_id) : null;
     const search = (req.query.search || '').trim().toLowerCase();
     const category = (req.query.category || '').trim().toLowerCase();
+    const actionType = (req.query.action_type || '').trim().toLowerCase();
 
     let rows = [];
     let total = 0;
 
     if (req.db) {
-      // Determine if caller has permission to view all workspace security audit records
+      // Determine if caller has permission to view all workspace security & activity audit records
       let canViewAll = false;
       if (workspaceId) {
         canViewAll = await userHasPermission(req.user.id, workspaceId, 'audit.view', req.db);
+        if (!canViewAll) {
+          canViewAll = await userHasPermission(req.user.id, workspaceId, 'activity.view', req.db);
+        }
         if (!canViewAll) {
           canViewAll = await userHasPermission(req.user.id, workspaceId, 'company.manage_security', req.db);
         }
@@ -1627,112 +2258,237 @@ router.get('/activity', requireAuth, async (req, res, next) => {
       const whereClauses = [];
       const queryParams = [];
 
+      // Non-admins can only see their own activities
       if (!canViewAll) {
-        whereClauses.push('(a.user_id = ? OR a.email = ?)');
-        queryParams.push(req.user.id, req.user.email);
+        whereClauses.push('(a.user_id = ? OR LOWER(COALESCE(u.email, \'\')) = ?)');
+        queryParams.push(req.user.id, (req.user.email || '').toLowerCase());
+      } else if (targetUserId) {
+        // Filter by specific user (member-wise audit)
+        whereClauses.push('a.user_id = ?');
+        queryParams.push(targetUserId);
+      }
+
+      if (boardId) {
+        whereClauses.push('a.board_id = ?');
+        queryParams.push(boardId);
+      }
+
+      if (workspaceId) {
+        whereClauses.push('(a.workspace_id = ? OR b.workspace_id = ?)');
+        queryParams.push(workspaceId, workspaceId);
+      }
+
+      if (actionType && actionType !== 'all') {
+        whereClauses.push('a.action_type = ?');
+        queryParams.push(actionType);
       }
 
       if (category && category !== 'all') {
         if (category === 'auth') {
-          whereClauses.push("(a.event_type LIKE '%login%' OR a.event_type LIKE '%logout%' OR a.event_type LIKE '%password%' OR a.event_type LIKE '%2fa%' OR a.event_type LIKE '%session%')");
+          whereClauses.push("(a.action_type LIKE '%login%' OR a.action_type LIKE '%logout%' OR a.action_type LIKE '%password%' OR a.action_type LIKE '%2fa%' OR a.action_type LIKE '%session%')");
+        } else if (category === 'tasks' || category === 'cards') {
+          whereClauses.push("(a.action_type LIKE '%card%' OR a.action_type LIKE '%task%' OR a.action_type LIKE '%due_date%' OR a.action_type LIKE '%complete%' OR a.action_type LIKE '%checklist%')");
+        } else if (category === 'comments') {
+          whereClauses.push("(a.action_type LIKE '%comment%')");
+        } else if (category === 'members') {
+          whereClauses.push("(a.action_type LIKE '%member%' OR a.action_type LIKE '%assign%' OR a.action_type LIKE '%invite%')");
         } else if (category === 'roles') {
-          whereClauses.push("(a.event_type LIKE '%role%' OR a.event_type LIKE '%permission%')");
+          whereClauses.push("(a.action_type LIKE '%role%' OR a.action_type LIKE '%permission%')");
+        } else if (category === 'boards') {
+          whereClauses.push("(a.action_type LIKE '%board%' OR a.action_type LIKE '%list%' OR a.action_type LIKE '%label%')");
         } else if (category === 'workspace') {
-          whereClauses.push("(a.event_type LIKE '%workspace%' OR a.event_type LIKE '%board%' OR a.event_type LIKE '%member%')");
+          whereClauses.push("(a.action_type LIKE '%workspace%')");
         }
       }
 
       if (search) {
-        whereClauses.push('(LOWER(a.event_type) LIKE ? OR LOWER(COALESCE(u.name, \'\')) LIKE ? OR LOWER(COALESCE(a.email, COALESCE(u.email, \'\'))) LIKE ? OR LOWER(COALESCE(a.ip_address, \'\')) LIKE ?)');
+        whereClauses.push(
+          '(LOWER(a.action_type) LIKE ? OR LOWER(COALESCE(u.name, \'\')) LIKE ? OR LOWER(COALESCE(u.email, \'\')) LIKE ? OR LOWER(COALESCE(c.title, \'\')) LIKE ? OR LOWER(COALESCE(b.name, \'\')) LIKE ? OR LOWER(COALESCE(w.name, \'\')) LIKE ? OR LOWER(COALESCE(a.meta_json, \'\')) LIKE ?)'
+        );
         const searchPattern = `%${search}%`;
-        queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern);
+        queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
       }
 
       const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
       const countRes = await req.db.query(
         `SELECT COUNT(*) as total
-         FROM auth_audit_log a
+         FROM activity_log a
          LEFT JOIN users u ON a.user_id = u.id
+         LEFT JOIN cards c ON a.card_id = c.id
+         LEFT JOIN boards b ON a.board_id = b.id
+         LEFT JOIN workspaces w ON a.workspace_id = w.id
          ${whereSql}`,
         queryParams
       );
       total = Number(countRes[0]?.total || 0);
 
       rows = await req.db.query(
-        `SELECT a.id, a.user_id, a.email, a.event_type, a.ip_address, a.user_agent, a.metadata, a.created_at,
-                u.name as user_name, u.email as user_email
-         FROM auth_audit_log a
+        `SELECT a.id, a.board_id, a.card_id, a.user_id, a.workspace_id, a.action_type,
+                a.meta_json, a.created_at,
+                u.name as user_name, u.email as user_email, u.avatar_url as user_avatar,
+                c.title as card_title,
+                b.name as board_name,
+                w.name as workspace_name
+         FROM activity_log a
          LEFT JOIN users u ON a.user_id = u.id
+         LEFT JOIN cards c ON a.card_id = c.id
+         LEFT JOIN boards b ON a.board_id = b.id
+         LEFT JOIN workspaces w ON a.workspace_id = w.id
          ${whereSql}
-         ORDER BY a.created_at DESC
+         ORDER BY a.created_at DESC, a.id DESC
          LIMIT ? OFFSET ?`,
         [...queryParams, limit, offset]
       );
     }
 
     const events = rows.map((r) => {
-      let meta = null;
+      let meta = {};
       try {
-        if (r.metadata) meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata;
+        if (r.meta_json) {
+          meta = typeof r.meta_json === 'string' ? JSON.parse(r.meta_json) : r.meta_json;
+        }
       } catch (e) {
-        meta = null;
+        meta = {};
       }
 
-      // Generate helpful summary details
+      const cardTitle = r.card_title || meta.card_title || meta.title || null;
+      const boardName = r.board_name || meta.board_name || meta.boardName || null;
+      const userName = r.user_name || meta.user_name || 'System';
+      const atLower = String(r.action_type || '').toLowerCase();
+
+      // Human-readable summary details
       let detailsSummary = '';
-      const etLower = String(r.event_type || '').toLowerCase();
-      if (etLower === 'token_refresh_success') {
-        detailsSummary = 'Session security token refreshed successfully';
-      } else if (etLower === 'login_success') {
-        detailsSummary = meta?.method ? `User authenticated via ${meta.method}` : 'User authenticated successfully';
-      } else if (etLower === 'login_failed') {
-        detailsSummary = `Authentication attempt failed${meta?.reason ? `: ${meta.reason}` : ''}`;
-      } else if (etLower === 'logout') {
-        detailsSummary = 'User signed out of active session';
-      } else if (etLower === 'user_registered') {
-        detailsSummary = 'New user account created and workspace joined';
-      } else if (etLower === 'board_deleted' || etLower === 'board.delete') {
-        detailsSummary = `Board deleted: "${meta?.boardName || meta?.board_name || meta?.board_id || 'Board'}"`;
-      } else if (etLower.includes('role.created') || etLower.includes('role_created')) {
-        detailsSummary = `Custom role created: "${meta?.role_name || meta?.name || 'Role'}"`;
-      } else if (etLower.includes('role.updated') || etLower.includes('role_updated')) {
-        detailsSummary = `Role permissions modified: "${meta?.role_name || meta?.name || 'Role'}"`;
-      } else if (etLower.includes('role.deleted') || etLower.includes('role_deleted')) {
-        detailsSummary = `Custom role removed: "${meta?.role_name || meta?.name || 'Role'}"`;
-      } else if (etLower.includes('workspace.settings_update')) {
-        detailsSummary = 'Workspace settings updated';
-      } else if (meta && typeof meta === 'object') {
-        const parts = [];
-        if (meta.reason) parts.push(`Reason: ${meta.reason}`);
-        if (meta.role) parts.push(`Role: ${meta.role}`);
-        if (meta.boardName || meta.board_name) parts.push(`Board: ${meta.boardName || meta.board_name}`);
-        if (meta.target_user_id) parts.push(`Target User ID: #${meta.target_user_id}`);
-        if (meta.updates && typeof meta.updates === 'object') {
-          const keys = Object.keys(meta.updates).join(', ');
-          parts.push(`Updated: [${keys}]`);
-        }
-        detailsSummary = parts.join(' | ') || (meta.sessionId ? 'Session token refreshed' : '');
+      if (atLower === 'user_login' || atLower === 'login_success') {
+        detailsSummary = meta.method ? `Logged in via ${meta.method}` : 'Logged in to account';
+      } else if (atLower === 'user_logout' || atLower === 'logout') {
+        detailsSummary = 'Logged out of session';
+      } else if (atLower === 'token_refresh_success') {
+        detailsSummary = 'Security session token refreshed';
+      } else if (atLower === 'login_failed') {
+        detailsSummary = `Failed login attempt${meta.reason ? `: ${meta.reason}` : ''}`;
+      } else if (atLower === 'password_changed') {
+        detailsSummary = 'Changed account password';
+      } else if (atLower === '2fa_enabled') {
+        detailsSummary = 'Enabled two-factor authentication (2FA)';
+      } else if (atLower === '2fa_disabled') {
+        detailsSummary = 'Disabled two-factor authentication (2FA)';
+      } else if (atLower === 'profile_updated') {
+        detailsSummary = 'Updated account profile details';
+      } else if (atLower === 'session_revoked') {
+        detailsSummary = 'Revoked active session';
+      } else if (atLower === 'created_card' || atLower === 'card_created') {
+        detailsSummary = `Created task "${cardTitle || 'Card'}"${boardName ? ` in "${boardName}"` : ''}`;
+      } else if (atLower === 'card_renamed') {
+        detailsSummary = `Renamed task to "${cardTitle || meta.new_title || 'Card'}"`;
+      } else if (atLower === 'card_description_updated') {
+        detailsSummary = `Updated description for task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'card_cover_changed') {
+        detailsSummary = `Changed cover for task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'moved_card' || atLower === 'card_moved') {
+        detailsSummary = `Moved task "${cardTitle || 'Card'}"${meta.from && meta.to ? ` from "${meta.from}" to "${meta.to}"` : ''}`;
+      } else if (atLower === 'marked_complete' || atLower === 'completed_card') {
+        detailsSummary = `Completed task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'marked_incomplete') {
+        detailsSummary = `Reopened task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'due_date_changed') {
+        detailsSummary = meta.due_date ? `Set due date on "${cardTitle || 'Card'}" to ${meta.due_date}` : `Removed due date from "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'card_archived') {
+        detailsSummary = `Archived task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'card_restored') {
+        detailsSummary = `Restored task "${cardTitle || 'Card'}" from archive`;
+      } else if (atLower === 'card_deleted' || atLower === 'deleted_card') {
+        detailsSummary = `Deleted task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'added_comment' || atLower === 'comment_added') {
+        detailsSummary = `Added a comment on task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'edited_comment') {
+        detailsSummary = `Edited comment on task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'deleted_comment') {
+        detailsSummary = `Deleted comment from task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_added') {
+        detailsSummary = `Added checklist "${meta.checklist_title || 'Checklist'}" to task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_removed') {
+        detailsSummary = `Removed checklist "${meta.checklist_title || 'Checklist'}" from task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_item_added') {
+        detailsSummary = `Added checklist item "${meta.item_text || ''}" on "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_toggled') {
+        detailsSummary = `${meta.is_checked ? 'Checked' : 'Unchecked'} checklist item "${meta.item_text || ''}" on "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_item_edited') {
+        detailsSummary = `Edited checklist item "${meta.item_text || ''}" on "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'checklist_item_deleted') {
+        detailsSummary = `Deleted checklist item "${meta.item_text || ''}" from "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'label_added') {
+        detailsSummary = `Added label "${meta.label_name || 'Label'}" to task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'label_removed') {
+        detailsSummary = `Removed label "${meta.label_name || 'Label'}" from task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'member_added') {
+        detailsSummary = `Assigned "${meta.member_name || 'user'}" to task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'member_removed') {
+        detailsSummary = `Unassigned "${meta.member_name || 'user'}" from task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'attachment_added') {
+        detailsSummary = `Added attachment "${meta.file_name || 'file'}" to task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'attachment_removed') {
+        detailsSummary = `Removed attachment "${meta.file_name || 'file'}" from task "${cardTitle || 'Card'}"`;
+      } else if (atLower === 'board_created') {
+        detailsSummary = `Created board "${boardName || 'Board'}"`;
+      } else if (atLower === 'board_renamed') {
+        detailsSummary = `Renamed board to "${meta.board_name || boardName || 'Board'}"`;
+      } else if (atLower === 'board_archived') {
+        detailsSummary = `Archived board "${boardName || 'Board'}"`;
+      } else if (atLower === 'board_restored') {
+        detailsSummary = `Restored board "${boardName || 'Board'}"`;
+      } else if (atLower === 'board_deleted') {
+        detailsSummary = `Deleted board "${meta.board_name || boardName || 'Board'}"`;
+      } else if (atLower === 'board_member_added') {
+        detailsSummary = `Added "${meta.member_name || 'member'}" to board "${boardName || 'Board'}"`;
+      } else if (atLower === 'board_member_removed') {
+        detailsSummary = `Removed member from board "${boardName || 'Board'}"`;
+      } else if (atLower === 'list_created') {
+        detailsSummary = `Created list "${meta.list_name || 'List'}"${boardName ? ` in "${boardName}"` : ''}`;
+      } else if (atLower === 'list_renamed') {
+        detailsSummary = `Renamed list to "${meta.list_name || 'List'}"`;
+      } else if (atLower === 'list_archived') {
+        detailsSummary = `Archived list "${meta.list_name || 'List'}"`;
+      } else if (atLower === 'list_reordered') {
+        detailsSummary = `Reordered list "${meta.list_name || 'List'}"`;
+      } else if (atLower === 'list_deleted') {
+        detailsSummary = `Deleted list "${meta.list_name || 'List'}"`;
+      } else if (atLower.includes('workspace')) {
+        detailsSummary = `${atLower.replace(/_/g, ' ')} "${r.workspace_name || meta.workspace_name || 'workspace'}"`;
+      } else if (atLower.includes('role')) {
+        detailsSummary = `${atLower.replace(/_/g, ' ')} "${meta.role_name || meta.name || 'role'}"`;
+      } else {
+        detailsSummary = `${atLower.replace(/_/g, ' ')}${cardTitle ? ` on "${cardTitle}"` : ''}${boardName ? ` in "${boardName}"` : ''}`;
       }
 
       return {
         id: r.id,
-        event: r.event_type,
-        event_type: r.event_type,
-        action: r.event_type ? r.event_type.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Security Event',
+        event: r.action_type,
+        event_type: r.action_type,
+        action: r.action_type ? r.action_type.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Activity',
+        action_type: r.action_type,
+        board_id: r.board_id,
+        board_name: boardName,
+        card_id: r.card_id,
+        card_title: cardTitle,
+        workspace_id: r.workspace_id,
+        workspace_name: r.workspace_name,
         user_id: r.user_id,
-        user_name: r.user_name || null,
-        user_email: r.user_email || r.email || null,
-        ip: r.ip_address || '127.0.0.1',
-        user_agent: r.user_agent || null,
+        user_name: userName,
+        user_email: r.user_email || meta.email || null,
+        user_avatar: r.user_avatar || null,
+        ip: meta.ip_address || meta.ip || '127.0.0.1',
+        user_agent: meta.user_agent || null,
         metadata: meta,
-        details: detailsSummary || (r.event_type ? r.event_type.replace(/[._]/g, ' ') : 'No additional details'),
+        details: detailsSummary,
         created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
       };
     });
 
     return res.json({
       events,
+      logs: events,
+      activities: events,
       pagination: {
         page,
         limit,

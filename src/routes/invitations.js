@@ -7,6 +7,7 @@ const validate = require('../middleware/validate');
 const { notify } = require('../services/notify');
 const { userHasPermission } = require('../middleware/permissions');
 const { broadcastWorkspaceEvent } = require('../socket');
+const { logActivity } = require('../utils/activity');
 
 const { isOwnerRole } = require('../utils/roleRank');
 
@@ -310,6 +311,15 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
         invite_url: inviteUrl
       }
     }, originId, tenant?.id);
+
+    await logActivity({
+      workspaceId,
+      userId: user.id,
+      actionType: 'invitation_created',
+      metaJson: { email: normalizedEmail, role: resolvedRoleName },
+      dbInstance: db,
+      tenantId: tenant?.id
+    });
     return {
       status: 202,
       data: {
@@ -502,6 +512,15 @@ router.post('/accept', requireAuth, async (req, res, next) => {
     const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [invite.workspace_id]);
     const wsName = wsRes[0]?.name || 'Workspace';
 
+    await logActivity({
+      workspaceId: invite.workspace_id,
+      userId: req.user.id,
+      actionType: 'invitation_accepted',
+      metaJson: { workspace_name: wsName, email: invite.email },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
     await notify(
       {
         eventType: 'invite.accepted',
@@ -593,6 +612,15 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 
     await req.db.execute('DELETE FROM pending_invitations WHERE id = ?', [inviteId]);
     broadcastWorkspaceEvent(inviteRes[0].workspace_id, 'workspace:invitation_revoked', { invitationId: inviteId }, req.headers['x-origin-id'], req.tenant?.id);
+
+    await logActivity({
+      workspaceId: inviteRes[0].workspace_id,
+      userId: req.user.id,
+      actionType: 'invitation_revoked',
+      metaJson: { email: inviteRes[0].email, workspace_name: wsRow?.name || 'Workspace' },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
 
     await notify({
       db: req.db,

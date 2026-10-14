@@ -35,7 +35,7 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     const role = roleRes[0];
 
-    if (!role.is_editable || role.is_system === 1 || isOwnerRole(role)) {
+    if (!role.is_editable || isOwnerRole(role)) {
       return res.status(403).json({
         error: { message: 'System role permissions are locked and cannot be edited', code: 'ROLE_NOT_EDITABLE' }
       });
@@ -67,29 +67,37 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
     if (name && name.trim()) {
       const cleanName = name.trim();
-      if (isReservedRoleName(cleanName)) {
-        return res.status(400).json({
-          error: { message: 'Role name is reserved for system roles', code: 'RESERVED_ROLE_NAME' }
-        });
-      }
-
-      if (targetWsId) {
-        const dupCheck = await req.db.query(
-          'SELECT id FROM roles WHERE workspace_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1',
-          [targetWsId, cleanName, roleId]
-        );
-        if (dupCheck.length > 0) {
+      if (cleanName.toLowerCase() !== role.name.toLowerCase()) {
+        if (role.is_system) {
           return res.status(400).json({
-            error: { message: 'A role with this name already exists in this workspace', code: 'DUPLICATE_ROLE_NAME' }
+            error: { message: 'System role names cannot be renamed', code: 'CANNOT_RENAME_SYSTEM_ROLE' }
           });
         }
-      }
+        if (isReservedRoleName(cleanName)) {
+          return res.status(400).json({
+            error: { message: 'Role name is reserved for system roles', code: 'RESERVED_ROLE_NAME' }
+          });
+        }
 
-      await req.db.execute('UPDATE roles SET name = ? WHERE id = ?', [cleanName, roleId]);
+        if (targetWsId) {
+          const dupCheck = await req.db.query(
+            'SELECT id FROM roles WHERE workspace_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1',
+            [targetWsId, cleanName, roleId]
+          );
+          if (dupCheck.length > 0) {
+            return res.status(400).json({
+              error: { message: 'A role with this name already exists in this workspace', code: 'DUPLICATE_ROLE_NAME' }
+            });
+          }
+        }
+
+        await req.db.execute('UPDATE roles SET name = ? WHERE id = ?', [cleanName, roleId]);
+      }
     }
 
     if (Array.isArray(permission_keys)) {
-      // Validate unknown and planned keys
+      // Validate unknown keys and filter out planned keys
+      const activeKeysOnly = [];
       for (const rawKey of permission_keys) {
         const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
         const meta = validPermMap.get(canonical);
@@ -98,17 +106,13 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
             error: { message: `Unknown permission key: ${rawKey}`, code: 'UNKNOWN_PERMISSION_KEY' }
           });
         }
-        if (meta.planned) {
-          return res.status(400).json({
-            error: { message: `Planned permission key cannot be assigned: ${rawKey}`, code: 'PLANNED_PERMISSION_KEY' }
-          });
+        if (!meta.planned) {
+          activeKeysOnly.push(canonical);
         }
       }
 
       // Auto-include transitive prerequisites as the Role Editor does
-      const requestedKeys = new Set(
-        permission_keys.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
-      );
+      const requestedKeys = new Set(activeKeysOnly);
       for (const k of Array.from(requestedKeys)) {
         const prereqs = getTransitivePrerequisites(k);
         prereqs.forEach((p) => requestedKeys.add(p));

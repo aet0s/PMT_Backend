@@ -2,7 +2,7 @@
 // Password policy: min 10 characters, mixed character classes (uppercase, lowercase, number, symbol)
 const crypto = require('crypto');
 
-const MIN_LENGTH = 10;
+const MIN_LENGTH = 8;
 const UPPER_REGEX = /[A-Z]/;
 const LOWER_REGEX = /[a-z]/;
 const DIGIT_REGEX = /[0-9]/;

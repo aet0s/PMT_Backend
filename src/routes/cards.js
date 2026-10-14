@@ -65,13 +65,13 @@ async function getFullCard(cardId, dbInstance = null) {
     card.labels = labelsRes;
 
     const assignersRes = await db.query(
-      'SELECT u.id, u.name, u.email FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
+      'SELECT u.id, u.name, u.email, u.avatar_url FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
       [cardId]
     );
     card.assigners = assignersRes;
 
     const membersRes = await db.query(
-      'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
+      'SELECT u.id, u.name, u.email, u.avatar_url FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
       [cardId]
     );
     card.members = membersRes;
@@ -350,6 +350,11 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       }
 
       if (title !== undefined && title !== oldCard.title) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'card_renamed', {
+          card_title: title,
+          old_title: oldCard.title,
+          title
+        }, tx);
         await notify(
           {
             eventType: 'card.renamed',
@@ -364,6 +369,9 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       }
 
       if (description !== undefined && description !== oldCard.description) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'card_description_updated', {
+          card_title: updatedCard.title
+        }, tx);
         await notify(
           {
             eventType: 'card.description_changed',
@@ -422,6 +430,9 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       }
 
       if (req.body.cover_url !== undefined && req.body.cover_url !== oldCard.cover_url) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'card_cover_changed', {
+          card_title: updatedCard.title
+        }, tx);
         await notify(
           {
             eventType: 'card.cover_changed',
@@ -436,6 +447,9 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       }
 
       if (is_archived !== undefined && Boolean(is_archived) !== Boolean(oldCard.is_archived)) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, is_archived ? 'card_archived' : 'card_restored', {
+          card_title: updatedCard.title
+        }, tx);
         await notify(
           {
             eventType: is_archived ? 'card.archived' : 'card.restored',
@@ -515,6 +529,11 @@ router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req,
     );
 
     await req.db.execute('DELETE FROM cards WHERE id = ?', [cardId]);
+
+    await logActivity(boardId, cardId, req.user.id, 'card_deleted', {
+      card_title: cardTitle,
+      title: cardTitle
+    }, req.db);
 
     broadcastBoardEvent(boardId, 'card:deleted', { cardId }, originId, req.tenant ? req.tenant.id : null);
 
@@ -1140,6 +1159,11 @@ router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
 
     await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
 
+    await logActivity(boardId, att.card_id, req.user.id, 'attachment_removed', {
+      file_name: att.file_name,
+      attachment_id: attachmentId
+    }, req.db);
+
     if (boardId) {
       const fullCard = await getFullCard(att.card_id, req.db);
       broadcastBoardEvent(boardId, 'card:updated', { cardId: att.card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
@@ -1320,6 +1344,10 @@ router.patch('/comments/:id', requireAuth, async (req, res, next) => {
     const cleanBody = sanitizeDescription(body.trim());
     await req.db.execute('UPDATE comments SET body = ? WHERE id = ?', [cleanBody, commentId]);
 
+    await logActivity(boardId, cardId, req.user.id, 'edited_comment', {
+      comment_id: commentId
+    }, req.db);
+
     const [updatedComment] = await req.db.query('SELECT * FROM comments WHERE id = ?', [commentId]);
 
     if (cardId) {
@@ -1371,6 +1399,10 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
     }
 
     await req.db.execute('DELETE FROM comments WHERE id = ?', [commentId]);
+
+    await logActivity(boardId, cardId, req.user.id, 'deleted_comment', {
+      comment_id: commentId
+    }, req.db);
 
     if (cardId) {
       const fullCard = await getFullCard(cardId, req.db);
@@ -1429,6 +1461,9 @@ router.post('/:id/checklists', requireAuth, requirePermission('checklist.create'
     const [checklist] = await req.db.query('SELECT * FROM checklists WHERE id = ?', [checklistId]);
 
     if (boardId) {
+      await logActivity(boardId, cardId, req.user.id, 'checklist_added', {
+        checklist_title: checklist?.title || 'Checklist'
+      }, req.db);
       const fullCard = await getFullCard(cardId, req.db);
       broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
       await notify({
@@ -1463,6 +1498,9 @@ router.delete('/checklists/:id', requireAuth, requirePermission('checklist.delet
       const cardRes = await req.db.query('SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?', [cardId]);
       const boardId = cardRes[0]?.board_id;
       if (boardId) {
+        await logActivity(boardId, cardId, req.user.id, 'checklist_removed', {
+          checklist_title: chRes[0]?.title || 'Checklist'
+        }, req.db);
         const fullCard = await getFullCard(cardId, req.db);
         broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
         await notify({
@@ -1505,6 +1543,10 @@ router.post('/checklist-items', requireAuth, requirePermission('checklist.edit')
       const cardRes = await req.db.query('SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?', [cardId]);
       const boardId = cardRes[0]?.board_id;
       if (boardId) {
+        await logActivity(boardId, cardId, req.user.id, 'checklist_item_added', {
+          item_text: text,
+          checklist_title: chRes[0]?.title || 'Checklist'
+        }, req.db);
         const fullCard = await getFullCard(cardId, req.db);
         broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
         await notify({
@@ -1590,6 +1632,10 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
             [itemId]
           );
           if (detailRes.length > 0) {
+            await logActivity(board_id, card_id, req.user.id, 'checklist_item_edited', {
+              item_text: sanitizePlain(text),
+              checklist_title: detailRes[0].checklist_title
+            }, tx);
             await notify({
               db: tx,
               tenantId: req.tenant?.id,
@@ -1704,6 +1750,10 @@ router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.
 
     if (chRes.length > 0) {
       const { card_id, board_id, text, checklist_title } = chRes[0];
+      await logActivity(board_id, card_id, req.user.id, 'checklist_item_deleted', {
+        item_text: text,
+        checklist_title: checklist_title
+      }, req.db);
       const fullCard = await getFullCard(card_id, req.db);
       broadcastBoardEvent(board_id, 'card:updated', { cardId: card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
       await notify({

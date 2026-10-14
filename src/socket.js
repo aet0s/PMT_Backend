@@ -92,7 +92,7 @@ function initSocket(server) {
     try {
       const cookieHeader = socket.handshake.headers.cookie;
       const cookies = parseCookies(cookieHeader);
-      const token = cookies.token || socket.handshake.auth?.token || socket.handshake.query?.token;
+      const token = socket.handshake.auth?.token || socket.handshake.query?.token || cookies.token;
 
       if (!token) {
         return next(new Error('unauthorized'));

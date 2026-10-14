@@ -153,10 +153,14 @@ async function provisionTenant({
     const ownerRoleId = roles[0] ? roles[0].id : 1;
     const ownerRoleName = roles[0] ? roles[0].name : 'Owner';
 
-    // Create default workspace
+    // Create default workspace: exactly single workspace named "${companyName}'s Workspace"
+    const rawCompany = (companyName || ownerName || 'Company').trim();
+    const cleanCompany = rawCompany.replace(/\s+Workspace$/i, '');
+    const workspaceName = cleanCompany.endsWith("'s") ? `${cleanCompany} Workspace` : `${cleanCompany}'s Workspace`;
+
     const wsRes = await tenantDb.execute(
       'INSERT INTO workspaces (name) VALUES (?)',
-      [`${companyName.trim()} Workspace`]
+      [workspaceName]
     );
     const workspaceId = wsRes.insertId;
 
@@ -167,7 +171,7 @@ async function provisionTenant({
       [workspaceId, ownerUserId, ownerRoleName, ownerRoleId]
     );
 
-    // Create sample project board
+    // Create sample project board: exactly single board titled 'Getting Started'
     const boardRes = await tenantDb.execute(
       `INSERT INTO boards (workspace_id, name, background_color)
        VALUES (?, 'Getting Started', 'bg-gradient-to-br from-indigo-900 via-slate-900 to-purple-950')`,
@@ -183,23 +187,26 @@ async function provisionTenant({
 
     // Create default lists
     const lists = ['To Do', 'In Progress', 'Done'];
-    let firstListId = null;
     for (let i = 0; i < lists.length; i++) {
-      const lRes = await tenantDb.execute(
+      await tenantDb.execute(
         'INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)',
         [boardId, lists[i], (i + 1) * 1000]
       );
-      if (i === 0) firstListId = lRes.insertId;
     }
 
-    // Create welcome card in 'To Do' list
-    if (firstListId) {
-      await tenantDb.execute(
-        `INSERT INTO cards (list_id, title, description, position)
-         VALUES (?, 'Welcome to your new workspace!', 'Explore boards, lists, cards, checklists, and invite your team.', 1000)`,
-        [firstListId]
-      );
-    }
+    // Create default board labels (preset labels)
+    await tenantDb.execute(
+      `INSERT INTO labels (board_id, name, color) VALUES 
+       (?, 'Feature', '#3b82f6'),
+       (?, 'Bug', '#ef4444'),
+       (?, 'Design', '#ec4899'),
+       (?, 'Backend', '#10b981'),
+       (?, 'Frontend', '#8b5cf6'),
+       (?, 'Urgent', '#f59e0b')`,
+      [boardId, boardId, boardId, boardId, boardId, boardId]
+    );
+
+    // No cards created: clean initial board with 0 cards as required
 
     // 7. Add to global tenant_user_directory
     await masterDb.execute(

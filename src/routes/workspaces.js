@@ -119,42 +119,6 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
     }
 
-    // Check if current user is a Company Owner or Company Admin
-    const companyAdminRows = await req.db.query(
-      `SELECT r.name as role_name, r.id as role_id, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
-       FROM workspace_members wm
-       JOIN roles r ON wm.role_id = r.id
-       WHERE wm.user_id = ? AND r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0)
-       ORDER BY (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100) DESC
-       LIMIT 1`,
-      [req.user.id]
-    );
-
-    if (companyAdminRows.length > 0) {
-      const adminRoleName = (companyAdminRows[0].rank >= 100 || companyAdminRows[0].is_editable === 0) ? 'Owner' : 'Admin';
-      const roleRow = await req.db.query(
-        'SELECT id FROM roles WHERE is_system = 1 AND name = ? AND workspace_id IS NULL LIMIT 1',
-        [adminRoleName]
-      );
-      const adminRoleId = roleRow[0]?.id;
-
-      // Auto-ensure Company Owner / Admin is a member of all unarchived workspaces in this company
-      const unassignedWorkspaces = await req.db.query(
-        `SELECT w.id FROM workspaces w
-         LEFT JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
-         WHERE w.is_archived = 0 AND wm.user_id IS NULL`,
-        [req.user.id]
-      );
-
-      for (const uWs of unassignedWorkspaces) {
-        await req.db.execute(
-          `INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id)
-           VALUES (?, ?, ?, ?)`,
-          [uWs.id, req.user.id, adminRoleName, adminRoleId]
-        );
-      }
-    }
-
     const wsRes = await req.db.query(
       `SELECT w.id, w.name, w.description, w.settings, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
@@ -245,66 +209,17 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
     const adminRoleId = roleIdMap['Admin'];
     const pmRoleId = roleIdMap['Project Manager'];
 
-    // Discover all existing Company Owners and Company Admins in this tenant
-    const companyAdmins = await req.db.query(
-      `SELECT DISTINCT wm.user_id, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
-       FROM workspace_members wm
-       JOIN roles r ON wm.role_id = r.id
-       WHERE r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0)`
+    // Automatically enrol the creator as Owner in the new workspace
+    await req.db.execute(
+      'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+      [workspaceId, req.user.id, 'Owner', ownerRoleId]
     );
 
-    const adminUserRoles = new Map(); // userId -> 'Owner' or 'Admin'
-    for (const row of companyAdmins) {
-      if (row.is_editable === 0 || row.rank >= 100) {
-        adminUserRoles.set(row.user_id, 'Owner');
-      } else if (!adminUserRoles.has(row.user_id) && row.rank >= 80) {
-        adminUserRoles.set(row.user_id, 'Admin');
-      }
-    }
-
-    // Automatically enrol Company Owners as Owner and Company Admins as Admin in the new workspace
-    for (const [adminUserId, rName] of adminUserRoles.entries()) {
-      const rId = rName === 'Owner' ? ownerRoleId : adminRoleId;
-      await req.db.execute(
-        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
-        [workspaceId, adminUserId, rName, rId]
-      );
-    }
-
-    // Determine the creator's role in the new workspace
-    let creatorRoleName = adminUserRoles.get(req.user.id);
-    let creatorRoleId = creatorRoleName === 'Owner' ? ownerRoleId : adminRoleId;
-
-    if (!creatorRoleName) {
-      if (adminUserRoles.size === 0) {
-        // Initial first workspace for brand new tenant
-        creatorRoleName = 'Owner';
-        creatorRoleId = ownerRoleId;
-      } else {
-        // Creator is a Project Manager / team member with workspace.create permission
-        const userCurrentRoleRes = await req.db.query(
-          `SELECT r.name, r.id FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.user_id = ? ORDER BY r.id ASC LIMIT 1`,
-          [req.user.id]
-        );
-        creatorRoleName = userCurrentRoleRes[0]?.name || 'Project Manager';
-        creatorRoleId = roleIdMap[creatorRoleName] || pmRoleId;
-      }
-
-      await req.db.execute(
-        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
-        [workspaceId, req.user.id, creatorRoleName, creatorRoleId]
-      );
-    }
-
-    // Real-time notification to all Company Owners and Admins
-    for (const [adminUserId] of adminUserRoles.entries()) {
-      sendUserEvent(adminUserId, 'workspace:created', { workspace: { ...workspace, role: adminUserRoles.get(adminUserId) } }, req.tenant?.id);
-      sendUserEvent(adminUserId, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
-    }
-    if (!adminUserRoles.has(req.user.id)) {
-      sendUserEvent(req.user.id, 'workspace:created', { workspace: { ...workspace, role: creatorRoleName } }, req.tenant?.id);
-      sendUserEvent(req.user.id, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
-    }
+    // Real-time notification to creator
+    const creatorRoleName = 'Owner';
+    const creatorRoleId = ownerRoleId;
+    sendUserEvent(req.user.id, 'workspace:created', { workspace: { ...workspace, role: creatorRoleName } }, req.tenant?.id);
+    sendUserEvent(req.user.id, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
 
     await logAuthEvent(req.db, {
       userId: req.user.id,
@@ -391,6 +306,16 @@ router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, r
       require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
     };
     broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
+
+    await logActivity({
+      workspaceId,
+      userId: req.user.id,
+      actionType: isArchive ? (is_archived ? 'workspace_archived' : 'workspace_restored') : 'workspace_updated',
+      metaJson: { workspace_name: updatedWs.name, updates: req.body },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
     return res.json({ workspace: wsPayload });
   } catch (err) {
     next(err);
@@ -491,7 +416,7 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
        FROM roles r
        LEFT JOIN workspace_members wm ON r.id = wm.role_id AND wm.workspace_id = ?
        LEFT JOIN role_permissions rp ON r.id = rp.role_id
-       LEFT JOIN permissions p ON rp.permission_id = p.id
+       LEFT JOIN permissions p ON rp.permission_id = p.id AND p.planned = 0
        WHERE r.workspace_id IS NULL OR r.workspace_id = ?
        GROUP BY r.id, r.name, r.is_system, r.is_editable, r.workspace_id, r.created_at
        ORDER BY r.is_system DESC,
@@ -674,7 +599,7 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
     const workspaceName = wsRes[0]?.name || 'Workspace';
 
     const membersRes = await req.db.query(
-      `SELECT u.id, u.name, u.email, r.id as role_id, r.name as role_name, r.is_system, r.is_editable
+      `SELECT u.id, u.name, u.email, u.avatar_url, r.id as role_id, r.name as role_name, r.is_system, r.is_editable
        FROM workspace_members wm
        JOIN users u ON wm.user_id = u.id
        JOIN roles r ON wm.role_id = r.id
@@ -1510,12 +1435,17 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
   const search = req.query.search ? String(req.query.search).trim() : null;
 
   try {
-    const whereConditions = ['b.workspace_id = ?'];
-    const queryParams = [workspaceId];
+    const whereConditions = ['(a.workspace_id = ? OR b.workspace_id = ?)'];
+    const queryParams = [workspaceId, workspaceId];
 
     if (boardId) {
       whereConditions.push('a.board_id = ?');
       queryParams.push(boardId);
+    }
+
+    if (req.query.user_id) {
+      whereConditions.push('a.user_id = ?');
+      queryParams.push(Number(req.query.user_id));
     }
 
     if (actionType && actionType !== 'all') {
@@ -1523,12 +1453,29 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
       queryParams.push(actionType);
     }
 
+    const category = (req.query.category || '').trim().toLowerCase();
+    if (category && category !== 'all') {
+      if (category === 'auth') {
+        whereConditions.push("(a.action_type LIKE '%login%' OR a.action_type LIKE '%logout%' OR a.action_type LIKE '%password%' OR a.action_type LIKE '%2fa%' OR a.action_type LIKE '%session%')");
+      } else if (category === 'tasks' || category === 'cards') {
+        whereConditions.push("(a.action_type LIKE '%card%' OR a.action_type LIKE '%task%' OR a.action_type LIKE '%due_date%' OR a.action_type LIKE '%complete%' OR a.action_type LIKE '%checklist%')");
+      } else if (category === 'comments') {
+        whereConditions.push("(a.action_type LIKE '%comment%')");
+      } else if (category === 'members') {
+        whereConditions.push("(a.action_type LIKE '%member%' OR a.action_type LIKE '%assign%' OR a.action_type LIKE '%invite%')");
+      } else if (category === 'roles') {
+        whereConditions.push("(a.action_type LIKE '%role%' OR a.action_type LIKE '%permission%')");
+      } else if (category === 'boards') {
+        whereConditions.push("(a.action_type LIKE '%board%' OR a.action_type LIKE '%list%' OR a.action_type LIKE '%label%')");
+      }
+    }
+
     if (search) {
       whereConditions.push(
-        '(c.title LIKE ? OR u.name LIKE ? OR b.name LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, "$.title")) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, "$.card_title")) LIKE ?)'
+        '(c.title LIKE ? OR u.name LIKE ? OR b.name LIKE ? OR a.action_type LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, "$.title")) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, "$.card_title")) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, "$.item_text")) LIKE ?)'
       );
       const searchWildcard = `%${search}%`;
-      queryParams.push(searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard);
+      queryParams.push(searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard);
     }
 
     const whereSql = whereConditions.join(' AND ');
@@ -1537,7 +1484,7 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
     const countSql = `
       SELECT COUNT(*) as total
       FROM activity_log a
-      JOIN boards b ON a.board_id = b.id
+      LEFT JOIN boards b ON a.board_id = b.id
       LEFT JOIN users u ON a.user_id = u.id
       LEFT JOIN cards c ON a.card_id = c.id
       WHERE ${whereSql}
@@ -1553,6 +1500,7 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
         a.board_id,
         a.card_id,
         a.user_id,
+        a.workspace_id,
         a.action_type,
         a.meta_json,
         a.created_at,
@@ -1564,7 +1512,7 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
         c.title as card_title,
         c.list_id as card_list_id
       FROM activity_log a
-      JOIN boards b ON a.board_id = b.id
+      LEFT JOIN boards b ON a.board_id = b.id
       LEFT JOIN users u ON a.user_id = u.id
       LEFT JOIN cards c ON a.card_id = c.id
       WHERE ${whereSql}
@@ -2932,7 +2880,7 @@ router.get('/:id/issues', requireAuth, async (req, res, next) => {
     );
 
     const members = await req.db.query(
-      `SELECT DISTINCT u.id, u.name, u.email
+      `SELECT DISTINCT u.id, u.name, u.email, u.avatar_url
        FROM users u
        JOIN workspace_members wm ON u.id = wm.user_id
        WHERE wm.workspace_id = ?

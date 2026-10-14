@@ -16,7 +16,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Initial default permission granted",
-      "timestamp": "2026-10-09T09:43:49.014Z"
+      "timestamp": "2026-10-13T19:50:56.494Z"
     },
     {
       "id": 2,
@@ -27,8 +27,8 @@
       "expected": 200,
       "actual": 200,
       "passed": true,
-      "notes": "Updated system role permission keys",
-      "timestamp": "2026-10-09T09:43:49.232Z"
+      "notes": "{\"role\":{\"id\":2,\"name\":\"Project Manager\",\"is_system\":true,\"is_editable\":true,\"workspace_id\":null,\"permission_keys_str\":\"activity.view,archive.permanent_delete,archive.restore,archive.view,attachment.delete_any,attachment.delete_own,attachment.upload,attachment.view,checklist.create,checklist.delete,checklist.edit,comment.create,comment.delete_any,comment.delete_own,comment.edit_own,comment.view,file.delete,file.view,label.create,label.delete,label.edit,label.view,list.create,list.delete,list.edit,list.reorder,member.assign_role,member.invite,member.remove,member.reset_2fa,member.reset_password,member.view,notification.manage_own,notification.view_own,project.archive,project.create,project.delete,project.edit_settings,project.manage_members,project.view,search.use,session.revoke_others,session.revoke_own,session.view_own,task.archive,task.assign,task.create,task.duplicate,task.edit,task.move,task.restore,task.view,workspace.edit,workspace.view\",\"permission_keys\":[\"activity.view\",\"archive.permanent_delete\",\"archive.restore\",\"archive.view\",\"attachment.delete_any\",\"attachment.delete_own\",\"attachment.upload\",\"attachment.view\",\"checklist.create\",\"checklist.delete\",\"checklist.edit\",\"comment.create\",\"comment.delete_any\",\"comment.delete_own\",\"comment.edit_own\",\"comment.view\",\"file.delete\",\"file.view\",\"label.create\",\"label.delete\",\"label.edit\",\"label.view\",\"list.create\",\"list.delete\",\"list.edit\",\"list.reorder\",\"member.assign_role\",\"member.invite\",\"member.remove\",\"member.reset_2fa\",\"member.reset_password\",\"member.view\",\"notification.manage_own\",\"notification.view_own\",\"project.archive\",\"project.create\",\"project.delete\",\"project.edit_settings\",\"project.manage_members\",\"project.view\",\"search.use\",\"session.revoke_others\",\"session.revoke_own\",\"session.view_own\",\"task.archive\",\"task.assign\",\"task.create\",\"task.duplicate\",\"task.edit\",\"task.move\",\"task.restore\",\"task.view\",\"workspace.edit\",\"workspace.view\"]}}",
+      "timestamp": "2026-10-13T19:50:56.719Z"
     },
     {
       "id": 3,
@@ -40,7 +40,7 @@
       "actual": 403,
       "passed": true,
       "notes": "You do not have permission to do that",
-      "timestamp": "2026-10-09T09:43:49.266Z"
+      "timestamp": "2026-10-13T19:50:56.801Z"
     },
     {
       "id": 4,
@@ -52,7 +52,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Restored permission key",
-      "timestamp": "2026-10-09T09:43:49.366Z"
+      "timestamp": "2026-10-13T19:50:56.911Z"
     },
     {
       "id": 5,
@@ -64,7 +64,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Permission reinstated successfully",
-      "timestamp": "2026-10-09T09:43:49.383Z"
+      "timestamp": "2026-10-13T19:50:56.956Z"
     },
     {
       "id": 6,
@@ -76,7 +76,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned role Guest",
-      "timestamp": "2026-10-09T09:43:49.397Z"
+      "timestamp": "2026-10-13T19:50:56.992Z"
     },
     {
       "id": 7,
@@ -88,7 +88,7 @@
       "actual": "Guest",
       "passed": true,
       "notes": "Returned role: Guest",
-      "timestamp": "2026-10-09T09:43:49.402Z"
+      "timestamp": "2026-10-13T19:50:57.002Z"
     },
     {
       "id": 8,
@@ -100,7 +100,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.431Z"
+      "timestamp": "2026-10-13T19:50:57.062Z"
     },
     {
       "id": 9,
@@ -112,7 +112,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.435Z"
+      "timestamp": "2026-10-13T19:50:57.074Z"
     },
     {
       "id": 10,
@@ -124,7 +124,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.440Z"
+      "timestamp": "2026-10-13T19:50:57.085Z"
     },
     {
       "id": 11,
@@ -136,7 +136,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned role Viewer",
-      "timestamp": "2026-10-09T09:43:49.473Z"
+      "timestamp": "2026-10-13T19:50:57.157Z"
     },
     {
       "id": 12,
@@ -148,7 +148,7 @@
       "actual": "Viewer",
       "passed": true,
       "notes": "Returned role: Viewer",
-      "timestamp": "2026-10-09T09:43:49.476Z"
+      "timestamp": "2026-10-13T19:50:57.165Z"
     },
     {
       "id": 13,
@@ -160,7 +160,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.502Z"
+      "timestamp": "2026-10-13T19:50:57.223Z"
     },
     {
       "id": 14,
@@ -172,7 +172,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.506Z"
+      "timestamp": "2026-10-13T19:50:57.234Z"
     },
     {
       "id": 15,
@@ -184,7 +184,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.509Z"
+      "timestamp": "2026-10-13T19:50:57.245Z"
     },
     {
       "id": 16,
@@ -196,7 +196,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned role Team Member",
-      "timestamp": "2026-10-09T09:43:49.537Z"
+      "timestamp": "2026-10-13T19:50:57.307Z"
     },
     {
       "id": 17,
@@ -208,7 +208,7 @@
       "actual": "Team Member",
       "passed": true,
       "notes": "Returned role: Team Member",
-      "timestamp": "2026-10-09T09:43:49.540Z"
+      "timestamp": "2026-10-13T19:50:57.317Z"
     },
     {
       "id": 18,
@@ -220,7 +220,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.564Z"
+      "timestamp": "2026-10-13T19:50:57.374Z"
     },
     {
       "id": 19,
@@ -232,7 +232,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.567Z"
+      "timestamp": "2026-10-13T19:50:57.387Z"
     },
     {
       "id": 20,
@@ -244,7 +244,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied (403 Forbidden)",
-      "timestamp": "2026-10-09T09:43:49.571Z"
+      "timestamp": "2026-10-13T19:50:57.398Z"
     },
     {
       "id": 21,
@@ -256,7 +256,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned role Project Manager",
-      "timestamp": "2026-10-09T09:43:49.596Z"
+      "timestamp": "2026-10-13T19:50:57.467Z"
     },
     {
       "id": 22,
@@ -268,7 +268,7 @@
       "actual": "Project Manager",
       "passed": true,
       "notes": "Returned role: Project Manager",
-      "timestamp": "2026-10-09T09:43:49.600Z"
+      "timestamp": "2026-10-13T19:50:57.479Z"
     },
     {
       "id": 23,
@@ -280,7 +280,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Allowed (200 OK)",
-      "timestamp": "2026-10-09T09:43:49.632Z"
+      "timestamp": "2026-10-13T19:50:57.558Z"
     },
     {
       "id": 24,
@@ -292,7 +292,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed (201 Created)",
-      "timestamp": "2026-10-09T09:43:49.652Z"
+      "timestamp": "2026-10-13T19:50:57.614Z"
     },
     {
       "id": 25,
@@ -304,7 +304,7 @@
       "actual": 202,
       "passed": true,
       "notes": "Allowed invitation creation",
-      "timestamp": "2026-10-09T09:43:49.676Z"
+      "timestamp": "2026-10-13T19:50:57.670Z"
     },
     {
       "id": 26,
@@ -316,7 +316,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned role Admin",
-      "timestamp": "2026-10-09T09:43:49.690Z"
+      "timestamp": "2026-10-13T19:50:57.730Z"
     },
     {
       "id": 27,
@@ -328,7 +328,7 @@
       "actual": "Admin",
       "passed": true,
       "notes": "Returned role: Admin",
-      "timestamp": "2026-10-09T09:43:49.693Z"
+      "timestamp": "2026-10-13T19:50:57.742Z"
     },
     {
       "id": 28,
@@ -340,7 +340,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Allowed (200 OK)",
-      "timestamp": "2026-10-09T09:43:49.725Z"
+      "timestamp": "2026-10-13T19:50:57.834Z"
     },
     {
       "id": 29,
@@ -352,7 +352,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed (201 Created)",
-      "timestamp": "2026-10-09T09:43:49.747Z"
+      "timestamp": "2026-10-13T19:50:57.876Z"
     },
     {
       "id": 30,
@@ -364,7 +364,7 @@
       "actual": 202,
       "passed": true,
       "notes": "Allowed invitation creation",
-      "timestamp": "2026-10-09T09:43:49.768Z"
+      "timestamp": "2026-10-13T19:50:57.919Z"
     },
     {
       "id": 31,
@@ -376,7 +376,7 @@
       "actual": "Owner",
       "passed": true,
       "notes": "Returned Owner",
-      "timestamp": "2026-10-09T09:43:49.773Z"
+      "timestamp": "2026-10-13T19:50:57.929Z"
     },
     {
       "id": 32,
@@ -388,7 +388,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Allowed (200 OK)",
-      "timestamp": "2026-10-09T09:43:49.826Z"
+      "timestamp": "2026-10-13T19:50:58.007Z"
     },
     {
       "id": 33,
@@ -400,7 +400,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.060Z"
+      "timestamp": "2026-10-13T19:50:58.567Z"
     },
     {
       "id": 34,
@@ -412,7 +412,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Allowed as expected (200)",
-      "timestamp": "2026-10-09T09:43:50.111Z"
+      "timestamp": "2026-10-13T19:50:58.686Z"
     },
     {
       "id": 35,
@@ -424,7 +424,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.126Z"
+      "timestamp": "2026-10-13T19:50:58.729Z"
     },
     {
       "id": 36,
@@ -436,7 +436,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.163Z"
+      "timestamp": "2026-10-13T19:50:58.831Z"
     },
     {
       "id": 37,
@@ -448,7 +448,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.202Z"
+      "timestamp": "2026-10-13T19:50:58.921Z"
     },
     {
       "id": 38,
@@ -460,7 +460,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Allowed as expected (200)",
-      "timestamp": "2026-10-09T09:43:50.308Z"
+      "timestamp": "2026-10-13T19:50:59.067Z"
     },
     {
       "id": 39,
@@ -472,7 +472,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.350Z"
+      "timestamp": "2026-10-13T19:50:59.173Z"
     },
     {
       "id": 40,
@@ -484,7 +484,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.406Z"
+      "timestamp": "2026-10-13T19:50:59.323Z"
     },
     {
       "id": 41,
@@ -496,7 +496,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.442Z"
+      "timestamp": "2026-10-13T19:50:59.420Z"
     },
     {
       "id": 42,
@@ -508,7 +508,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.493Z"
+      "timestamp": "2026-10-13T19:50:59.557Z"
     },
     {
       "id": 43,
@@ -520,7 +520,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.507Z"
+      "timestamp": "2026-10-13T19:50:59.597Z"
     },
     {
       "id": 44,
@@ -532,7 +532,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.533Z"
+      "timestamp": "2026-10-13T19:50:59.670Z"
     },
     {
       "id": 45,
@@ -544,7 +544,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.547Z"
+      "timestamp": "2026-10-13T19:50:59.706Z"
     },
     {
       "id": 46,
@@ -556,7 +556,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.574Z"
+      "timestamp": "2026-10-13T19:50:59.795Z"
     },
     {
       "id": 47,
@@ -568,7 +568,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.587Z"
+      "timestamp": "2026-10-13T19:50:59.837Z"
     },
     {
       "id": 48,
@@ -580,7 +580,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.616Z"
+      "timestamp": "2026-10-13T19:50:59.908Z"
     },
     {
       "id": 49,
@@ -592,7 +592,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.629Z"
+      "timestamp": "2026-10-13T19:50:59.938Z"
     },
     {
       "id": 50,
@@ -604,7 +604,7 @@
       "actual": 202,
       "passed": true,
       "notes": "Allowed as expected (202)",
-      "timestamp": "2026-10-09T09:43:50.645Z"
+      "timestamp": "2026-10-13T19:50:59.989Z"
     },
     {
       "id": 51,
@@ -616,7 +616,7 @@
       "actual": 403,
       "passed": true,
       "notes": "Denied as expected (403)",
-      "timestamp": "2026-10-09T09:43:50.658Z"
+      "timestamp": "2026-10-13T19:51:00.028Z"
     },
     {
       "id": 52,
@@ -628,7 +628,7 @@
       "actual": 201,
       "passed": true,
       "notes": "Allowed as expected (201)",
-      "timestamp": "2026-10-09T09:43:50.679Z"
+      "timestamp": "2026-10-13T19:51:00.082Z"
     },
     {
       "id": 53,
@@ -639,8 +639,8 @@
       "expected": 201,
       "actual": 201,
       "passed": true,
-      "notes": "Created role \"Quality Lead f875\" with 5 permissions",
-      "timestamp": "2026-10-09T09:43:50.690Z"
+      "notes": "Created role \"Quality Lead 8a8c\" with 5 permissions",
+      "timestamp": "2026-10-13T19:51:00.112Z"
     },
     {
       "id": 54,
@@ -652,31 +652,31 @@
       "actual": 200,
       "passed": true,
       "notes": "Assigned custom role to member",
-      "timestamp": "2026-10-09T09:43:50.872Z"
+      "timestamp": "2026-10-13T19:51:00.639Z"
     },
     {
       "id": 55,
       "category": "Custom Role Lifecycle",
       "testCase": "Member with custom role executes granted action (task.create)",
       "moduleName": "task",
-      "roleOrContext": "Quality Lead f875",
+      "roleOrContext": "Quality Lead 8a8c",
       "expected": 201,
       "actual": 201,
       "passed": true,
       "notes": "Granted capability executes properly",
-      "timestamp": "2026-10-09T09:43:50.898Z"
+      "timestamp": "2026-10-13T19:51:00.716Z"
     },
     {
       "id": 56,
       "category": "Custom Role Lifecycle",
       "testCase": "Member with custom role blocked on ungranted action (task.delete -> 403)",
       "moduleName": "task",
-      "roleOrContext": "Quality Lead f875",
+      "roleOrContext": "Quality Lead 8a8c",
       "expected": 403,
       "actual": 403,
       "passed": true,
       "notes": "Ungranted capability blocked properly",
-      "timestamp": "2026-10-09T09:43:50.921Z"
+      "timestamp": "2026-10-13T19:51:00.936Z"
     },
     {
       "id": 57,
@@ -687,8 +687,8 @@
       "expected": 400,
       "actual": 400,
       "passed": true,
-      "notes": "Cannot delete custom role while 1 member(s) are assigned to it. Reassign members first.",
-      "timestamp": "2026-10-09T09:43:50.925Z"
+      "notes": "Cannot delete custom role while 1 member assignment(s) exist. Reassign members first.",
+      "timestamp": "2026-10-13T19:51:00.951Z"
     },
     {
       "id": 58,
@@ -700,7 +700,7 @@
       "actual": 200,
       "passed": true,
       "notes": "Role deleted cleanly",
-      "timestamp": "2026-10-09T09:43:50.943Z"
+      "timestamp": "2026-10-13T19:51:01.000Z"
     }
   ]
 }

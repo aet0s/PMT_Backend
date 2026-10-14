@@ -19,12 +19,12 @@ function getJwtSecret() {
 }
 
 function extractToken(req) {
-  if (req.cookies && req.cookies.token) {
-    return req.cookies.token;
-  }
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return authHeader.substring(7).trim();
+  }
+  if (req.cookies && req.cookies.token) {
+    return req.cookies.token;
   }
   return null;
 }

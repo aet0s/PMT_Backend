@@ -84,6 +84,13 @@ async function safeQuery(db, sql, params = []) {
       }
     }
 
+    // Clean up role_permissions for any planned permissions
+    await db.execute(
+      `DELETE rp FROM role_permissions rp
+       JOIN permissions p ON rp.permission_id = p.id
+       WHERE p.planned = 1`
+    );
+
     // 4. Ensure all 6 system roles exist with proper ranks (deduplicated by name WHERE workspace_id IS NULL)
     const SYSTEM_ROLE_SPECS = [
       { name: 'Owner', rank: 100, is_editable: 0 },

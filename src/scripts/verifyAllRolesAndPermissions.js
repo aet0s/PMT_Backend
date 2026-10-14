@@ -37,6 +37,7 @@ function recordResult(category, testCase, moduleName, roleOrContext, expected, a
   testResults.push(item);
   const statusIcon = passed ? '✓' : '❌';
   console.log(`  ${statusIcon} [${category}] ${testCase}: ${passed ? 'PASSED' : 'FAILED'} (Got ${actual}, Expected ${expected})`);
+  if (!passed && notes) console.log(`      Details: ${notes}`);
 }
 
 function request(urlPath, options = {}) {
@@ -239,7 +240,7 @@ async function runVerification() {
     200,
     updatePmRes.status,
     updatePmRes.status === 200,
-    'Updated system role permission keys'
+    JSON.stringify(updatePmRes.data)
   );
 
   // Step 3: PM attempts to delete task -> MUST return 403 Forbidden!
@@ -813,6 +814,7 @@ async function runVerification() {
   if (failed > 0) {
     process.exit(1);
   }
+  process.exit(0);
 }
 
 runVerification().catch((err) => {

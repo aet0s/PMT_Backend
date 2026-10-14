@@ -134,8 +134,9 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
        (?, 'Bug', '#ef4444'),
        (?, 'Design', '#ec4899'),
        (?, 'Backend', '#10b981'),
+       (?, 'Frontend', '#8b5cf6'),
        (?, 'Urgent', '#f59e0b')`,
-      [board.id, board.id, board.id, board.id, board.id]
+      [board.id, board.id, board.id, board.id, board.id, board.id]
     );
 
     await notify({
@@ -147,6 +148,11 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
       actorId: req.user.id,
       data: { boardName: board.name }
     });
+
+    await logActivity(board.id, null, req.user.id, 'board_created', {
+      board_name: board.name,
+      workspace_id: board.workspace_id
+    }, req.db, req.tenant?.id);
 
     return res.status(201).json({ board });
   } catch (err) {
@@ -180,7 +186,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     // 2. Fetch Board Members
     const membersRes = await req.db.query(
-      `SELECT u.id, u.name, u.email, bm.role
+      `SELECT u.id, u.name, u.email, u.avatar_url, bm.role
        FROM board_members bm
        JOIN users u ON bm.user_id = u.id
        WHERE bm.board_id = ?
@@ -189,10 +195,28 @@ router.get('/:id', requireAuth, async (req, res, next) => {
     );
 
     // 3. Fetch Board Labels
-    const labelsRes = await req.db.query(
+    let labelsRes = await req.db.query(
       'SELECT id, name, color FROM labels WHERE board_id = ? ORDER BY id ASC',
       [boardId]
     );
+
+    // Auto-seed default preset labels if board has no labels
+    if (!labelsRes || labelsRes.length === 0) {
+      await req.db.execute(
+        `INSERT INTO labels (board_id, name, color) VALUES 
+         (?, 'Feature', '#3b82f6'),
+         (?, 'Bug', '#ef4444'),
+         (?, 'Design', '#ec4899'),
+         (?, 'Backend', '#10b981'),
+         (?, 'Frontend', '#8b5cf6'),
+         (?, 'Urgent', '#f59e0b')`,
+        [boardId, boardId, boardId, boardId, boardId, boardId]
+      );
+      labelsRes = await req.db.query(
+        'SELECT id, name, color FROM labels WHERE board_id = ? ORDER BY id ASC',
+        [boardId]
+      );
+    }
 
     // 4. Fetch Lists
     const listsRes = await req.db.query(
@@ -254,7 +278,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
         // Fetch Card Members
         const cmRes = await req.db.query(
-          `SELECT cm.card_id, u.id, u.name, u.email 
+          `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url 
            FROM card_members cm
            JOIN users u ON cm.user_id = u.id
            WHERE cm.card_id IN (?)`,
@@ -262,7 +286,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
         );
         cmRes.forEach((row) => {
           if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
-          cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+          cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
         });
 
         // Fetch Checklists & Items
@@ -481,6 +505,7 @@ router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, 
       });
     }
     if (background_color !== undefined && updatedBoard) {
+      await logActivity(boardId, null, req.user.id, 'board_background_changed', { board_name: updatedBoard.name }, req.db, req.tenant?.id);
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,
@@ -491,18 +516,21 @@ router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, 
         data: { boardName: updatedBoard.name }
       });
     }
-    if (is_archived === true && updatedBoard) {
-      await notify(
-        {
-          eventType: 'board.archived',
-          actorUserId: req.user.id,
-          boardId,
-          workspaceId: updatedBoard.workspace_id,
-          tenantId: req.tenant?.id || null,
-          meta: { boardName: updatedBoard.name }
-        },
-        req.db
-      );
+    if (is_archived !== undefined && updatedBoard) {
+      await logActivity(boardId, null, req.user.id, is_archived ? 'board_archived' : 'board_restored', { board_name: updatedBoard.name }, req.db, req.tenant?.id);
+      if (is_archived === true) {
+        await notify(
+          {
+            eventType: 'board.archived',
+            actorUserId: req.user.id,
+            boardId,
+            workspaceId: updatedBoard.workspace_id,
+            tenantId: req.tenant?.id || null,
+            meta: { boardName: updatedBoard.name }
+          },
+          req.db
+        );
+      }
     }
 
     return res.json({ board: updatedBoard });
@@ -535,6 +563,11 @@ router.delete('/:id', requireAuth, requirePermission(['project.delete', 'archive
     await req.db.query('START TRANSACTION');
 
     // Record audit event in tenant database before cascade delete
+    await logActivity(null, null, req.user.id, 'board_deleted', {
+      board_name: board.name,
+      workspace_id: board.workspace_id
+    }, req.db, req.tenant?.id);
+
     await logAuthEvent(req.db, {
       userId: req.user.id,
       email: req.user.email,
@@ -608,7 +641,7 @@ router.get('/:id/workspace-members', requireAuth, async (req, res, next) => {
     const workspaceId = boardRes[0].workspace_id;
 
     const membersRes = await req.db.query(
-      `SELECT u.id, u.name, u.email, 
+      `SELECT u.id, u.name, u.email, u.avatar_url, 
               COALESCE(r.name, wm.role, 'Team Member') as workspace_role,
               bm.role as board_role,
               (EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = wm.role_id AND p.key IN ('project.view', 'project.create')) OR bm.user_id IS NOT NULL) as has_access,
@@ -683,6 +716,12 @@ router.post('/:id/members', requireAuth, requirePermission('project.manage_membe
     broadcastBoardEvent(boardId, 'board:members_updated', { boardId, userId: targetUser.id, action: 'granted' }, req.headers['x-origin-id'] || null, req.tenant?.id);
 
     const bRes = await req.db.query('SELECT name FROM boards WHERE id = ?', [boardId]);
+    await logActivity(boardId, null, req.user.id, 'board_member_added', {
+      board_name: bRes[0]?.name || 'Board',
+      member_id: targetUser.id,
+      member_name: targetUser.name
+    }, req.db, req.tenant?.id);
+
     await notify(
       {
         eventType: 'board.member_added',
@@ -712,6 +751,11 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
     await req.db.execute('DELETE FROM board_members WHERE board_id = ? AND user_id = ?', [boardId, targetUserId]);
 
     if (boardRes[0]) {
+      await logActivity(boardId, null, req.user.id, 'board_member_removed', {
+        board_name: boardRes[0].name || 'Board',
+        member_id: targetUserId
+      }, req.db, req.tenant?.id);
+
       sendUserEvent(targetUserId, 'user:permissions_updated', {
         workspaceId: boardRes[0].workspace_id,
         boardId,
@@ -743,7 +787,20 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
 router.get('/:id/labels', requireAuth, requirePermission('label.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
-    const labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
+    let labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
+    if (!labelsRes || labelsRes.length === 0) {
+      await req.db.execute(
+        `INSERT INTO labels (board_id, name, color) VALUES 
+         (?, 'Feature', '#3b82f6'),
+         (?, 'Bug', '#ef4444'),
+         (?, 'Design', '#ec4899'),
+         (?, 'Backend', '#10b981'),
+         (?, 'Frontend', '#8b5cf6'),
+         (?, 'Urgent', '#f59e0b')`,
+        [boardId, boardId, boardId, boardId, boardId, boardId]
+      );
+      labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
+    }
     return res.json({ labels: labelsRes });
   } catch (err) {
     next(err);
@@ -768,6 +825,12 @@ router.post('/:id/labels', requireAuth, requirePermission('label.create'), async
 
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
     if (bRes) {
+      await logActivity(boardId, null, req.user.id, 'label_created', {
+        board_name: bRes.name,
+        label_name: name,
+        color
+      }, req.db, req.tenant?.id);
+
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,
@@ -817,6 +880,12 @@ router.patch('/:id/labels/:labelId', requireAuth, requirePermission('label.edit'
 
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
     if (bRes) {
+      await logActivity(boardId, null, req.user.id, 'label_updated', {
+        board_name: bRes.name,
+        label_name: updatedLabel.name,
+        color: updatedLabel.color
+      }, req.db, req.tenant?.id);
+
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,
@@ -850,6 +919,11 @@ router.delete('/:id/labels/:labelId', requireAuth, requirePermission('label.dele
 
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
     if (bRes) {
+      await logActivity(boardId, null, req.user.id, 'label_deleted', {
+        board_name: bRes.name,
+        label_name: existing.name
+      }, req.db, req.tenant?.id);
+
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,

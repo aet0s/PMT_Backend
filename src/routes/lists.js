@@ -157,6 +157,7 @@ router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, n
         });
       }
     } else if (position !== undefined && bRes) {
+      await logActivity(boardId, null, req.user.id, 'list_reordered', { list_name: updatedList.name || listCheck[0]?.name, position: updatedList.position }, req.db, req.tenant?.id);
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,
@@ -191,6 +192,7 @@ router.delete('/:id', requireAuth, requirePermission('list.delete'), async (req,
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
 
     await req.db.execute('DELETE FROM lists WHERE id = ?', [listId]);
+    await logActivity(boardId, null, req.user.id, 'list_deleted', { list_name: listRes[0]?.name }, req.db, req.tenant?.id);
     broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId, req.tenant?.id);
 
     if (bRes) {
