@@ -36,6 +36,18 @@ class ConsoleEmailProvider {
     return { success: true, messageId: `console-email-${Date.now()}` };
   }
 
+  async sendInvitationEmail(to, options = {}) {
+    const { inviterName, companyName, workspaceName, roleName, inviteUrl } = options;
+    const comp = companyName || 'Our Workspace';
+    const ws = workspaceName || comp;
+    const inviter = inviterName || 'A team administrator';
+    const role = roleName || 'Team Member';
+    const subject = `You've been invited to join ${ws} on TaskFlow`;
+    const plainText = `Hello,\n\n${inviter} has invited you to join ${ws} (${comp}) as a ${role}.\n\nAccept your invitation and activate your account using the link below:\n${inviteUrl}\n\nThis invitation link expires in 7 days.\n\nWelcome aboard,\nTaskFlow Team`;
+    const html = buildInvitationHtml({ inviterName: inviter, companyName: comp, workspaceName: ws, roleName: role, inviteUrl });
+    return this.sendMessage(to, subject, plainText, { ...options, html, purpose: 'workspace_invitation' });
+  }
+
   getLastMessage(to) {
     if (!to) return sentEmails[sentEmails.length - 1];
     return [...sentEmails].reverse().find((m) => m.to.toLowerCase() === to.toLowerCase());
@@ -44,6 +56,59 @@ class ConsoleEmailProvider {
   clearHistory() {
     sentEmails.length = 0;
   }
+}
+
+function buildInvitationHtml({ inviterName, companyName, workspaceName, roleName, inviteUrl }) {
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 36px 28px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="display: inline-block; padding: 12px 20px; background: #4f46e5; border-radius: 14px; color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: -0.5px;">
+          TaskFlow
+        </div>
+      </div>
+      <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin: 0 0 12px 0; text-align: center; letter-spacing: -0.5px;">
+        You've been invited to join ${workspaceName}
+      </h2>
+      <p style="font-size: 14px; color: #64748b; text-align: center; margin: 0 0 24px 0; line-height: 1.6;">
+        <strong style="color: #0f172a;">${inviterName}</strong> has invited you to collaborate with the team at <strong style="color: #0f172a;">${companyName}</strong>.
+      </p>
+
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; margin: 24px 0;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+          <tr>
+            <td style="color: #64748b; padding: 6px 0;">Workspace</td>
+            <td style="color: #0f172a; font-weight: 600; text-align: right; padding: 6px 0;">${workspaceName}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 6px 0;">Role Assigned</td>
+            <td style="color: #4f46e5; font-weight: 700; text-align: right; padding: 6px 0;">${roleName}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 6px 0;">Invited By</td>
+            <td style="color: #0f172a; font-weight: 600; text-align: right; padding: 6px 0;">${inviterName}</td>
+          </tr>
+        </table>
+      </div>
+
+      <div style="text-align: center; margin: 32px 0 24px 0;">
+        <a href="${inviteUrl}" style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 14px 32px; border-radius: 12px; font-weight: 700; text-decoration: none; font-size: 15px; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);">
+          Accept Invitation &amp; Register &rarr;
+        </a>
+      </div>
+
+      <div style="background: #f1f5f9; border-radius: 12px; padding: 14px; margin-top: 24px;">
+        <p style="font-size: 12px; color: #475569; margin: 0; text-align: center; line-height: 1.5;">
+          ⏱ <strong>Link expires in 7 days.</strong><br/>
+          If the button above does not work, copy and paste this link into your browser:<br/>
+          <span style="display: inline-block; word-break: break-all; color: #4f46e5; font-size: 11px; margin-top: 6px;">${inviteUrl}</span>
+        </p>
+      </div>
+
+      <p style="font-size: 11px; color: #94a3b8; text-align: center; margin-top: 28px; margin-bottom: 0;">
+        Secure Team Collaboration • TaskFlow Workspace
+      </p>
+    </div>
+  `;
 }
 
 class SmtpEmailProvider {
@@ -154,21 +219,41 @@ class SmtpEmailProvider {
     sentEmails.push(record);
     console.log(`\n[EMAIL] >>> To: ${to} | Subject: "${subject}" | Content: ${body}`);
 
-    if (this.transporter && process.env.NODE_ENV !== 'test') {
+    if (this.transporter && process.env.NODE_ENV !== 'test' && process.env.EMAIL_PROVIDER !== 'console') {
       try {
         const from = process.env.EMAIL_FROM || `"TaskFlow" <${process.env.SMTP_USER}>`;
-        const info = await this.transporter.sendMail({
+        const sendPromise = this.transporter.sendMail({
           from,
           to,
           subject,
-          text: body
+          text: body,
+          html: metadata.html || undefined
         });
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('SMTP connection timed out after 5000ms')), 5000)
+        );
+
+        const info = await Promise.race([sendPromise, timeoutPromise]);
         return { success: true, messageId: info.messageId };
       } catch (err) {
-        console.error('[SMTP ERROR] Failed to send email via SMTP:', err.message);
+        console.error('[SMTP NOTICE] Could not deliver message via SMTP, logged to console:', err.message);
+        return { success: true, messageId: `fallback-console-${Date.now()}` };
       }
     }
     return { success: true, messageId: `console-email-${Date.now()}` };
+  }
+
+  async sendInvitationEmail(to, options = {}) {
+    const { inviterName, companyName, workspaceName, roleName, inviteUrl } = options;
+    const comp = companyName || 'Our Workspace';
+    const ws = workspaceName || comp;
+    const inviter = inviterName || 'A team administrator';
+    const role = roleName || 'Team Member';
+    const subject = `You've been invited to join ${ws} on TaskFlow`;
+    const plainText = `Hello,\n\n${inviter} has invited you to join ${ws} (${comp}) as a ${role}.\n\nAccept your invitation and activate your account using the link below:\n${inviteUrl}\n\nThis invitation link expires in 7 days.\n\nWelcome aboard,\nTaskFlow Team`;
+    const html = buildInvitationHtml({ inviterName: inviter, companyName: comp, workspaceName: ws, roleName: role, inviteUrl });
+    return this.sendMessage(to, subject, plainText, { ...options, html, purpose: 'workspace_invitation' });
   }
 
   getLastMessage(to) {

@@ -10,6 +10,7 @@ const { broadcastWorkspaceEvent } = require('../socket');
 const { logActivity } = require('../utils/activity');
 
 const { isOwnerRole } = require('../utils/roleRank');
+const { EmailProvider } = require('../services/providers');
 
 const router = express.Router();
 
@@ -297,6 +298,27 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
   const inviteUrl = `${clientBase}/register?invite_token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
 
+  // Query workspace & company info for the invitation email
+  const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
+  const wsName = wsRes[0]?.name || 'Workspace';
+  const companyName = tenant?.name || wsName;
+
+  // Send invitation email to the member
+  let emailSent = false;
+  try {
+    const mailRes = await EmailProvider.sendInvitationEmail(normalizedEmail, {
+      inviterName: user.name || user.email,
+      companyName,
+      workspaceName: wsName,
+      roleName: resolvedRoleName,
+      inviteUrl,
+      expiresAt
+    });
+    emailSent = Boolean(mailRes && mailRes.success);
+  } catch (mailErr) {
+    console.error('[INVITATION_EMAIL_ERROR] Failed to send email to', normalizedEmail, mailErr.message);
+  }
+
   if (existingUserRes.length === 0) {
     broadcastWorkspaceEvent(workspaceId, 'workspace:invitation_created', {
       invitation: {
@@ -316,19 +338,22 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       workspaceId,
       userId: user.id,
       actionType: 'invitation_created',
-      metaJson: { email: normalizedEmail, role: resolvedRoleName },
+      metaJson: { email: normalizedEmail, role: resolvedRoleName, email_sent: emailSent },
       dbInstance: db,
       tenantId: tenant?.id
     });
     return {
-      status: 202,
+      status: 201,
       data: {
         requires_registration: true,
         invite_token: token,
         invite_url: inviteUrl,
         role_id: resolvedRoleId,
         role_name: resolvedRoleName,
-        message: 'Invitation link generated! Copy and share the registration link below with the user to test signup.'
+        email_sent: emailSent,
+        message: emailSent
+          ? `Invitation sent to ${normalizedEmail} by email!`
+          : `Invitation link generated! You can copy and share the link below.`
       }
     };
   }
@@ -582,11 +607,93 @@ router.post('/:id/regenerate', requireAuth, async (req, res, next) => {
       }
     }, req.headers['x-origin-id'], req.tenant?.id);
 
+    let emailSent = false;
+    try {
+      const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [invite.workspace_id]);
+      const roleRes = await req.db.query('SELECT name FROM roles WHERE id = ?', [invite.role_id]);
+      const mailRes = await EmailProvider.sendInvitationEmail(invite.email, {
+        inviterName: req.user.name || req.user.email,
+        companyName: req.tenant?.name || wsRes[0]?.name,
+        workspaceName: wsRes[0]?.name || 'Workspace',
+        roleName: roleRes[0]?.name || 'Team Member',
+        inviteUrl,
+        expiresAt: newExpiresAt
+      });
+      emailSent = Boolean(mailRes && mailRes.success);
+    } catch (e) {
+      console.error('[INVITATION_REGENERATE_EMAIL_ERROR]', e.message);
+    }
+
     return res.json({
-      message: 'Invitation link regenerated successfully',
+      message: emailSent
+        ? `New invitation link generated and emailed to ${invite.email}`
+        : 'Invitation link regenerated successfully',
       invite_token: newToken,
       invite_url: inviteUrl,
-      expires_at: newExpiresAt
+      expires_at: newExpiresAt,
+      email_sent: emailSent
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/invitations/:id/resend (Explicitly resend invitation email to member)
+router.post('/:id/resend', requireAuth, async (req, res, next) => {
+  const inviteId = Number(req.params.id);
+
+  try {
+    const inviteRes = await req.db.query(
+      `SELECT pi.*, r.name as role_name, w.name as workspace_name
+       FROM pending_invitations pi
+       LEFT JOIN roles r ON pi.role_id = r.id
+       LEFT JOIN workspaces w ON pi.workspace_id = w.id
+       WHERE pi.id = ?`,
+      [inviteId]
+    );
+
+    if (inviteRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Invitation not found', code: 'NOT_FOUND' } });
+    }
+
+    const invite = inviteRes[0];
+    const isAdmin = await requireWorkspaceAdmin(invite.workspace_id, req.user.id, req.db);
+    if (!isAdmin) {
+      return res.status(403).json({ error: { message: 'Only workspace admins can resend invitations', code: 'FORBIDDEN' } });
+    }
+
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+    const inviteUrl = `${clientBase}/register?invite_token=${invite.token}&email=${encodeURIComponent(invite.email)}`;
+    const companyName = req.tenant?.name || invite.workspace_name;
+
+    let emailSent = false;
+    try {
+      const mailRes = await EmailProvider.sendInvitationEmail(invite.email, {
+        inviterName: req.user.name || req.user.email,
+        companyName,
+        workspaceName: invite.workspace_name || 'Workspace',
+        roleName: invite.role_name || 'Team Member',
+        inviteUrl,
+        expiresAt: invite.expires_at
+      });
+      emailSent = Boolean(mailRes && mailRes.success);
+    } catch (e) {
+      console.error('[INVITATION_RESEND_EMAIL_ERROR]', e.message);
+    }
+
+    await logActivity({
+      workspaceId: invite.workspace_id,
+      userId: req.user.id,
+      actionType: 'invitation_resent',
+      metaJson: { email: invite.email, role: invite.role_name, email_sent: emailSent },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
+    return res.json({
+      message: `Invitation email sent to ${invite.email}!`,
+      invite_url: inviteUrl,
+      email_sent: emailSent
     });
   } catch (err) {
     next(err);
