@@ -119,8 +119,11 @@ CREATE TABLE IF NOT EXISTS labels (
   board_id BIGINT UNSIGNED NOT NULL,
   name VARCHAR(100) NOT NULL,
   color VARCHAR(50) NOT NULL,
+  created_by_user_id BIGINT UNSIGNED NULL,
+  is_custom TINYINT(1) NOT NULL DEFAULT 1,
   CONSTRAINT fk_labels_board FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
-  INDEX idx_labels_board_id (board_id)
+  INDEX idx_labels_board_id (board_id),
+  INDEX idx_labels_created_by (created_by_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS card_labels (

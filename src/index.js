@@ -63,10 +63,10 @@ const { getAllowedOrigins, isOriginAllowed } = require('./utils/corsOrigins');
 const { requestIdMiddleware } = require('./middleware/requestId');
 app.use(requestIdMiddleware);
 
-// Helmet Security Headers with strict same-origin default and HSTS in production
+// Helmet Security Headers with cross-origin resource policy for subdomains and HSTS in production
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
     contentSecurityPolicy: false,
     hsts: process.env.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true, preload: true } : false
   })
@@ -78,7 +78,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Origin-Agent-Cluster', '?1');
   if (req.secure || req.headers['x-forwarded-proto'] === 'https' || process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
@@ -86,7 +86,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Allow cross-origin embedding ONLY for authenticated tenant file route /api/files
+// Explicit CORS origin injector to guarantee headers on all responses (including early errors)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  next();
+});
+
+// Allow cross-origin embedding for authenticated tenant file route /api/files
 app.use('/api/files', (req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
@@ -224,6 +234,11 @@ if (process.env.NODE_ENV === 'test') {
 
 // Unknown /api route catch-all returns JSON 404
 app.use('/api', (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   res.status(404).json({
     error: {
       message: `Endpoint ${req.method} ${req.originalUrl || req.path} not found`,
@@ -235,10 +250,15 @@ app.use('/api', (req, res) => {
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   console.error(`[${req.id || 'NO_REQ_ID'}] Unhandled Server Error:`, err);
-  const status = err.status || 400;
+  const status = err.status || (err.name === 'MulterError' ? 400 : 500);
   const message = err.message || 'Internal Server Error';
-  const code = err.code || 'BAD_REQUEST';
+  const code = err.code || (err.name === 'MulterError' ? 'UPLOAD_ERROR' : 'INTERNAL_ERROR');
 
   res.status(status).json({
     error: { message, code, requestId: req.id }

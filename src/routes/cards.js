@@ -16,11 +16,19 @@ const { logActivity } = require('../utils/activity');
 
 const router = express.Router();
 
+function formatSqlDateTime(dateVal) {
+  if (dateVal === null || dateVal === undefined || dateVal === '') return null;
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 const createCardSchema = z.object({
   list_id: z.number(),
   title: z.string().min(1, 'Card title is required').transform((v) => sanitizePlain(v)),
   description: z.string().optional(),
   position: z.number().optional(),
+  start_date: z.string().nullable().optional(),
   due_date: z.string().nullable().optional()
 });
 
@@ -180,9 +188,12 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
 
     const cleanDescription = sanitizeDescription(description);
 
+    const formattedDueDate = formatSqlDateTime(due_date);
+    const formattedStartDate = formatSqlDateTime(req.body.start_date);
+
     const cardExec = await req.db.execute(
-      'INSERT INTO cards (list_id, title, description, position, due_date) VALUES (?, ?, ?, ?, ?)',
-      [list_id, title, cleanDescription, position, due_date]
+      'INSERT INTO cards (list_id, title, description, position, start_date, due_date) VALUES (?, ?, ?, ?, ?, ?)',
+      [list_id, title, cleanDescription, position, formattedStartDate, formattedDueDate]
     );
     const cardId = cardExec.insertId;
 
@@ -296,12 +307,14 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       values.push(position);
     }
     if (start_date !== undefined) {
+      const formattedStart = formatSqlDateTime(start_date);
       updates.push('start_date = ?');
-      values.push(start_date);
+      values.push(formattedStart);
     }
     if (due_date !== undefined) {
+      const formattedDue = formatSqlDateTime(due_date);
       updates.push('due_date = ?');
-      values.push(due_date);
+      values.push(formattedDue);
     }
     if (is_complete !== undefined) {
       updates.push('is_complete = ?');
@@ -385,15 +398,19 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
         );
       }
 
-      if (due_date !== undefined && due_date !== oldCard.due_date) {
+      const oldDueIso = oldCard.due_date ? new Date(oldCard.due_date).toISOString() : null;
+      const formattedDue = formatSqlDateTime(due_date);
+      const newDueIso = due_date ? (formattedDue ? new Date(due_date).toISOString() : null) : null;
+
+      if (due_date !== undefined && oldDueIso !== newDueIso) {
         await logActivity(oldCard.board_id, cardId, req.user.id, 'due_date_changed', {
           title: updatedCard.title,
-          due_date: due_date
-        }, tx);
+          due_date: formattedDue
+        }, tx, req.tenant?.id || req.db?.tenantId);
 
         let dueEventType = 'card.due_date_changed';
-        if (!oldCard.due_date && due_date) dueEventType = 'card.due_date_set';
-        else if (oldCard.due_date && !due_date) dueEventType = 'card.due_date_removed';
+        if (!oldDueIso && newDueIso) dueEventType = 'card.due_date_set';
+        else if (oldDueIso && !newDueIso) dueEventType = 'card.due_date_removed';
 
         await notify(
           {
@@ -401,11 +418,22 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
             actorUserId: req.user.id,
             boardId: oldCard.board_id,
             cardId,
-            tenantId: req.tenant?.id || null,
-            meta: { cardTitle: updatedCard.title, dueDate: due_date }
+            tenantId: req.tenant?.id || req.db?.tenantId || tx?.tenantId || 1,
+            meta: { cardTitle: updatedCard.title, dueDate: formattedDue }
           },
           tx
         );
+      }
+
+      const oldStartIso = oldCard.start_date ? new Date(oldCard.start_date).toISOString() : null;
+      const formattedStart = formatSqlDateTime(start_date);
+      const newStartIso = start_date ? (formattedStart ? new Date(start_date).toISOString() : null) : null;
+
+      if (start_date !== undefined && oldStartIso !== newStartIso) {
+        await logActivity(oldCard.board_id, cardId, req.user.id, 'start_date_changed', {
+          title: updatedCard.title,
+          start_date: formattedStart
+        }, tx, req.tenant?.id || req.db?.tenantId);
       }
 
       if (is_complete !== undefined && Boolean(is_complete) !== Boolean(oldCard.is_complete)) {
@@ -877,9 +905,11 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
         if (existingLabelRes.length > 0) {
           targetLabelId = existingLabelRes[0].id;
         } else {
+          const isCustom = srcLabel.is_custom !== undefined ? (srcLabel.is_custom ? 1 : 0) : 1;
+          const createdBy = srcLabel.created_by_user_id || req.user.id;
           const newLabelExec = await req.db.execute(
-            'INSERT INTO labels (board_id, name, color) VALUES (?, ?, ?)',
-            [targetBoardId, srcLabel.name, srcLabel.color || '#3b82f6']
+            'INSERT INTO labels (board_id, name, color, created_by_user_id, is_custom) VALUES (?, ?, ?, ?, ?)',
+            [targetBoardId, srcLabel.name, srcLabel.color || '#3b82f6', createdBy, isCustom]
           );
           targetLabelId = newLabelExec.insertId;
         }
@@ -951,7 +981,18 @@ router.get('/:id/attachments', requireAuth, requirePermission('attachment.view')
 });
 
 // POST /api/cards/:id/attachments (Handles BOTH file upload & link attachment)
-router.post('/:id/attachments', requireAuth, requirePermission('attachment.upload'), upload.single('file'), async (req, res, next) => {
+router.post('/:id/attachments', requireAuth, requirePermission('attachment.upload'), (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.name === 'MulterError') {
+        const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (maximum size is 20MB)' : `Upload error: ${err.message}`;
+        return res.status(400).json({ error: { message: msg, code: err.code || 'BAD_REQUEST' } });
+      }
+      return next(err);
+    }
+    next();
+  });
+}, async (req, res, next) => {
   const cardId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -1016,7 +1057,18 @@ router.post('/:id/attachments', requireAuth, requirePermission('attachment.uploa
 });
 
 // POST /api/cards/:id/attachments/file (Multipart file upload alias)
-router.post('/:id/attachments/file', requireAuth, requirePermission('attachment.upload'), upload.single('file'), async (req, res, next) => {
+router.post('/:id/attachments/file', requireAuth, requirePermission('attachment.upload'), (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.name === 'MulterError') {
+        const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (maximum size is 20MB)' : `Upload error: ${err.message}`;
+        return res.status(400).json({ error: { message: msg, code: err.code || 'BAD_REQUEST' } });
+      }
+      return next(err);
+    }
+    next();
+  });
+}, async (req, res, next) => {
   const cardId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 

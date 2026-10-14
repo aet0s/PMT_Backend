@@ -85,6 +85,7 @@ function createPoolWrapper(pool) {
         await conn.beginTransaction();
         const tx = {
           conn,
+          tenantId: this.tenantId || pool.tenantId || null,
           async query(sql, params = []) {
             const [rawRows] = await conn.query(sql, params);
             const rows = mapBooleans(rawRows);

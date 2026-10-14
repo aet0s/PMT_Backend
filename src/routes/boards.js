@@ -3,7 +3,8 @@ const { z } = require('zod');
 const { parseJson } = require('../db/mysql');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
-const { requirePermission, userHasPermission } = require('../middleware/permissions');
+const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
+const { getRoleRank, normalizeRoleName } = require('../utils/roleRank');
 const { broadcastBoardEvent, sendUserEvent } = require('../socket');
 const path = require('path');
 const fs = require('fs');
@@ -127,15 +128,15 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
       [board.id, board.id, board.id]
     );
 
-    // Create default board labels
+    // Create default board labels (preset labels)
     await req.db.execute(
-      `INSERT INTO labels (board_id, name, color) VALUES 
-       (?, 'Feature', '#3b82f6'),
-       (?, 'Bug', '#ef4444'),
-       (?, 'Design', '#ec4899'),
-       (?, 'Backend', '#10b981'),
-       (?, 'Frontend', '#8b5cf6'),
-       (?, 'Urgent', '#f59e0b')`,
+      `INSERT INTO labels (board_id, name, color, is_custom, created_by_user_id) VALUES 
+       (?, 'Feature', '#3b82f6', 0, NULL),
+       (?, 'Bug', '#ef4444', 0, NULL),
+       (?, 'Design', '#ec4899', 0, NULL),
+       (?, 'Backend', '#10b981', 0, NULL),
+       (?, 'Frontend', '#8b5cf6', 0, NULL),
+       (?, 'Urgent', '#f59e0b', 0, NULL)`,
       [board.id, board.id, board.id, board.id, board.id, board.id]
     );
 
@@ -196,24 +197,24 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     // 3. Fetch Board Labels
     let labelsRes = await req.db.query(
-      'SELECT id, name, color FROM labels WHERE board_id = ? ORDER BY id ASC',
+      'SELECT id, board_id, name, color, created_by_user_id, is_custom FROM labels WHERE board_id = ? ORDER BY id ASC',
       [boardId]
     );
 
     // Auto-seed default preset labels if board has no labels
     if (!labelsRes || labelsRes.length === 0) {
       await req.db.execute(
-        `INSERT INTO labels (board_id, name, color) VALUES 
-         (?, 'Feature', '#3b82f6'),
-         (?, 'Bug', '#ef4444'),
-         (?, 'Design', '#ec4899'),
-         (?, 'Backend', '#10b981'),
-         (?, 'Frontend', '#8b5cf6'),
-         (?, 'Urgent', '#f59e0b')`,
+        `INSERT INTO labels (board_id, name, color, is_custom, created_by_user_id) VALUES 
+         (?, 'Feature', '#3b82f6', 0, NULL),
+         (?, 'Bug', '#ef4444', 0, NULL),
+         (?, 'Design', '#ec4899', 0, NULL),
+         (?, 'Backend', '#10b981', 0, NULL),
+         (?, 'Frontend', '#8b5cf6', 0, NULL),
+         (?, 'Urgent', '#f59e0b', 0, NULL)`,
         [boardId, boardId, boardId, boardId, boardId, boardId]
       );
       labelsRes = await req.db.query(
-        'SELECT id, name, color FROM labels WHERE board_id = ? ORDER BY id ASC',
+        'SELECT id, board_id, name, color, created_by_user_id, is_custom FROM labels WHERE board_id = ? ORDER BY id ASC',
         [boardId]
       );
     }
@@ -787,19 +788,19 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
 router.get('/:id/labels', requireAuth, requirePermission('label.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
-    let labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
+    let labelsRes = await req.db.query('SELECT id, board_id, name, color, created_by_user_id, is_custom FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
     if (!labelsRes || labelsRes.length === 0) {
       await req.db.execute(
-        `INSERT INTO labels (board_id, name, color) VALUES 
-         (?, 'Feature', '#3b82f6'),
-         (?, 'Bug', '#ef4444'),
-         (?, 'Design', '#ec4899'),
-         (?, 'Backend', '#10b981'),
-         (?, 'Frontend', '#8b5cf6'),
-         (?, 'Urgent', '#f59e0b')`,
+        `INSERT INTO labels (board_id, name, color, is_custom, created_by_user_id) VALUES 
+         (?, 'Feature', '#3b82f6', 0, NULL),
+         (?, 'Bug', '#ef4444', 0, NULL),
+         (?, 'Design', '#ec4899', 0, NULL),
+         (?, 'Backend', '#10b981', 0, NULL),
+         (?, 'Frontend', '#8b5cf6', 0, NULL),
+         (?, 'Urgent', '#f59e0b', 0, NULL)`,
         [boardId, boardId, boardId, boardId, boardId, boardId]
       );
-      labelsRes = await req.db.query('SELECT * FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
+      labelsRes = await req.db.query('SELECT id, board_id, name, color, created_by_user_id, is_custom FROM labels WHERE board_id = ? ORDER BY id ASC', [boardId]);
     }
     return res.json({ labels: labelsRes });
   } catch (err) {
@@ -810,18 +811,22 @@ router.get('/:id/labels', requireAuth, requirePermission('label.view'), async (r
 // POST /api/boards/:id/labels
 router.post('/:id/labels', requireAuth, requirePermission('label.create'), async (req, res, next) => {
   const boardId = Number(req.params.id);
-  const { name, color } = req.body;
+  const { name, color, is_custom } = req.body;
 
   if (!name || !color) {
     return res.status(400).json({ error: { message: 'Name and color are required', code: 'BAD_REQUEST' } });
   }
 
   try {
+    const isCustomVal = is_custom !== undefined ? (is_custom ? 1 : 0) : 1;
     const labelExec = await req.db.execute(
-      'INSERT INTO labels (board_id, name, color) VALUES (?, ?, ?)',
-      [boardId, sanitizePlain(name), color]
+      'INSERT INTO labels (board_id, name, color, created_by_user_id, is_custom) VALUES (?, ?, ?, ?, ?)',
+      [boardId, sanitizePlain(name), color, req.user.id, isCustomVal]
     );
-    const [label] = await req.db.query('SELECT * FROM labels WHERE id = ?', [labelExec.insertId]);
+    const [label] = await req.db.query(
+      'SELECT id, board_id, name, color, created_by_user_id, is_custom FROM labels WHERE id = ?',
+      [labelExec.insertId]
+    );
 
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
     if (bRes) {
@@ -841,6 +846,8 @@ router.post('/:id/labels', requireAuth, requirePermission('label.create'), async
         data: { boardName: bRes.name, labelName: name }
       });
     }
+
+    broadcastBoardEvent(boardId, 'board:label_created', { boardId, label }, req.headers['x-origin-id'] || null, req.tenant?.id);
 
     return res.status(201).json({ label });
   } catch (err) {
@@ -904,7 +911,7 @@ router.patch('/:id/labels/:labelId', requireAuth, requirePermission('label.edit'
 });
 
 // DELETE /api/boards/:id/labels/:labelId - Delete board label
-router.delete('/:id/labels/:labelId', requireAuth, requirePermission('label.delete'), async (req, res, next) => {
+router.delete('/:id/labels/:labelId', requireAuth, requirePermission(['label.view', 'project.view']), async (req, res, next) => {
   const boardId = Number(req.params.id);
   const labelId = Number(req.params.labelId);
 
@@ -914,26 +921,58 @@ router.delete('/:id/labels/:labelId', requireAuth, requirePermission('label.dele
       return res.status(404).json({ error: { message: 'Label not found', code: 'NOT_FOUND' } });
     }
 
+    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
+    if (!bRes) {
+      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    }
+
+    // Role-based authority rules:
+    // 1. Owner, Project Manager, Admin can delete all custom created labels
+    // 2. Regular members can ONLY delete custom labels created by themselves
+    const { role, permissions } = await getUserPermissions(req.user.id, bRes.workspace_id, req.db, boardId);
+    const normalizedRole = normalizeRoleName(role?.name);
+    const roleRank = getRoleRank(role);
+    const isPrivileged = roleRank >= 60 || ['owner', 'super admin', 'admin', 'project manager', 'manager'].includes(normalizedRole) || permissions.includes('label.delete');
+
+    const isCustom = Boolean(existing.is_custom);
+    const isOwnerOfLabel = isCustom && existing.created_by_user_id && Number(existing.created_by_user_id) === Number(req.user.id);
+
+    if (!isPrivileged && !isOwnerOfLabel) {
+      if (!isCustom) {
+        return res.status(403).json({
+          error: {
+            message: 'You cannot delete preset labels. Only custom labels created by you can be deleted.',
+            code: 'FORBIDDEN'
+          }
+        });
+      }
+      return res.status(403).json({
+        error: {
+          message: 'You can only delete custom labels created by you.',
+          code: 'FORBIDDEN'
+        }
+      });
+    }
+
     await req.db.execute('DELETE FROM card_labels WHERE label_id = ?', [labelId]);
     await req.db.execute('DELETE FROM labels WHERE id = ?', [labelId]);
 
-    const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
-    if (bRes) {
-      await logActivity(boardId, null, req.user.id, 'label_deleted', {
-        board_name: bRes.name,
-        label_name: existing.name
-      }, req.db, req.tenant?.id);
+    await logActivity(boardId, null, req.user.id, 'label_deleted', {
+      board_name: bRes.name,
+      label_name: existing.name
+    }, req.db, req.tenant?.id);
 
-      await notify({
-        db: req.db,
-        tenantId: req.tenant?.id,
-        workspaceId: bRes.workspace_id,
-        boardId,
-        eventType: 'board.label_deleted',
-        actorId: req.user.id,
-        data: { boardName: bRes.name, labelName: existing.name }
-      });
-    }
+    await notify({
+      db: req.db,
+      tenantId: req.tenant?.id,
+      workspaceId: bRes.workspace_id,
+      boardId,
+      eventType: 'board.label_deleted',
+      actorId: req.user.id,
+      data: { boardName: bRes.name, labelName: existing.name }
+    });
+
+    broadcastBoardEvent(boardId, 'board:label_deleted', { boardId, labelId }, req.headers['x-origin-id'] || null, req.tenant?.id);
 
     return res.json({ message: 'Label deleted successfully' });
   } catch (err) {
