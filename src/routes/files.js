@@ -9,7 +9,49 @@ const { requireAuth, getJwtSecret } = require('../middleware/auth');
 const storage = require('../storage');
 
 const router = express.Router();
-const UPLOADS_DIR = path.resolve(__dirname, '../../uploads');
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, '../../uploads');
+
+/**
+ * Safely resolves an uploaded file path across known upload roots.
+ * Strictly verifies against path traversal attacks.
+ */
+function resolveUploadFilePath(tenantId, relativeSubpath) {
+  const cleanSubpath = String(relativeSubpath || '').replace(/^[/\\]+/, '');
+  const tId = String(tenantId);
+
+  const candidateBases = [];
+  if (process.env.UPLOADS_DIR) {
+    candidateBases.push(path.resolve(process.env.UPLOADS_DIR));
+  }
+  candidateBases.push(path.resolve(__dirname, '../../uploads'));
+  candidateBases.push(path.resolve(__dirname, '../../../uploads'));
+  candidateBases.push(path.resolve(process.cwd(), 'uploads'));
+  candidateBases.push(path.resolve('/var/www/pmt/uploads'));
+  candidateBases.push(path.resolve('/var/www/pmt/server/uploads'));
+
+  const uniqueBases = Array.from(new Set(candidateBases));
+
+  for (const base of uniqueBases) {
+    // 1. Candidate with tenant directory: <base>/<tenantId>/<cleanSubpath>
+    const tenantTarget = path.resolve(base, tId, cleanSubpath);
+    const tenantPrefix = path.resolve(base, tId);
+    if ((tenantTarget.startsWith(tenantPrefix + path.sep) || tenantTarget === tenantPrefix) && fs.existsSync(tenantTarget)) {
+      return tenantTarget;
+    }
+
+    // 2. Candidate directly under base: <base>/<cleanSubpath>
+    const directTarget = path.resolve(base, cleanSubpath);
+    const directPrefix = path.resolve(base);
+    if ((directTarget.startsWith(directPrefix + path.sep) || directTarget === directPrefix) && fs.existsSync(directTarget)) {
+      return directTarget;
+    }
+  }
+
+  // Fallback to default expected path
+  return path.resolve(UPLOADS_DIR, tId, cleanSubpath);
+}
 
 /**
  * Item 6: Verify magic bytes for images (JPEG, PNG, WebP, GIF)
@@ -149,15 +191,19 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       cleanPath = file_url.replace(/^\/+/, '');
     }
 
-    const [tenantIdStr, ...rest] = cleanPath.split('/');
-    const tenantId = Number(tenantIdStr);
+    let tenantId = null;
+    let subpath = cleanPath;
+    const parts = cleanPath.split('/');
+    if (/^\d+$/.test(parts[0])) {
+      tenantId = Number(parts[0]);
+      subpath = parts.slice(1).join('/');
+    }
     const userTenantId = req.tenant ? Number(req.tenant.id) : null;
     if (userTenantId && tenantId && tenantId !== userTenantId) {
       return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
     }
 
     const effectiveTenantId = tenantId || userTenantId || 1;
-    const subpath = rest.join('/');
 
     const token = jwt.sign(
       {
@@ -213,7 +259,7 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   }
 
   // Extract relative subpath after /:tenantId/
-  const relativeSubpath = req.params[0];
+  const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
   if (!relativeSubpath) {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
@@ -275,15 +321,11 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
-  // Prevent path traversal attacks
-  const resolvedPath = path.resolve(UPLOADS_DIR, String(requestedTenantId), relativeSubpath);
-  const expectedPrefix = path.resolve(UPLOADS_DIR, String(requestedTenantId));
-
-  if (!resolvedPath.startsWith(expectedPrefix)) {
-    return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
-  }
+  // Prevent path traversal attacks and resolve file path across known upload roots
+  const resolvedPath = resolveUploadFilePath(requestedTenantId, relativeSubpath);
 
   if (!fs.existsSync(resolvedPath)) {
+    console.warn(`[FILES_NOT_FOUND] Tenant ${requestedTenantId}, subpath: ${relativeSubpath}, resolved: ${resolvedPath}`);
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
