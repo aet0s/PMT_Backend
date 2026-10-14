@@ -2020,6 +2020,64 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       });
     });
 
+    // 7b. Cards Created / Reported by Members (Tracks Tester, QA, and Manager activity)
+    const createdCardsRes = await req.db.query(
+      `SELECT
+        ca.user_id,
+        c.id,
+        c.title,
+        c.due_date,
+        c.is_complete,
+        c.created_at,
+        c.list_id,
+        l.name as list_name,
+        l.position as list_position,
+        b.id as board_id,
+        b.name as board_name,
+        CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+       FROM (
+         SELECT user_id, card_id FROM card_assigners
+         UNION
+         SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
+       ) ca
+       JOIN cards c ON ca.card_id = c.id
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+       WHERE b.workspace_id = ?
+         AND c.is_archived = 0
+         ${boardClause}
+         ${timeframeClause}
+       ORDER BY c.created_at DESC`,
+      [workspaceId, ...boardParam]
+    );
+
+    const userCreatedCardsMap = {};
+    createdCardsRes.forEach((row) => {
+      if (!userCreatedCardsMap[row.user_id]) userCreatedCardsMap[row.user_id] = [];
+      const isDone = Boolean(row.is_effectively_complete);
+      const isOverdue = Boolean(row.is_overdue);
+      const isDueSoon = Boolean(row.is_due_soon);
+      const stage = classifyTaskStage(row.list_name, isDone);
+
+      userCreatedCardsMap[row.user_id].push({
+        id: row.id,
+        title: row.title,
+        due_date: row.due_date,
+        is_complete: isDone,
+        is_overdue: isOverdue,
+        is_due_soon: isDueSoon,
+        list_id: row.list_id,
+        list_name: row.list_name,
+        stage: stage,
+        board_id: row.board_id,
+        board_name: row.board_name,
+        created_at: row.created_at,
+        members: cardMembersMap[row.id] || []
+      });
+    });
+
     const membersWorkload = membersWorkloadRes.map((m) => {
       const assigned = Number(m.assigned_tasks || 0);
       const completed = Number(m.completed_tasks || 0);
@@ -2028,6 +2086,14 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       const todo = Number(m.todo_tasks || 0);
       const review = Number(m.review_tasks || 0);
       const userTasks = userTasksMap[m.id] || [];
+
+      const userCreatedCards = userCreatedCardsMap[m.id] || [];
+      const createdTasksCount = userCreatedCards.length;
+      const createdCompletedCount = userCreatedCards.filter((t) => t.is_complete).length;
+      const createdTodoCount = userCreatedCards.filter((t) => t.stage === 'todo' && !t.is_complete).length;
+      const createdInProgressCount = userCreatedCards.filter((t) => (t.stage === 'in_progress' || t.stage === 'review') && !t.is_complete).length;
+      const createdOverdueCount = userCreatedCards.filter((t) => t.is_overdue).length;
+      const createdResolutionRate = createdTasksCount > 0 ? Math.round((createdCompletedCount / createdTasksCount) * 100) : 0;
 
       // Board distribution for this user
       const userBoardsMap = {};
@@ -2054,6 +2120,13 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         overdue_tasks: overdue,
         due_soon_tasks: dueSoon,
         completion_rate: assigned > 0 ? Math.round((completed / assigned) * 100) : 0,
+        created_tasks: createdTasksCount,
+        created_completed_tasks: createdCompletedCount,
+        created_todo_tasks: createdTodoCount,
+        created_in_progress_tasks: createdInProgressCount,
+        created_overdue_tasks: createdOverdueCount,
+        created_resolution_rate: createdResolutionRate,
+        created_cards: userCreatedCards,
         boards: userBoards,
         tasks: userTasks
       };

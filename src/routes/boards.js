@@ -43,6 +43,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     let query = `
       SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.is_archived, b.created_at, w.name as workspace_name,
         (SELECT COUNT(*) FROM cards c JOIN lists l ON c.list_id = l.id WHERE l.board_id = b.id AND c.is_archived = 0) as card_count,
+        (SELECT COUNT(*) FROM cards c JOIN lists l ON c.list_id = l.id WHERE l.board_id = b.id AND c.is_archived = 0 AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved'))) as completed_card_count,
         (SELECT COUNT(*) FROM lists l WHERE l.board_id = b.id AND l.is_archived = 0) as list_count,
         (SELECT COUNT(*) FROM board_members bm2 WHERE bm2.board_id = b.id) as member_count
       FROM boards b
