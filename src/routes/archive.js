@@ -8,11 +8,12 @@ router.get('/', requireAuth, async (req, res, next) => {
   try {
     const workspaceIdFilter = req.query.workspace_id && req.query.workspace_id !== 'all' ? Number(req.query.workspace_id) : null;
     const boardIdFilter = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
-    const labelIdFilter = req.query.label_id && req.query.label_id !== 'all' ? Number(req.query.label_id) : null;
+    const rawLabel = req.query.label_id || req.query.label_name || req.query.label;
+    const labelFilter = rawLabel && rawLabel !== 'all' ? rawLabel.trim() : null;
     const assigneeIdFilter = req.query.assignee_id && req.query.assignee_id !== 'all' ? Number(req.query.assignee_id) : null;
     const assignerIdFilter = req.query.assigner_id && req.query.assigner_id !== 'all' ? Number(req.query.assigner_id) : null;
-    const dueDateFilter = req.query.due_date && req.query.due_date !== 'all' ? req.query.due_date : null;
-    const startDateFilter = req.query.start_date && req.query.start_date !== 'all' ? req.query.start_date : null;
+    const startDateFilter = req.query.start_date && req.query.start_date !== 'all' ? req.query.start_date.trim() : null;
+    const endDateFilter = req.query.end_date && req.query.end_date !== 'all' ? req.query.end_date.trim() : null;
     const searchQuery = req.query.search ? req.query.search.trim() : '';
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -74,12 +75,14 @@ router.get('/', requireAuth, async (req, res, next) => {
     }
 
     const availableLabels = await req.db.query(
-      `SELECT DISTINCT l.id, l.name, l.color, l.board_id, b.workspace_id
+      `SELECT MIN(l.id) as id, l.name, l.color
        FROM labels l
        JOIN boards b ON l.board_id = b.id
        JOIN workspaces w ON b.workspace_id = w.id
        JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
        WHERE b.is_archived = 0 AND w.is_archived = 0 ${labelScopeCondition}
+       AND l.name IS NOT NULL AND TRIM(l.name) != ''
+       GROUP BY l.name, l.color
        ORDER BY l.name ASC`,
       labelParams
     );
@@ -131,9 +134,22 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
     }
 
-    if (labelIdFilter) {
-      cardConditions.push('EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = ?)');
-      cardParams.push(labelIdFilter);
+    if (labelFilter) {
+      const isNum = !isNaN(Number(labelFilter));
+      if (isNum) {
+        cardConditions.push(`
+          EXISTS (
+            SELECT 1 FROM card_labels cl 
+            JOIN labels l2 ON cl.label_id = l2.id 
+            WHERE cl.card_id = c.id 
+            AND (cl.label_id = ? OR LOWER(l2.name) = (SELECT LOWER(name) FROM labels WHERE id = ? LIMIT 1))
+          )
+        `);
+        cardParams.push(Number(labelFilter), Number(labelFilter));
+      } else {
+        cardConditions.push('EXISTS (SELECT 1 FROM card_labels cl JOIN labels l2 ON cl.label_id = l2.id WHERE cl.card_id = c.id AND LOWER(l2.name) = LOWER(?))');
+        cardParams.push(labelFilter);
+      }
     }
 
     if (assigneeIdFilter) {
@@ -146,26 +162,17 @@ router.get('/', requireAuth, async (req, res, next) => {
       cardParams.push(assignerIdFilter);
     }
 
-    if (dueDateFilter === 'no_date') {
-      cardConditions.push('c.due_date IS NULL');
-    } else if (dueDateFilter === 'has_date') {
-      cardConditions.push('c.due_date IS NOT NULL');
-    } else if (dueDateFilter === 'overdue') {
-      cardConditions.push('c.due_date < NOW() AND c.is_complete = 0');
-    } else if (dueDateFilter === 'today') {
-      cardConditions.push('DATE(c.due_date) = CURDATE()');
-    } else if (dueDateFilter === 'this_week') {
-      cardConditions.push('c.due_date >= CURDATE() AND c.due_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)');
+    // Filter cards made/created between Start Date and End Date
+    if (startDateFilter) {
+      const sDate = startDateFilter.split('T')[0];
+      cardConditions.push('c.created_at >= ?');
+      cardParams.push(`${sDate} 00:00:00`);
     }
 
-    if (startDateFilter === 'no_date') {
-      cardConditions.push('c.start_date IS NULL');
-    } else if (startDateFilter === 'has_date') {
-      cardConditions.push('c.start_date IS NOT NULL');
-    } else if (startDateFilter === 'today') {
-      cardConditions.push('DATE(c.start_date) = CURDATE()');
-    } else if (startDateFilter === 'this_week') {
-      cardConditions.push('c.start_date >= CURDATE() AND c.start_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)');
+    if (endDateFilter) {
+      const eDate = endDateFilter.split('T')[0];
+      cardConditions.push('c.created_at <= ?');
+      cardParams.push(`${eDate} 23:59:59`);
     }
 
     const whereClause = cardConditions.join(' AND ');
