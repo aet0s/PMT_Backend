@@ -115,9 +115,10 @@ async function seed() {
     let pos = 1000.0;
     const createdLists = [];
     for (const lName of lists) {
+      const isDone = lName.toLowerCase() === 'done';
       const lRes = await db.execute(
-        'INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)',
-        [boardId, lName, pos]
+        'INSERT INTO lists (board_id, name, position, wip_limit_enabled) VALUES (?, ?, ?, ?)',
+        [boardId, lName, pos, isDone ? 0 : 1]
       );
       createdLists.push({ id: lRes.insertId, name: lName });
       pos += 1000.0;

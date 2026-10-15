@@ -338,7 +338,7 @@ router.post('/:id/auto-archive', requireAuth, async (req, res, next) => {
     let intervalClause = '';
     const params = [workspaceId];
     if (days > 0) {
-      intervalClause = 'AND c.created_at < DATE_SUB(NOW(), INTERVAL ? DAY)';
+      intervalClause = 'AND COALESCE(c.completed_at, c.created_at) < DATE_SUB(NOW(), INTERVAL ? DAY)';
       params.push(days);
     }
 
@@ -348,7 +348,7 @@ router.post('/:id/auto-archive', requireAuth, async (req, res, next) => {
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
        WHERE b.workspace_id = ?
-         AND c.is_complete = 1
+         AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'finished', 'closed', 'archive', 'archived'))
          AND c.is_archived = 0
          ${intervalClause}`,
       params
@@ -2959,6 +2959,7 @@ router.get('/:id/issues', requireAuth, async (req, res, next) => {
     const assignerId = req.query.assigner_id && req.query.assigner_id !== 'all' ? Number(req.query.assigner_id) : null;
     const dueDate = req.query.due_date && req.query.due_date !== 'all' ? String(req.query.due_date).trim().toLowerCase() : null;
     const sort = req.query.sort ? String(req.query.sort).trim().toLowerCase() : 'newest';
+    const onlyBugs = req.query.only_bugs !== 'false';
 
     // Base conditions: active cards, active lists, active boards in workspace
     const whereConditions = [
@@ -2968,6 +2969,17 @@ router.get('/:id/issues', requireAuth, async (req, res, next) => {
       'c.is_archived = 0'
     ];
     const queryParams = [workspaceId];
+
+    // Filter to only cards that have a label matching 'bug' (case-insensitive)
+    if (onlyBugs) {
+      whereConditions.push(`EXISTS (
+        SELECT 1 
+        FROM card_labels cl_bug 
+        JOIN labels lbl_bug ON cl_bug.label_id = lbl_bug.id 
+        WHERE cl_bug.card_id = c.id 
+          AND LOWER(TRIM(lbl_bug.name)) LIKE '%bug%'
+      )`);
+    }
 
     if (boardId) {
       whereConditions.push('b.id = ?');

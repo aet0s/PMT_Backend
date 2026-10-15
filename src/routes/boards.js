@@ -122,11 +122,11 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
 
     // Create default lists for the new board
     await req.db.execute(
-      `INSERT INTO lists (board_id, name, position) VALUES 
-       (?, 'To Do', 1000.0),
-       (?, 'In Progress', 2000.0),
-       (?, 'Review', 3000.0),
-       (?, 'Done', 4000.0)`,
+      `INSERT INTO lists (board_id, name, position, wip_limit_enabled) VALUES 
+       (?, 'To Do', 1000.0, 1),
+       (?, 'In Progress', 2000.0, 1),
+       (?, 'Review', 3000.0, 1),
+       (?, 'Done', 4000.0, 0)`,
       [board.id, board.id, board.id, board.id]
     );
 
@@ -223,7 +223,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
     // 4. Fetch Lists
     const listsRes = await req.db.query(
-      `SELECT id, board_id, name, position, is_archived, created_at 
+      `SELECT id, board_id, name, position, is_archived, wip_limit_enabled, wip_limit, created_at 
        FROM lists 
        WHERE board_id = ? AND is_archived = 0
        ORDER BY position ASC, id ASC`,

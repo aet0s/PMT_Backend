@@ -141,7 +141,7 @@ function createPool(config = {}) {
     waitForConnections: true,
     connectionLimit: config.connectionLimit || 10,
     queueLimit: 0,
-    timezone: '+00:00',
+    timezone: process.env.MYSQL_TIMEZONE || 'local',
     dateStrings: false,
     supportBigNumbers: true,
     bigNumberStrings: false,

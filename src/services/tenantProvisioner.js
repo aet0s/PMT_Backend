@@ -186,11 +186,16 @@ async function provisionTenant({
     );
 
     // Create default lists
-    const lists = ['To Do', 'In Progress', 'Review', 'Done'];
-    for (let i = 0; i < lists.length; i++) {
+    const defaultLists = [
+      { name: 'To Do', wipLimitEnabled: 1 },
+      { name: 'In Progress', wipLimitEnabled: 1 },
+      { name: 'Review', wipLimitEnabled: 1 },
+      { name: 'Done', wipLimitEnabled: 0 }
+    ];
+    for (let i = 0; i < defaultLists.length; i++) {
       await tenantDb.execute(
-        'INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)',
-        [boardId, lists[i], (i + 1) * 1000]
+        'INSERT INTO lists (board_id, name, position, wip_limit_enabled) VALUES (?, ?, ?, ?)',
+        [boardId, defaultLists[i].name, (i + 1) * 1000, defaultLists[i].wipLimitEnabled]
       );
     }
 

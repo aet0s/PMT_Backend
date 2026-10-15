@@ -322,6 +322,8 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
     if (is_complete !== undefined) {
       updates.push('is_complete = ?');
       values.push(is_complete ? 1 : 0);
+      updates.push('completed_at = ?');
+      values.push(is_complete ? new Date() : null);
     }
     if (is_archived !== undefined) {
       updates.push('is_archived = ?');

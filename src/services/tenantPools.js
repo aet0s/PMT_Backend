@@ -24,7 +24,7 @@ function getBaseMysqlConfig(database) {
     waitForConnections: true,
     connectionLimit: TENANT_POOL_LIMIT,
     queueLimit: 0,
-    timezone: '+00:00',
+    timezone: process.env.MYSQL_TIMEZONE || 'local',
     charset: 'utf8mb4'
   };
 }

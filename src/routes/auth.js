@@ -964,11 +964,11 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
       );
 
       await activeDb.execute(
-        `INSERT INTO lists (board_id, name, position) VALUES 
-         (?, 'To Do', 1000.0),
-         (?, 'In Progress', 2000.0),
-         (?, 'Review', 3000.0),
-         (?, 'Done', 4000.0)`,
+        `INSERT INTO lists (board_id, name, position, wip_limit_enabled) VALUES 
+         (?, 'To Do', 1000.0, 1),
+         (?, 'In Progress', 2000.0, 1),
+         (?, 'Review', 3000.0, 1),
+         (?, 'Done', 4000.0, 0)`,
         [createdBoardId, createdBoardId, createdBoardId, createdBoardId]
       );
 

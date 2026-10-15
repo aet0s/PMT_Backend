@@ -13,18 +13,22 @@ const router = express.Router();
 const createListSchema = z.object({
   board_id: z.number(),
   name: z.string().min(1, 'List name is required').transform((v) => sanitizePlain(v)),
-  position: z.number().optional()
+  position: z.number().optional(),
+  wip_limit_enabled: z.boolean().optional(),
+  wip_limit: z.number().nullable().optional()
 });
 
 const updateListSchema = z.object({
   name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   position: z.number().optional(),
-  is_archived: z.boolean().optional()
+  is_archived: z.boolean().optional(),
+  wip_limit_enabled: z.boolean().optional(),
+  wip_limit: z.number().nullable().optional()
 });
 
 // POST /api/lists
 router.post('/', requireAuth, requirePermission('list.create'), validate(createListSchema), async (req, res, next) => {
-  let { board_id, name, position } = req.body;
+  let { board_id, name, position, wip_limit_enabled, wip_limit } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -37,9 +41,13 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
       position = maxPos ? Number(maxPos) + 1000.0 : 1000.0;
     }
 
+    const isDone = /^(done|completed|finished|closed|released|shipped|archive)/i.test(name.trim());
+    const finalWipEnabled = wip_limit_enabled !== undefined ? (wip_limit_enabled ? 1 : 0) : (isDone ? 0 : 1);
+    const finalWipLimit = wip_limit !== undefined ? (wip_limit === null ? null : Number(wip_limit)) : null;
+
     const listExec = await req.db.execute(
-      'INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)',
-      [board_id, name, position]
+      'INSERT INTO lists (board_id, name, position, wip_limit_enabled, wip_limit) VALUES (?, ?, ?, ?, ?)',
+      [board_id, name, position, finalWipEnabled, finalWipLimit]
     );
 
     const [createdList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listExec.insertId]);
@@ -69,7 +77,7 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 // PATCH /api/lists/:id
 router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, next) => {
   const listId = Number(req.params.id);
-  const { name, position, is_archived } = req.body;
+  const { name, position, is_archived, wip_limit_enabled, wip_limit } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -86,7 +94,7 @@ router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, n
     const { board_id: boardId, workspace_id: workspaceId } = listCheck[0];
 
     const isReorder = position !== undefined;
-    const isEdit = name !== undefined || is_archived !== undefined;
+    const isEdit = name !== undefined || is_archived !== undefined || wip_limit_enabled !== undefined || wip_limit !== undefined;
 
     if (isReorder) {
       const canReorder = await userHasPermission(req.user.id, workspaceId, 'list.reorder', req.db, boardId);
@@ -115,6 +123,14 @@ router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, n
     if (is_archived !== undefined) {
       updates.push('is_archived = ?');
       values.push(is_archived ? 1 : 0);
+    }
+    if (wip_limit_enabled !== undefined) {
+      updates.push('wip_limit_enabled = ?');
+      values.push(wip_limit_enabled ? 1 : 0);
+    }
+    if (wip_limit !== undefined) {
+      updates.push('wip_limit = ?');
+      values.push(wip_limit === null ? null : Number(wip_limit));
     }
 
     if (updates.length === 0) {
