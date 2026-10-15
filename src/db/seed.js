@@ -111,7 +111,7 @@ async function seed() {
     }
 
     // Create default lists
-    const lists = ['To Do', 'In Progress', 'Code Review', 'Done'];
+    const lists = ['To Do', 'In Progress', 'Review', 'Done'];
     let pos = 1000.0;
     const createdLists = [];
     for (const lName of lists) {

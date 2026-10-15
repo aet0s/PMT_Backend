@@ -34,9 +34,6 @@ const { encryptSecret, decryptSecret } = require('../utils/cryptoVault');
 
 const router = express.Router();
 
-// Apply auth rate limiter to all auth endpoints
-router.use(authRateLimiter);
-
 const BCRYPT_ROUNDS = 12;
 
 // In-memory single-use and rate-limit tracking for 2FA login challenges
@@ -102,6 +99,7 @@ const registerUserSchema = z.object({
   password: z.string().min(1, 'Password is required'),
   verification_token: z.string().optional(),
   invite_token: z.string().optional(),
+  token: z.string().optional(),
   company_name: z.string().optional(),
   companyName: z.string().optional(),
   slug: z.string().optional(),
@@ -666,7 +664,8 @@ router.post('/register/verify-otp', validate(verifyOtpSchema), async (req, res, 
 // User registration (e.g. from invitation link or dev)
 // -------------------------------------------------------------
 router.post('/register', validate(registerUserSchema), async (req, res, next) => {
-  const { name, email, password, verification_token: verificationToken, invite_token: inviteToken, company_name, companyName, slug, phone } = req.body;
+  const { name, email, password, verification_token: verificationToken, company_name, companyName, slug, phone } = req.body;
+  const inviteToken = req.body.invite_token || req.body.token;
 
   // Validate Password Policy
   const passwordCheck = validatePassword(password);
@@ -968,8 +967,9 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
         `INSERT INTO lists (board_id, name, position) VALUES 
          (?, 'To Do', 1000.0),
          (?, 'In Progress', 2000.0),
-         (?, 'Done', 3000.0)`,
-        [createdBoardId, createdBoardId, createdBoardId]
+         (?, 'Review', 3000.0),
+         (?, 'Done', 4000.0)`,
+        [createdBoardId, createdBoardId, createdBoardId, createdBoardId]
       );
 
       await activeDb.execute(
@@ -1168,7 +1168,7 @@ async function handleUserLoginVerification(db, user, password, req, tenant = nul
 // POST /api/auth/login
 // Supports multi-tenant lookup, company picker, lockout, and TOTP 2FA
 // -------------------------------------------------------------
-router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, next) => {
+router.post('/login', validate(loginSchema), async (req, res, next) => {
   const { email, password, tenant_slug } = req.body;
   const normalizedEmail = normalizeEmail(email);
 

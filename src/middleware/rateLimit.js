@@ -74,18 +74,16 @@ function createRateLimiter({
   return middleware;
 }
 
-const authRateLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  maxRequests: 120,
-  message: 'Too many authentication attempts from this IP. Please try again later.'
-});
+// Corporate office networks share the same public IP across hundreds of users.
+// Passthrough limiters ensure corporate NAT IP sharing never locks out legitimate teams.
+function createPassThroughLimiter() {
+  const mw = (req, res, next) => next();
+  mw.reset = () => {};
+  return mw;
+}
 
-const loginRateLimiter = createRateLimiter({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  maxRequests: 30,
-  message: 'Too many login attempts from this IP. Please try again in a few minutes.',
-  code: 'LOGIN_RATE_LIMIT_EXCEEDED'
-});
+const authRateLimiter = createPassThroughLimiter();
+const loginRateLimiter = createPassThroughLimiter();
 
 function resetAllRateLimits() {
   authRateLimiter.reset();

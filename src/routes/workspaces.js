@@ -2427,7 +2427,7 @@ router.get('/:id/company-members', requireAuth, requirePermission('member.view')
         role_name: inv.role_name || 'Team Member',
         board_ids: bIds,
         board_names: bIds.map((id) => boardMap[id]).filter(Boolean),
-        invite_url: `${clientBase}/register?invite_token=${inv.token}&email=${encodeURIComponent(inv.email)}`
+        invite_url: `${clientBase}/invite?token=${inv.token}&email=${encodeURIComponent(inv.email)}`
       };
     });
 
@@ -2996,8 +2996,10 @@ router.get('/:id/issues', requireAuth, async (req, res, next) => {
     if (stage) {
       if (stage === 'done') {
         whereConditions.push('(c.is_complete = 1 OR LOWER(l.name) LIKE "%done%" OR LOWER(l.name) LIKE "%completed%")');
+      } else if (stage === 'review') {
+        whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%review%" OR LOWER(l.name) LIKE "%qa%" OR LOWER(l.name) LIKE "%test%"))');
       } else if (stage === 'in_progress') {
-        whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%progress%" OR LOWER(l.name) LIKE "%doing%" OR LOWER(l.name) LIKE "%active%" OR LOWER(l.name) LIKE "%review%"))');
+        whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%progress%" OR LOWER(l.name) LIKE "%doing%" OR LOWER(l.name) LIKE "%active%"))');
       } else if (stage === 'todo') {
         whereConditions.push('(c.is_complete = 0 AND (LOWER(l.name) LIKE "%to do%" OR LOWER(l.name) LIKE "%todo%" OR LOWER(l.name) LIKE "%backlog%"))');
       }

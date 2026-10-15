@@ -1,4 +1,4 @@
-# Dependency directories
+# Dependencies
 node_modules/
 jspm_packages/
 
@@ -11,7 +11,53 @@ jspm_packages/
 *.cert
 *.crt
 
-# File uploads and user media
+# Test suites, test runners, and test files (Do not upload to server)
+test_*.js
+/test_*.js
+*.test.js
+*.spec.js
+tests/
+test/
+src/test/
+src/tests/
+src/test_utils/
+
+# Internal test suites, fixtures, test verification, and scratch test scripts
+src/scripts/permcheck/
+src/scripts/permcheck.js
+src/scripts/permtestDrop.js
+src/scripts/permtestProvision.js
+src/scripts/testCustomLabelPermissions.js
+src/scripts/verifyAllRolesAndPermissions.js
+src/scripts/verifyWorkspaceVisibility.js
+src/scripts/cleanTestDatabases.js
+src/scripts/cleanLocalDb.js
+src/scripts/resetLiveDb.js
+src/scripts/debug_*.js
+src/scripts/*test*.js
+src/scripts/*Test*.js
+src/scripts/dumpRbacDataForExcel.js
+src/scripts/generateCoverageMatrix.js
+src/scripts/generatePermissionMatrixDoc.js
+src/scripts/generateRbacMigration.js
+
+# Test results, matrices, catalogs, and test report documents
+src/scripts/rbac_test_results.json
+src/scripts/rbac_catalog_dump.json
+.coverage_records.json
+**/.coverage_records.json
+docs/*REPORT*
+docs/*Report*
+docs/*TEST*
+docs/*Test*
+docs/NOTIFICATION_MANUAL_CHECK.md
+
+# Test output and coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# File uploads and user media (production assets stored on object storage or outside git)
 uploads/
 public/uploads/
 server/public/uploads/
@@ -20,11 +66,9 @@ server/public/uploads/
 backups/
 *.dump
 *.sql.gz
-*.zip
-*.tar.gz
-*.tgz
+*.sql.bak
 
-# Never ignore migration scripts or schema definitions
+# Keep essential migration scripts and schema definitions
 !src/db/migrations/
 !src/db/migrations/**/*.sql
 !src/db/schema.sql
@@ -39,16 +83,12 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Test output, runners, and coverage
-coverage/
-.nyc_output/
-/test_*.js
-!src/test_*.js
-tests/
-test/
-src/test_utils/
-.coverage_records.json
-**/.coverage_records.json
+# Archives and packages
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
 
 # Temporary, scratch, and cache files
 scratch/

@@ -186,7 +186,7 @@ async function provisionTenant({
     );
 
     // Create default lists
-    const lists = ['To Do', 'In Progress', 'Done'];
+    const lists = ['To Do', 'In Progress', 'Review', 'Done'];
     for (let i = 0; i < lists.length; i++) {
       await tenantDb.execute(
         'INSERT INTO lists (board_id, name, position) VALUES (?, ?, ?)',

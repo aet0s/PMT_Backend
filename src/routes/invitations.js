@@ -55,7 +55,7 @@ async function requireWorkspaceAdmin(workspaceId, userId, dbInstance = null) {
 
 // GET /api/invitations/verify?token=... (Public verification for registration page)
 router.get('/verify', async (req, res, next) => {
-  const { token } = req.query;
+  const token = req.query.token || req.query.invite_token;
   if (!token) {
     return res.status(400).json({ error: { message: 'Token is required', code: 'BAD_REQUEST' } });
   }
@@ -191,7 +191,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       ...inv,
       role_name: inv.role_name || 'Team Member',
       board_names: (inv.board_ids || []).map((id) => boardMap[id]).filter(Boolean),
-      invite_url: `${clientBase}/register?invite_token=${inv.token}&email=${encodeURIComponent(inv.email)}`
+      invite_url: `${clientBase}/invite?token=${inv.token}&email=${encodeURIComponent(inv.email)}`
     }));
 
     return res.json({ invitations });
@@ -296,7 +296,7 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
   }
 
   const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
-  const inviteUrl = `${clientBase}/register?invite_token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
+  const inviteUrl = `${clientBase}/invite?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
 
   // Query workspace & company info for the invitation email
   const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
@@ -594,7 +594,7 @@ router.post('/:id/regenerate', requireAuth, async (req, res, next) => {
     );
 
     const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
-    const inviteUrl = `${clientBase}/register?invite_token=${newToken}&email=${encodeURIComponent(invite.email)}`;
+    const inviteUrl = `${clientBase}/invite?token=${newToken}&email=${encodeURIComponent(invite.email)}`;
 
     broadcastWorkspaceEvent(invite.workspace_id, 'workspace:invitation_created', {
       invitation: {
@@ -664,7 +664,7 @@ router.post('/:id/resend', requireAuth, async (req, res, next) => {
     }
 
     const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
-    const inviteUrl = `${clientBase}/register?invite_token=${invite.token}&email=${encodeURIComponent(invite.email)}`;
+    const inviteUrl = `${clientBase}/invite?token=${invite.token}&email=${encodeURIComponent(invite.email)}`;
     const companyName = req.tenant?.name || invite.workspace_name;
 
     let emailSent = false;

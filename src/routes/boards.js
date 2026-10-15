@@ -125,8 +125,9 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
       `INSERT INTO lists (board_id, name, position) VALUES 
        (?, 'To Do', 1000.0),
        (?, 'In Progress', 2000.0),
-       (?, 'Done', 3000.0)`,
-      [board.id, board.id, board.id]
+       (?, 'Review', 3000.0),
+       (?, 'Done', 4000.0)`,
+      [board.id, board.id, board.id, board.id]
     );
 
     // Create default board labels (preset labels)
