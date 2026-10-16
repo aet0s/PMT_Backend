@@ -81,6 +81,13 @@ async function createSession(db, user, req, options = {}) {
       [user.id, sessionId]
     );
     if (prevSessions.length > 0) {
+      const { logAuthEvent } = require('./authAudit');
+      await logAuthEvent(db, {
+        userId: user.id,
+        email: user.email,
+        eventType: 'NEW_DEVICE_SESSION',
+        metadata: { deviceInfo, ipAddress }
+      });
       const { notify } = require('./notify');
       await notify({
         db,

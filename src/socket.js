@@ -386,11 +386,8 @@ function broadcastBoardEvent(boardId, eventName, payload, originId = null, tenan
   if (!io || !boardId) return;
   if (!isSingleTenantMode() && !tenantId) {
     const errMsg = `[SOCKET_ERROR] broadcastBoardEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on board ${boardId}`;
-    if (process.env.NODE_ENV === 'production') {
-      console.error(errMsg);
-      return;
-    }
-    throw new Error(errMsg);
+    console.error(errMsg);
+    return;
   }
   const room = getBoardRoom(boardId, tenantId);
   if (!room) return;
@@ -410,11 +407,8 @@ function broadcastWorkspaceEvent(workspaceId, eventName, payload, originId = nul
   if (!io || !workspaceId) return;
   if (!isSingleTenantMode() && !tenantId) {
     const errMsg = `[SOCKET_ERROR] broadcastWorkspaceEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' on workspace ${workspaceId}`;
-    if (process.env.NODE_ENV === 'production') {
-      console.error(errMsg);
-      return;
-    }
-    throw new Error(errMsg);
+    console.error(errMsg);
+    return;
   }
   const room = getWorkspaceRoom(workspaceId, tenantId);
   if (!room) return;
@@ -433,11 +427,8 @@ function sendUserNotification(userId, notification, tenantId = null) {
   if (!io || !userId) return;
   if (!isSingleTenantMode() && !tenantId) {
     const errMsg = `[SOCKET_ERROR] sendUserNotification dropped: missing tenantId in multi-tenant mode for user ${userId}`;
-    if (process.env.NODE_ENV === 'production') {
-      console.error(errMsg);
-      return;
-    }
-    throw new Error(errMsg);
+    console.error(errMsg);
+    return;
   }
   const room = getUserRoom(userId, tenantId);
   if (!room) return;
@@ -449,11 +440,8 @@ function sendUserEvent(userId, eventName, payload, tenantId = null) {
   if (!io || !userId) return;
   if (!isSingleTenantMode() && !tenantId) {
     const errMsg = `[SOCKET_ERROR] sendUserEvent dropped: missing tenantId in multi-tenant mode for event '${eventName}' to user ${userId}`;
-    if (process.env.NODE_ENV === 'production') {
-      console.error(errMsg);
-      return;
-    }
-    throw new Error(errMsg);
+    console.error(errMsg);
+    return;
   }
   const room = getUserRoom(userId, tenantId);
   if (!room) return;
@@ -469,11 +457,8 @@ function disconnectUserSockets(userId, tenantId = null, reason = 'SESSION_REVOKE
   if (!io || !userId) return;
   if (!isSingleTenantMode() && !tenantId) {
     const errMsg = `[SOCKET_ERROR] disconnectUserSockets dropped: missing tenantId in multi-tenant mode for user ${userId}`;
-    if (process.env.NODE_ENV === 'production') {
-      console.error(errMsg);
-      return;
-    }
-    throw new Error(errMsg);
+    console.error(errMsg);
+    return;
   }
   const targetUserId = Number(userId);
   const targetTenantId = tenantId ? Number(tenantId) : null;

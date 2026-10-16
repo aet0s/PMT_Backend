@@ -18,6 +18,8 @@
     "rbac:audit": "node src/scripts/rbacAudit.js",
     "rbac:sync-check": "node src/scripts/rbacSyncCheck.js",
     "notify:audit": "node src/scripts/notifyAudit.js",
+    "notifications:cleanup": "node src/scripts/notificationsCleanup.js",
+    "test:notifications": "node src/scripts/permtest/notificationNoiseAndSound.test.js",
     "contract:check": "node src/scripts/checkApiContract.js",
     "coverage:matrix": "node src/scripts/generateCoverageMatrix.js",
     "admin:reset-password": "node src/scripts/adminResetPassword.js",

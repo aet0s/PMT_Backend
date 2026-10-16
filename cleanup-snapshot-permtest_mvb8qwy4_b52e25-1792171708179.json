@@ -1,0 +1,66 @@
+{
+  "tenant": "permtest_mvb8qwy4_b52e25",
+  "dbName": "pm_t_permtest_mvb8qwy4_b52e25_a7b6f8b0",
+  "timestamp": "2026-10-16T17:28:28.179Z",
+  "totalNotifications": 2,
+  "totalOutbox": 1,
+  "notifications": [
+    {
+      "id": 53,
+      "user_id": 5,
+      "type": "card.renamed",
+      "event_type": "card.renamed",
+      "card_id": null,
+      "board_id": null,
+      "workspace_id": 1,
+      "actor_user_id": null,
+      "message": "old rename notif",
+      "is_read": false,
+      "created_at": "2026-10-16T17:28:28.154Z",
+      "meta": null,
+      "priority": 0,
+      "count": 1,
+      "group_key": null,
+      "dedupe_key": null
+    },
+    {
+      "id": 54,
+      "user_id": 5,
+      "type": "attachment.added",
+      "event_type": "attachment.added",
+      "card_id": null,
+      "board_id": null,
+      "workspace_id": 1,
+      "actor_user_id": null,
+      "message": "old attachment notif",
+      "is_read": false,
+      "created_at": "2026-10-16T17:28:28.156Z",
+      "meta": null,
+      "priority": 0,
+      "count": 1,
+      "group_key": null,
+      "dedupe_key": null
+    }
+  ],
+  "outbox": [
+    {
+      "id": 32,
+      "event_type": "list.moved",
+      "workspace_id": 1,
+      "board_id": null,
+      "card_id": null,
+      "actor_user_id": null,
+      "target_user_id": null,
+      "invitee_user_id": null,
+      "mentioned_user_ids": null,
+      "meta": null,
+      "dedupe_key": null,
+      "status": "pending",
+      "retry_count": 0,
+      "last_error": null,
+      "next_retry_at": null,
+      "created_at": "2026-10-16T17:28:28.158Z",
+      "processed_at": null
+    }
+  ]
+}

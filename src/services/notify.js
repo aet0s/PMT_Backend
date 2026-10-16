@@ -103,8 +103,13 @@ async function notify(
     dedupeKey = null
   } = params;
 
-  if (!eventType || !NOTIFICATION_EVENTS[eventType]) {
+  const eventConfig = NOTIFICATION_EVENTS[eventType];
+  if (!eventType || !eventConfig) {
     console.warn(`Unknown or uncataloged eventType passed to notify: "${eventType}"`);
+    return;
+  }
+
+  if (eventConfig.notifiable === false) {
     return;
   }
 

@@ -3042,14 +3042,18 @@ router.post('/:id/company-members/:userId/boards', requireAuth, requirePermissio
       );
     }
 
-    sendUserEvent(targetUserId, 'user:workspaces_updated', {
-      workspaceId,
-      userId: targetUserId
-    });
-    broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', {
-      workspaceId,
-      userId: targetUserId
-    });
+    try {
+      sendUserEvent(targetUserId, 'user:workspaces_updated', {
+        workspaceId,
+        userId: targetUserId
+      }, req.tenant?.id || req.tenantId);
+      broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', {
+        workspaceId,
+        userId: targetUserId
+      }, req.headers?.['x-origin-id'] || null, req.tenant?.id || req.tenantId);
+    } catch (sockErr) {
+      console.warn('[WARN] Failed to broadcast board member update socket event:', sockErr.message);
+    }
 
     return res.json({ success: true, message: 'Board assignments updated successfully' });
   } catch (err) {

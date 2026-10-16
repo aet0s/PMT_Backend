@@ -144,7 +144,8 @@ const { csrfProtection } = require('./middleware/csrf');
 app.use(csrfProtection(getAllowedOrigins));
 
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Direct access to /uploads is strictly prohibited in all environments.
 // Files must only be accessed through the authenticated /api/files route with permission checks.

@@ -2,14 +2,12 @@
 // Single source of truth mapping mutating routes to declared notification events or explicit no-notify reasons.
 
 const ROUTE_NOTIFICATION_MAP = {
-  // --- Boards ---
+  // ==========================================
+  // --- NOTIFIABLE ROUTES (Main Set) ---
+  // ==========================================
   'POST /api/boards': {
     events: ['board.created'],
     description: 'Creates project board'
-  },
-  'PATCH /api/boards/:id': {
-    events: ['board.renamed', 'board.background_changed'],
-    description: 'Renames board or updates theme/background'
   },
   'DELETE /api/boards/:id': {
     events: ['board.deleted'],
@@ -19,10 +17,6 @@ const ROUTE_NOTIFICATION_MAP = {
     events: ['board.archived'],
     description: 'Archives board'
   },
-  'POST /api/boards/:id/restore': {
-    events: ['board.restored'],
-    description: 'Restores archived board'
-  },
   'POST /api/boards/:id/members': {
     events: ['board.member_added'],
     description: 'Adds member to board'
@@ -31,57 +25,13 @@ const ROUTE_NOTIFICATION_MAP = {
     events: ['board.member_removed'],
     description: 'Removes member from board'
   },
-  'POST /api/boards/:id/labels': {
-    events: ['board.label_created'],
-    description: 'Creates colored label on board'
-  },
-
-  // --- Lists ---
-  'POST /api/lists': {
-    events: ['list.created'],
-    description: 'Creates list column on board'
-  },
-  'PATCH /api/lists/:id': {
-    events: ['list.renamed', 'list.moved', 'list.archived'],
-    description: 'Renames, reorders, or archives list'
-  },
-  'DELETE /api/lists/:id': {
-    events: ['list.deleted'],
-    description: 'Deletes list column'
-  },
-
-  // --- Cards ---
-  'POST /api/cards': {
-    events: ['card.created'],
-    description: 'Creates card in list'
-  },
   'PATCH /api/cards/:id': {
-    events: [
-      'card.renamed',
-      'card.description_changed',
-      'card.due_date_set',
-      'card.due_date_changed',
-      'card.due_date_removed',
-      'card.completed',
-      'card.reopened',
-      'card.moved',
-      'card.cover_changed',
-      'card.archived',
-      'card.restored'
-    ],
-    description: 'Updates card attributes, status, dates, position'
+    events: ['card.completed', 'card.archived'],
+    description: 'Updates card attributes, status, completion, archive'
   },
   'DELETE /api/cards/:id': {
     events: ['card.deleted'],
     description: 'Permanently deletes card'
-  },
-  'POST /api/cards/:id/copy': {
-    events: ['card.copied'],
-    description: 'Clones card with checklists and labels'
-  },
-  'POST /api/cards/:id/labels': {
-    events: ['card.label_added', 'card.label_removed'],
-    description: 'Attaches or detaches label on card'
   },
   'POST /api/cards/:id/members': {
     events: ['card.assigned', 'card.unassigned'],
@@ -91,71 +41,10 @@ const ROUTE_NOTIFICATION_MAP = {
     events: ['card.assigned'],
     description: 'Assigns member on card'
   },
-
-  // --- Comments ---
   'POST /api/cards/:id/comments': {
     events: ['comment.added', 'comment.mention'],
-    description: 'Posts discussion comment and notifies members/mentions'
+    description: 'Posts discussion comment and notifies assignees/creator/mentions'
   },
-  'DELETE /api/cards/comments/:id': {
-    events: ['comment.deleted'],
-    description: 'Deletes comment on card'
-  },
-
-  // --- Checklists & Items ---
-  'POST /api/cards/:id/checklists': {
-    events: ['checklist.created'],
-    description: 'Creates checklist on card'
-  },
-  'DELETE /api/cards/checklists/:id': {
-    events: ['checklist.deleted'],
-    description: 'Deletes checklist from card'
-  },
-  'POST /api/cards/checklist-items': {
-    events: ['checklist_item.added'],
-    description: 'Adds item to checklist'
-  },
-  'PATCH /api/cards/checklist-items/:id': {
-    events: [
-      'checklist_item.completed',
-      'checklist_item.reopened',
-      'checklist_item.edited',
-      'checklist.completed_all'
-    ],
-    description: 'Toggles item completion or edits text'
-  },
-  'DELETE /api/cards/checklist-items/:id': {
-    events: ['checklist_item.deleted'],
-    description: 'Deletes item from checklist'
-  },
-
-  // --- Attachments ---
-  'POST /api/cards/:id/attachments': {
-    events: ['attachment.added'],
-    description: 'Attaches file or URL to card'
-  },
-  'POST /api/cards/:id/attachments/file': {
-    events: ['attachment.added'],
-    description: 'Uploads and attaches file to card'
-  },
-  'POST /api/cards/:id/attachments/link': {
-    events: ['attachment.added'],
-    description: 'Attaches URL link to card'
-  },
-  'DELETE /api/cards/attachments/:id': {
-    events: ['attachment.removed'],
-    description: 'Removes attachment from card'
-  },
-  'POST /api/attachments': {
-    events: ['attachment.added'],
-    description: 'Uploads and attaches file'
-  },
-  'DELETE /api/attachments/:id': {
-    events: ['attachment.removed'],
-    description: 'Removes file attachment'
-  },
-
-  // --- Workspace Members, Roles, Security ---
   'POST /api/workspaces/:id/members': {
     events: ['workspace.member_added'],
     description: 'Adds existing user directly to workspace'
@@ -168,52 +57,215 @@ const ROUTE_NOTIFICATION_MAP = {
     events: ['workspace.member_role_changed'],
     description: 'Updates workspace role of member'
   },
+
+  // ==========================================
+  // --- MUTATING ROUTES WITH EXPLICIT NO-NOTIFY ---
+  // ==========================================
+  // --- Board Mutations ---
+  'PATCH /api/boards/:id': {
+    noNotify: true,
+    reason: 'Board rename and background updates are non-notifiable (recorded in activity log)'
+  },
+  'POST /api/boards/:id/restore': {
+    noNotify: true,
+    reason: 'Board restore is non-notifiable (recorded in activity log)'
+  },
+  'PATCH /api/boards/:id/members/:userId/role': {
+    noNotify: true,
+    reason: 'Board member role change is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/boards/:id/labels': {
+    noNotify: true,
+    reason: 'Board label creation is non-notifiable'
+  },
+  'PATCH /api/boards/:id/labels/:labelId': {
+    noNotify: true,
+    reason: 'Board label update is non-notifiable'
+  },
+  'DELETE /api/boards/:id/labels/:labelId': {
+    noNotify: true,
+    reason: 'Board label deletion is non-notifiable'
+  },
+
+  // --- List Mutations ---
+  'POST /api/lists': {
+    noNotify: true,
+    reason: 'List creation is non-notifiable (recorded in activity log)'
+  },
+  'PATCH /api/lists/:id': {
+    noNotify: true,
+    reason: 'List rename, move, or archive are non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/lists/:id': {
+    noNotify: true,
+    reason: 'List deletion is non-notifiable (recorded in activity log)'
+  },
+
+  // --- Card Mutations ---
+  'POST /api/cards': {
+    noNotify: true,
+    reason: 'Card creation is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/cards/:id/copy': {
+    noNotify: true,
+    reason: 'Card copy is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/cards/:id/labels': {
+    noNotify: true,
+    reason: 'Card label assignment is non-notifiable (recorded in activity log)'
+  },
+
+  // --- Comments ---
+  'PATCH /api/cards/comments/:id': {
+    noNotify: true,
+    reason: 'Comment edit is non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/cards/comments/:id': {
+    noNotify: true,
+    reason: 'Comment deletion is non-notifiable (recorded in activity log)'
+  },
+
+  // --- Checklists & Items ---
+  'POST /api/cards/:id/checklists': {
+    noNotify: true,
+    reason: 'Checklist creation is non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/cards/checklists/:id': {
+    noNotify: true,
+    reason: 'Checklist deletion is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/cards/checklist-items': {
+    noNotify: true,
+    reason: 'Checklist item addition is non-notifiable (recorded in activity log)'
+  },
+  'PATCH /api/cards/checklist-items/:id': {
+    noNotify: true,
+    reason: 'Checklist item toggling/editing is non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/cards/checklist-items/:id': {
+    noNotify: true,
+    reason: 'Checklist item deletion is non-notifiable (recorded in activity log)'
+  },
+
+  // --- Attachments ---
+  'POST /api/cards/:id/attachments': {
+    noNotify: true,
+    reason: 'Attachment addition is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/cards/:id/attachments/file': {
+    noNotify: true,
+    reason: 'File attachment upload is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/cards/:id/attachments/link': {
+    noNotify: true,
+    reason: 'Link attachment is non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/cards/attachments/:id': {
+    noNotify: true,
+    reason: 'Attachment removal is non-notifiable (recorded in activity log)'
+  },
+  'POST /api/attachments': {
+    noNotify: true,
+    reason: 'Attachment upload is non-notifiable (recorded in activity log)'
+  },
+  'DELETE /api/attachments/:id': {
+    noNotify: true,
+    reason: 'Attachment removal is non-notifiable (recorded in activity log)'
+  },
+
+  // --- Workspace & Company Administration ---
+  'POST /api/workspaces': {
+    noNotify: true,
+    reason: 'New workspace creation (creator is sole owner)'
+  },
+  'PATCH /api/workspaces/:id': {
+    noNotify: true,
+    reason: 'Workspace metadata and setting edits'
+  },
+  'DELETE /api/workspaces/:id': {
+    noNotify: true,
+    reason: 'Workspace deletion; destroys workspace cascade'
+  },
+  'PATCH /api/workspaces/:id/security': {
+    noNotify: true,
+    reason: 'Workspace security settings update (recorded in audit log)'
+  },
+  'POST /api/workspaces/:id/auto-archive': {
+    noNotify: true,
+    reason: 'Workspace auto-archive configuration update'
+  },
+  'POST /api/workspaces/:id/members/:userId/deactivate': {
+    noNotify: true,
+    reason: 'Member deactivation is recorded in audit logs'
+  },
+  'POST /api/workspaces/:id/members/:userId/reactivate': {
+    noNotify: true,
+    reason: 'Member reactivation is recorded in audit logs'
+  },
+  'PATCH /api/workspaces/:id/company-members/:userId/role': {
+    noNotify: true,
+    reason: 'Company-level role assignment is recorded in audit logs'
+  },
+  'POST /api/workspaces/:id/company-members/:userId/workspaces': {
+    noNotify: true,
+    reason: 'Company member workspace assignment'
+  },
+  'POST /api/workspaces/:id/company-members/:userId/boards': {
+    noNotify: true,
+    reason: 'Company member board assignment'
+  },
+  'DELETE /api/workspaces/:id/company-members/:userId': {
+    noNotify: true,
+    reason: 'Company member removal'
+  },
   'POST /api/workspaces/:workspaceId/members/:userId/reset-password': {
-    events: ['security.admin_password_reset'],
-    description: 'Admin resets temporary password for member'
+    noNotify: true,
+    reason: 'Admin password reset is logged in audit log, not notifiable to in-app'
   },
   'POST /api/workspaces/:workspaceId/members/:userId/reset-2fa': {
-    events: ['security.two_factor_reset'],
-    description: 'Admin resets 2FA for member'
+    noNotify: true,
+    reason: 'Admin 2FA reset is logged in audit log, not notifiable to in-app'
   },
   'POST /api/workspaces/:id/roles': {
-    events: ['role.created'],
-    description: 'Creates new custom workspace role'
+    noNotify: true,
+    reason: 'Role creation is non-notifiable (recorded in audit logs)'
   },
   'PATCH /api/roles/:id': {
-    events: ['role.updated'],
-    description: 'Updates custom role permissions'
+    noNotify: true,
+    reason: 'Role update is non-notifiable (recorded in audit logs)'
   },
   'DELETE /api/roles/:id': {
-    events: ['role.deleted'],
-    description: 'Deletes unused custom role'
+    noNotify: true,
+    reason: 'Role deletion is non-notifiable (recorded in audit logs)'
   },
 
   // --- Invitations ---
   'POST /api/invitations': {
-    events: ['invite.sent'],
-    description: 'Issues signed workspace invitation link'
+    noNotify: true,
+    reason: 'Invitation issuance is handled via email link, non-notifiable to in-app'
   },
   'POST /api/workspaces/:id/invitations': {
-    events: ['invite.sent'],
-    description: 'Issues workspace invitation link'
+    noNotify: true,
+    reason: 'Workspace invitation issuance is non-notifiable to in-app'
   },
   'POST /api/invitations/accept': {
-    events: ['invite.accepted'],
-    description: 'Accepts invitation and joins workspace'
+    noNotify: true,
+    reason: 'Invitation acceptance is non-notifiable to in-app'
   },
   'DELETE /api/invitations/:id': {
-    events: ['invite.revoked'],
-    description: 'Revokes pending workspace invitation'
+    noNotify: true,
+    reason: 'Invitation revocation is non-notifiable to in-app'
   },
   'POST /api/invitations/:id/regenerate': {
-    events: ['invite.sent'],
-    description: 'Regenerates expiring invitation'
+    noNotify: true,
+    reason: 'Invitation regeneration is non-notifiable to in-app'
+  },
+  'POST /api/invitations/:id/resend': {
+    noNotify: true,
+    reason: 'Invitation resend is non-notifiable to in-app'
   },
 
-  // ==========================================
-  // --- EXPLICIT NO-NOTIFY ROUTES ---
-  // ==========================================
+  // --- Authentication, Profile, Session Management ---
   'POST /api/auth/register-company': {
     noNotify: true,
     reason: 'Unauthenticated company tenant onboarding flow'
@@ -226,13 +278,41 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Unauthenticated user registration via signed token'
   },
+  'POST /api/auth/register/send-otp': {
+    noNotify: true,
+    reason: 'Unauthenticated registration OTP dispatch'
+  },
+  'POST /api/auth/register/verify-otp': {
+    noNotify: true,
+    reason: 'Unauthenticated registration OTP verification'
+  },
+  'POST /api/auth/forgot-password/send-otp': {
+    noNotify: true,
+    reason: 'Unauthenticated password reset OTP dispatch'
+  },
+  'POST /api/auth/forgot-password/verify-otp': {
+    noNotify: true,
+    reason: 'Unauthenticated password reset OTP verification'
+  },
+  'POST /api/auth/forgot-password/verify-token': {
+    noNotify: true,
+    reason: 'Unauthenticated password reset token check'
+  },
+  'POST /api/auth/forgot-password/reset': {
+    noNotify: true,
+    reason: 'Unauthenticated password reset completion'
+  },
   'POST /api/auth/login': {
     noNotify: true,
-    reason: 'Authentication step 1 credentials verification; session tracking handles new device alerts'
+    reason: 'Authentication credentials verification; session tracking records login'
   },
   'POST /api/auth/2fa/verify-login': {
     noNotify: true,
     reason: 'Authentication step 2 TOTP challenge verification'
+  },
+  'POST /api/auth/2fa/verify': {
+    noNotify: true,
+    reason: 'TOTP 2FA challenge verification'
   },
   'POST /api/auth/refresh': {
     noNotify: true,
@@ -256,11 +336,11 @@ const ROUTE_NOTIFICATION_MAP = {
   },
   'POST /api/auth/2fa/generate': {
     noNotify: true,
-    reason: 'TOTP enrollment secret generation (in-progress)'
+    reason: 'TOTP enrollment secret generation'
   },
   'POST /api/auth/2fa/setup': {
     noNotify: true,
-    reason: 'TOTP QR generation (in-progress)'
+    reason: 'TOTP QR generation'
   },
   'POST /api/auth/2fa/confirm': {
     noNotify: true,
@@ -286,18 +366,8 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Self password change'
   },
-  'POST /api/workspaces': {
-    noNotify: true,
-    reason: 'New workspace creation (creator is sole owner)'
-  },
-  'PATCH /api/workspaces/:id': {
-    noNotify: true,
-    reason: 'Workspace metadata and setting edits'
-  },
-  'DELETE /api/workspaces/:id': {
-    noNotify: true,
-    reason: 'Workspace deletion; destroys workspace cascade'
-  },
+
+  // --- Self Notification Actions ---
   'PATCH /api/notifications/preferences': {
     noNotify: true,
     reason: 'Self notification preference updates'
@@ -322,6 +392,10 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Self notification mark all read state'
   },
+  'PATCH /api/notifications/board/:id/read-all': {
+    noNotify: true,
+    reason: 'Self notification mark all read for board'
+  },
   'DELETE /api/notifications/:id': {
     noNotify: true,
     reason: 'Self notification deletion'
@@ -330,9 +404,15 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Self notification cleanup for read items'
   },
+
+  // --- Files & Dev Helpers ---
   'POST /api/files/avatar': {
     noNotify: true,
     reason: 'Self avatar file upload'
+  },
+  'POST /api/files/preview-token': {
+    noNotify: true,
+    reason: 'Ephemeral file preview token creation'
   },
   'POST /api/upload': {
     noNotify: true,

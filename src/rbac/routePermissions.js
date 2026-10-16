@@ -196,6 +196,7 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Files & Avatars ──────────────────────────────────────────────────────
   ['POST /api/files/avatar',  { selfScoped: 'User uploads their own avatar',                                                                           scope: 'company' }],
   ['POST /api/files/preview-token', { selfScoped: 'Generate temporary viewer token for attachment preview',                                            scope: 'project' }],
+  ['GET /api/files/avatars/:filename', { publicReason: 'Public avatar asset fallback for user profile pictures',                                       scope: 'company' }],
   ['GET /api/files/:tenantId/*', { selfScoped: 'file.view — tenant isolation + inline per-attachment authorization in handler',                        scope: 'project' }],
 
   // ─── System Health & Time ─────────────────────────────────────────────────

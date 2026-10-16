@@ -73,7 +73,8 @@ async function getUserPreferences(userId, dbInstance = null) {
     });
 
     Object.entries(NOTIFICATION_EVENTS).forEach(([key, config]) => {
-      const cat = config.category || 'Other';
+      if (config.notifiable === false) return;
+      const cat = config.category || 'Cards';
       if (!categoryGroups[cat]) categoryGroups[cat] = [];
 
       const inAppVal =

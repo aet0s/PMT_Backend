@@ -8,6 +8,7 @@ const { notify } = require('../services/notify');
 const { userHasPermission } = require('../middleware/permissions');
 const { broadcastWorkspaceEvent } = require('../socket');
 const { logActivity } = require('../utils/activity');
+const { logAuthEvent } = require('../services/authAudit');
 
 const { isOwnerRole } = require('../utils/roleRank');
 const { EmailProvider } = require('../services/providers');
@@ -200,7 +201,18 @@ router.get('/', requireAuth, async (req, res, next) => {
   }
 });
 
-async function createInvitationHelper({ db, user, tenant, workspaceId, email, roleId, boardIds = [], originId = null }) {
+async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
+  let db, user, tenant, workspaceId, email, roleId, boardIds, originId;
+  if (optionsOrReq && optionsOrReq.db) {
+    ({ db, user, tenant, workspaceId, email, roleId, boardIds = [], originId = null } = optionsOrReq);
+  } else {
+    const req = optionsOrReq;
+    db = req.db;
+    user = req.user;
+    tenant = req.tenant;
+    originId = req.headers?.['x-origin-id'] || null;
+    ({ workspaceId, email, roleId, boardIds = [] } = maybeOptions);
+  }
   const normalizedEmail = normalizeEmail(email);
 
   // Validate boards belong to workspace
@@ -341,6 +353,13 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       metaJson: { email: normalizedEmail, role: resolvedRoleName, email_sent: emailSent },
       dbInstance: db,
       tenantId: tenant?.id
+    });
+
+    await logAuthEvent(db, {
+      userId: user.id,
+      email: normalizedEmail,
+      eventType: 'INVITE_SENT',
+      metadata: { workspaceId, role: resolvedRoleName, email_sent: emailSent }
     });
     return {
       status: 201,
@@ -784,6 +803,14 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       metaJson: { email: inviteRes[0].email, workspace_name: wsRow?.name || 'Workspace' },
       dbInstance: req.db,
       tenantId: req.tenant?.id
+    });
+
+    await logAuthEvent(req.db, {
+      userId: req.user.id,
+      email: inviteRes[0].email,
+      eventType: 'INVITE_REVOKED',
+      req,
+      metadata: { workspaceId: inviteRes[0].workspace_id, invitationId: inviteId }
     });
 
     await notify({

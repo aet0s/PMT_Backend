@@ -47,6 +47,10 @@ function sanitizeRich(html) {
       ...sanitizeHtml.defaults.allowedAttributes,
       img: ['src', 'alt', 'title', 'width', 'height', 'class', 'style'],
       a: ['href', 'name', 'target', 'rel']
+    },
+    allowedSchemes: ['http', 'https', 'ftp', 'mailto', 'tel', 'data'],
+    allowedSchemesByTag: {
+      img: ['http', 'https', 'data']
     }
   });
 }

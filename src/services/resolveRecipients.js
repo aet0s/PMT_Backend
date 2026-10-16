@@ -64,6 +64,31 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
         break;
       }
 
+      case 'workspaceProjectAccessAll': {
+        if (ctx.workspaceId) {
+          const wRes = await db.query('SELECT user_id FROM workspace_members WHERE workspace_id = ?', [ctx.workspaceId]);
+          const allMemberIds = wRes.map((r) => r.user_id);
+          candidates = await usersWithPermission(db, ctx.workspaceId, null, 'project.access_all', allMemberIds);
+        }
+        break;
+      }
+
+      case 'cardAssigneesAndCreator': {
+        if (ctx.cardId) {
+          const res = await db.query(
+            'SELECT user_id FROM card_members WHERE card_id = ? UNION SELECT user_id FROM card_assigners WHERE card_id = ?',
+            [ctx.cardId, ctx.cardId]
+          );
+          const assigneeIds = res.map((r) => r.user_id);
+          const cardRes = await db.query('SELECT created_by FROM cards WHERE id = ?', [ctx.cardId]);
+          const creatorId = cardRes[0]?.created_by;
+          const candSet = new Set(assigneeIds);
+          if (creatorId) candSet.add(creatorId);
+          candidates = Array.from(candSet);
+        }
+        break;
+      }
+
       case 'cardMembers': {
         if (ctx.cardId) {
           const res = await db.query(
@@ -80,29 +105,20 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
         break;
       }
 
+      case 'commentAddedRecipients':
       case 'cardMembersExcludingMentioned': {
         if (ctx.cardId) {
+          const res = await db.query(
+            'SELECT user_id FROM card_members WHERE card_id = ? UNION SELECT user_id FROM card_assigners WHERE card_id = ?',
+            [ctx.cardId, ctx.cardId]
+          );
+          const assigneeIds = res.map((r) => r.user_id);
+          const cardRes = await db.query('SELECT created_by FROM cards WHERE id = ?', [ctx.cardId]);
+          const creatorId = cardRes[0]?.created_by;
           const mentioned = Array.isArray(ctx.mentionedUserIds) ? ctx.mentionedUserIds : [];
-          let query =
-            'SELECT user_id FROM (SELECT user_id, card_id FROM card_members UNION SELECT user_id, card_id FROM card_assigners) combined WHERE card_id = ?';
-          const params = [ctx.cardId];
-          if (mentioned.length > 0) {
-            query += ' AND user_id NOT IN (?)';
-            params.push(mentioned);
-          }
-          const res = await db.query(query, params);
-          candidates = res.map((r) => r.user_id);
-        }
-        if (candidates.length === 0 && ctx.boardId) {
-          const mentioned = Array.isArray(ctx.mentionedUserIds) ? ctx.mentionedUserIds : [];
-          let bQuery = 'SELECT user_id FROM board_members WHERE board_id = ?';
-          const bParams = [ctx.boardId];
-          if (mentioned.length > 0) {
-            bQuery += ' AND user_id NOT IN (?)';
-            bParams.push(mentioned);
-          }
-          const bRes = await db.query(bQuery, bParams);
-          candidates = bRes.map((r) => r.user_id);
+          const candSet = new Set([...assigneeIds, ...mentioned]);
+          if (creatorId) candSet.add(creatorId);
+          candidates = Array.from(candSet);
         }
         break;
       }

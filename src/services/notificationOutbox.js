@@ -127,6 +127,14 @@ async function processOutbox(db, tenantId = 'single') {
           continue;
         }
 
+        if (eventConfig.notifiable === false) {
+          await db.execute(
+            "UPDATE notification_outbox SET status = 'completed', processed_at = NOW(3) WHERE id = ?",
+            [row.id]
+          );
+          continue;
+        }
+
         const mentionedUserIds = row.mentioned_user_ids ? (typeof row.mentioned_user_ids === 'string' ? JSON.parse(row.mentioned_user_ids) : row.mentioned_user_ids) : [];
         const meta = row.meta ? (typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta) : {};
 

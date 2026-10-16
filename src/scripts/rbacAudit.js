@@ -76,6 +76,10 @@ const ALLOWED_PUBLIC_ROUTES = new Map([
   ['POST /api/dev/reset-rate-limit', {
     category: 'test-only',
     justification: 'Test environment in-memory rate limit reset helper (only registered in NODE_ENV=test)'
+  }],
+  ['GET /api/files/avatars/:filename', {
+    category: 'files/avatars',
+    justification: 'Public avatar asset fallback for user profile pictures'
   }]
 ]);
 
@@ -385,13 +389,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 142 || prodSingleResult.count !== 142) {
-    console.error(`[AUDIT FAILED] Expected exactly 142 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 143 || prodSingleResult.count !== 143) {
+    console.error(`[AUDIT FAILED] Expected exactly 143 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 143 || testSingleResult.count !== 143) {
-    console.error(`[AUDIT FAILED] Expected exactly 143 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 144 || testSingleResult.count !== 144) {
+    console.error(`[AUDIT FAILED] Expected exactly 144 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 

@@ -1135,6 +1135,8 @@ router.post('/:id/restore', requireAuth, requirePermission('archive.restore'), a
     await req.db.execute('UPDATE boards SET is_archived = 0 WHERE id = ?', [boardId]);
     const [updatedBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
 
+    await logActivity(boardId, null, req.user.id, 'board_restored', { board_name: board.name }, req.db, req.tenant?.id);
+
     await notify({
       db: req.db,
       tenantId: req.tenant?.id,
