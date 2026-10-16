@@ -809,6 +809,9 @@ function requirePermission(permissionConfig, options = {}) {
         if (err.code === 'WORKSPACE_MISMATCH' || err.code === 'BOARD_MISMATCH') {
           return res.status(400).json({ error: { message: err.message, code: err.code } });
         }
+        if (err.status === 404 || err.code === 'NOT_FOUND') {
+          return res.status(404).json({ error: { message: err.message || 'Resource not found', code: 'NOT_FOUND' } });
+        }
         throw err;
       }
 

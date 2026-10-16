@@ -1843,7 +1843,7 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
 });
 
 // GET /api/workspaces/:id/reports - Comprehensive workspace analytics & reporting
-router.get('/:id/reports', requireAuth, async (req, res, next) => {
+router.get('/:id/reports', requireAuth, requirePermission('report.view_project'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const boardId = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
   const timeframe = req.query.timeframe ? String(req.query.timeframe).trim() : 'all';
@@ -1874,12 +1874,16 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       });
     }
 
+    if (boardId && !allowedBoardIds.includes(boardId)) {
+      return res.status(403).json({ error: { message: 'Access denied: not authorized to view reports for this project', code: 'FORBIDDEN' } });
+    }
+
     const boardsRes = await req.db.query(
       `SELECT id, name, background_color, is_archived, created_at
        FROM boards
        WHERE workspace_id = ? AND is_archived = 0 AND id IN (?)
        ORDER BY name ASC`,
-      [workspaceId, allowedBoardIds]
+      [workspaceId, boardId ? [boardId] : allowedBoardIds]
     );
 
     // Build timeframe conditions
@@ -1899,6 +1903,9 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
     if (boardId) {
       boardClause = 'AND b.id = ?';
       boardParam.push(boardId);
+    } else {
+      boardClause = 'AND b.id IN (?)';
+      boardParam.push(allowedBoardIds);
     }
 
     // Helper to categorize task stage by list name and completion flag
@@ -2229,7 +2236,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
        WHERE wm.workspace_id = ?
        GROUP BY u.id, u.name, u.email, r.name
        ORDER BY assigned_tasks DESC, u.name ASC`,
-      [workspaceId, ...boardParam]
+      [...boardParam, workspaceId]
     );
 
     const unassignedRes = await req.db.query(

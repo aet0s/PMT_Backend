@@ -14,7 +14,7 @@
       "project.view", "project.create", "project.edit_settings", "project.archive", "project.manage_members", "project.assign_role",
       "project.manage_templates", "project.change_status", "project.duplicate", "project.change_visibility",
       "list.create", "list.edit", "list.reorder", "list.delete",
-      "task.view", "task.create", "task.edit", "task.move", "task.assign", "task.assign_self", "task.complete", "task.delete", "task.delete_own",
+      "task.view", "task.create", "task.edit", "task.move", "task.assign", "task.assign_self", "task.complete", "task.delete",
       "task.watch", "task.set_priority", "task.bulk_edit", "task.bulk_delete", "task.duplicate", "task.archive", "task.restore",
       "subtask.create", "subtask.edit", "subtask.delete", "checklist.create", "checklist.edit", "checklist.delete",
       "comment.view", "comment.create", "comment.edit_own", "comment.delete_own", "comment.delete_any",

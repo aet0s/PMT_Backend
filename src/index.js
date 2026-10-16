@@ -262,10 +262,15 @@ app.use((err, req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  console.error(`[${req.id || 'NO_REQ_ID'}] Unhandled Server Error:`, err);
   const status = err.status || (err.name === 'MulterError' ? 400 : 500);
   const message = err.message || 'Internal Server Error';
   const code = err.code || (err.name === 'MulterError' ? 'UPLOAD_ERROR' : 'INTERNAL_ERROR');
+
+  if (status >= 500) {
+    console.error(`[${req.id || 'NO_REQ_ID'}] Unhandled Server Error:`, err);
+  } else {
+    console.warn(`[${req.id || 'NO_REQ_ID'}] Client Error ${status} (${code}): ${message}`);
+  }
 
   res.status(status).json({
     error: { message, code, requestId: req.id }

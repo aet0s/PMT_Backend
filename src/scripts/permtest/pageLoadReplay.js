@@ -7,6 +7,7 @@
 // Any 403/404 for a call the UI makes on load for that role is flagged as a bug.
 
 const { PermtestFixture } = require('./fixtures');
+const { PermtestClient } = require('./client');
 
 function hasPermissionPure(userRole, userPermissions = [], permissionKey) {
   if (!permissionKey) return true;
@@ -82,10 +83,51 @@ async function runPageLoadReplay() {
   console.log('       PAGE-LOAD ON-MOUNT API CALL REPLAY (8 ROLES x 2 BOARDS)  ');
   console.log('================================================================\n');
 
-  const fixture = new PermtestFixture();
-  await fixture.setup();
+  const tenantArgIdx = process.argv.indexOf('--tenant');
+  const tenantSlug = tenantArgIdx !== -1 ? process.argv[tenantArgIdx + 1] : null;
 
-  const ctx = fixture.context;
+  let ctx = {};
+  let users = {};
+  let fixture = null;
+
+  if (tenantSlug === 'apollo') {
+    console.log(`[REPLAY] Replaying page loads directly against real tenant "${tenantSlug}" via http://localhost:5173/api...`);
+    const apolloAccounts = [
+      { role: 'Owner', email: 'test.owner@apollo.local' },
+      { role: 'Admin', email: 'test.admin@apollo.local' },
+      { role: 'Project Manager', email: 'test.pm@apollo.local' },
+      { role: 'Team Lead', email: 'test.teamlead@apollo.local' },
+      { role: 'Team Member', email: 'test.teammember@apollo.local' },
+      { role: 'Viewer', email: 'test.viewer@apollo.local' },
+      { role: 'Auditor', email: 'test.auditor@apollo.local' },
+      { role: 'Guest', email: 'test.guest@apollo.local' }
+    ];
+
+    for (const acc of apolloAccounts) {
+      const client = new PermtestClient({ frontendUrl: 'http://localhost:5173' });
+      const loginRes = await client.post('/api/auth/login', {
+        email: acc.email,
+        password: 'ApolloTest2026!'
+      });
+      const meRes = await client.get('/api/auth/me');
+      const tenantData = meRes.data?.tenant || {};
+      const userData = meRes.data?.user || {};
+      console.log(`  [LOGIN VERIFIED] User: ${acc.email.padEnd(28)} | Role: ${acc.role.padEnd(16)} | Tenant: ${tenantData.slug || 'apollo'} | Database: ${tenantData.db_name || 'pm_t_apollo_82816566'}`);
+      users[acc.role] = { client, user: userData, tenant: tenantData };
+    }
+
+    ctx = {
+      w1Id: 1,
+      boardAId: 2,
+      boardBId: 3
+    };
+  } else {
+    fixture = new PermtestFixture();
+    await fixture.setup();
+    ctx = fixture.context;
+    users = fixture.users;
+  }
+
   const roles = [
     'Owner',
     'Admin',
@@ -110,7 +152,7 @@ async function runPageLoadReplay() {
     console.log(`----------------------------------------------------------------`);
 
     for (const roleName of roles) {
-      const userObj = fixture.users[roleName];
+      const userObj = users[roleName];
       const client = userObj.client;
 
       // Fetch user's my-permissions
@@ -198,7 +240,9 @@ async function runPageLoadReplay() {
   console.log(`  403/404 Page-Load Bugs:       ${totalBugs}`);
   console.log('================================================================\n');
 
-  await fixture.cleanup();
+  if (fixture) {
+    await fixture.cleanup();
+  }
   return { totalReplayed, totalBugs, gridResults };
 }
 

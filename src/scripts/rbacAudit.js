@@ -418,8 +418,8 @@ function runAudit() {
     console.error(`[AUDIT FAILED] Expected exactly 144 registry permissions, found ${PERMISSIONS.length}`);
     process.exit(1);
   }
-  if (nonPlannedPermissions.length !== 73 || plannedPermissions.length !== 71) {
-    console.error(`[AUDIT FAILED] Expected 73 active and 71 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+  if (nonPlannedPermissions.length !== 74 || plannedPermissions.length !== 70) {
+    console.error(`[AUDIT FAILED] Expected 74 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
     process.exit(1);
   }
 

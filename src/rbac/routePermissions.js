@@ -70,7 +70,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/workspaces/:id/invitations',                            { permission: 'member.invite',              scope: 'company' }],
   ['GET /api/workspaces/:id/invitations',                             { permission: 'member.view',                scope: 'company' }],
   ['GET /api/workspaces/:id/activity',                                { permission: 'activity.view',              scope: 'company' }],
-  ['GET /api/workspaces/:id/reports',                                 { selfScoped: 'report.view — scoped to workspace members', scope: 'company' }],
+  ['GET /api/workspaces/:id/reports',                                 { permission: 'report.view_project',        scope: 'project', note: 'filtered internally by accessibleBoardIds' }],
   ['GET /api/workspaces/:id/archived',                                { permission: 'archive.view',               scope: 'company' }],
   ['PATCH /api/workspaces/:id/members/:userId/role',                  { permission: 'member.assign_role',         scope: 'company', note: 'accepts member.assign_role or role.assign' }],
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],

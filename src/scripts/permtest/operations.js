@@ -944,6 +944,18 @@ const PROBES = {
     execute: (client, ctx, boardId) => client.get(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/search?q=test`)
   },
 
+  // === REPORT MODULE ===
+  'report.view_project': {
+    module: 'report',
+    scope: 'project',
+    method: 'GET',
+    path: '/api/workspaces/:wId/reports',
+    execute: (client, ctx, boardId) => {
+      const e = getContextEntities(ctx, boardId);
+      return client.get(`/api/workspaces/${e.wsId}/reports?board_id=${e.boardId}`);
+    }
+  },
+
   // === ARCHIVE MODULE ===
   'archive.view': {
     module: 'archive',

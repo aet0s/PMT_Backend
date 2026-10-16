@@ -168,7 +168,7 @@ const PERMISSIONS = [
   { key: 'time.approve_timesheet', module: 'time', label: 'Approve Timesheets', description: 'Approve or reject weekly timesheet submissions', scope: 'company', dangerous: true, planned: true },
 
   // --- Report ---
-  { key: 'report.view_project', module: 'report', label: 'View Project Reports', description: 'View task velocity and project progress', scope: 'project', dangerous: false, planned: true },
+  { key: 'report.view_project', module: 'report', label: 'View Project Reports', description: 'View task velocity and project progress', scope: 'project', dangerous: false },
   { key: 'report.view_team', module: 'report', label: 'View Team Reports', description: 'View team workload and allocations', scope: 'company', dangerous: false, planned: true },
   { key: 'report.view_all', module: 'report', label: 'View All Reports', description: 'Access cross-project organization reports', scope: 'company', dangerous: false, planned: true },
   { key: 'report.export', module: 'report', label: 'Export Reports', description: 'Download PDF and CSV reports', scope: 'company', dangerous: false, planned: true },
@@ -257,7 +257,7 @@ const SYSTEM_ROLES = {
       'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
       'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
       'list.create', 'list.edit', 'list.reorder', 'list.delete',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete', 'task.delete_own',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete',
       'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.bulk_delete', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
@@ -481,6 +481,9 @@ const PREREQUISITE_PERMISSIONS = {
   'project.archive': ['project.view'],
   'project.manage_members': ['project.view'],
   'project.assign_role': ['project.view'],
+
+  // Report operations
+  'report.view_project': ['project.view'],
 
   // Workspace operations
   'workspace.edit': ['workspace.view'],

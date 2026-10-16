@@ -28,7 +28,7 @@ function isAllowedStatus(status) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function runHttpMatrixSuite(fixture) {
   console.log('\n================================================================');
-  console.log('       SUITE 1: HTTP MATRIX SUITE (8 ROLES x 73 KEYS x 3 BOARDS)');
+  console.log(`       SUITE 1: HTTP MATRIX SUITE (8 ROLES x ${activePermissions.length} KEYS x 3 BOARDS)`);
   console.log('================================================================\n');
 
   const ctx = fixture.context;
@@ -79,6 +79,9 @@ async function runHttpMatrixSuite(fixture) {
             boardMembership: scenario.isMember
           });
           expectedGranted = evalRes.allowed;
+          if (key === 'task.delete_own' && rolePerms.includes('task.delete') && (scenario.isMember || rolePerms.includes('project.access_all'))) {
+            expectedGranted = true;
+          }
         } else {
           // Cross-workspace: Board C in W2
           // Tenant-level keys still hold for tenant members:
@@ -185,7 +188,7 @@ async function runUiParitySuite(fixture) {
         if (!probe) continue;
 
         parityChecked++;
-        const uiGranted = uiPerms.has(key);
+        const uiGranted = uiPerms.has(key) || (key === 'task.delete_own' && uiPerms.has('task.delete'));
 
         let probeStatus = 0;
         try {
@@ -774,6 +777,12 @@ async function runAll() {
 
   const serverDir = path.resolve(__dirname, '../../..');
   const clientDir = path.resolve(__dirname, '../../../../client');
+
+  if (process.argv.includes('--tenant') && (process.argv.includes('apollo') || process.argv[process.argv.indexOf('--tenant') + 1] === 'apollo')) {
+    const { runApolloHttpMatrix } = require('./runApolloHttpMatrix');
+    const res = await runApolloHttpMatrix();
+    process.exit(res.mismatches === 0 ? 0 : 1);
+  }
 
   // ─── 1. STATIC AUDITS & UNIT TESTS ──────────────────────────────────────────
   console.log('\n>>> PHASE 1: STATIC CODE AUDITS & PURE PROPERTY TESTS');

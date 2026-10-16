@@ -40,6 +40,33 @@ src/scripts/dumpRbacDataForExcel.js
 src/scripts/generateCoverageMatrix.js
 src/scripts/generatePermissionMatrixDoc.js
 src/scripts/generateRbacMigration.js
+src/scripts/generateRoleKeyListsDoc.js
+src/scripts/catalogDiff.js
+src/scripts/specReconciliation.js
+src/scripts/auditTenantsDetailed.js
+src/scripts/setupApolloCanaryAccounts.js
+src/scripts/*audit*.js
+src/scripts/*Audit*.js
+src/scripts/*Diff*.js
+src/scripts/*diff*.js
+src/scripts/*Reconciliation*.js
+src/scripts/*reconciliation*.js
+src/scripts/setup*.js
+src/scripts/*Apollo*.js
+src/scripts/*apollo*.js
+src/scripts/*canary*.js
+src/scripts/*Canary*.js
+
+# Permtest temporary runners, ad-hoc probes, and canary test helpers
+src/scripts/permtest/fixCanaryRoles.js
+src/scripts/permtest/runApolloHttpMatrix.js
+src/scripts/permtest/testItem*.js
+src/scripts/permtest/*Canary*.js
+src/scripts/permtest/*canary*.js
+src/scripts/permtest/*Apollo*.js
+src/scripts/permtest/*apollo*.js
+src/scripts/permtest/tmp_*.js
+src/scripts/permtest/scratch_*.js
 
 # Test results, matrices, catalogs, and test report documents
 src/scripts/permtest/reports/
@@ -65,6 +92,7 @@ server/public/uploads/
 
 # Backups and database dumps
 backups/
+snapshots/
 *.dump
 *.sql.gz
 *.sql.bak
