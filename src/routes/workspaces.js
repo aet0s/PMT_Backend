@@ -790,6 +790,7 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
         id: m.id,
         name: m.name,
         email: m.email,
+        avatar_url: m.avatar_url,
         role: m.role_name,
         role_id: m.role_id,
         is_owner: isOwner,
@@ -2231,6 +2232,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         u.id,
         u.name,
         u.email,
+        u.avatar_url,
         r.name as role_name,
         COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN c.id END) as assigned_tasks,
         COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN c.id END) as completed_tasks,
@@ -2246,7 +2248,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id = wm.workspace_id ${boardClause}
        WHERE wm.workspace_id = ?
-       GROUP BY u.id, u.name, u.email, r.name
+       GROUP BY u.id, u.name, u.email, u.avatar_url, r.name
        ORDER BY assigned_tasks DESC, u.name ASC`,
       [...boardParam, workspaceId]
     );
@@ -2409,6 +2411,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         id: m.id,
         name: m.name,
         email: m.email,
+        avatar_url: m.avatar_url,
         role: m.role_name || 'Member',
         assigned_tasks: assigned,
         todo_tasks: todo,
@@ -3427,7 +3430,7 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
     if (cardIds.length > 0) {
       // Fetch Assigners
       const caRes = await req.db.query(
-        `SELECT ca.card_id, u.id, u.name, u.email 
+        `SELECT ca.card_id, u.id, u.name, u.email, u.avatar_url 
          FROM card_assigners ca
          JOIN users u ON ca.user_id = u.id
          WHERE ca.card_id IN (?)
@@ -3436,12 +3439,12 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
       );
       caRes.forEach((row) => {
         if (!cardAssignersMap[row.card_id]) cardAssignersMap[row.card_id] = [];
-        cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+        cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
       });
 
       // Fetch Members / Assignees
       const cmRes = await req.db.query(
-        `SELECT cm.card_id, u.id, u.name, u.email 
+        `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url 
          FROM card_members cm
          JOIN users u ON cm.user_id = u.id
          WHERE cm.card_id IN (?)
@@ -3450,7 +3453,7 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
       );
       cmRes.forEach((row) => {
         if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
-        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
       });
 
       // Fetch Labels

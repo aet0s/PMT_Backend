@@ -225,8 +225,14 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
   }
 });
 
-// Middleware: allow EITHER valid requireAuth OR valid signed ?token=...
+// Middleware: allow valid requireAuth, valid signed ?token=..., OR public avatar images
 async function authOrPreviewToken(req, res, next) {
+  const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
+  if (relativeSubpath.startsWith('avatars/')) {
+    req.isAvatarRequest = true;
+    return next();
+  }
+
   if (req.query.token) {
     try {
       const payload = jwt.verify(req.query.token, getJwtSecret());
@@ -245,13 +251,57 @@ async function authOrPreviewToken(req, res, next) {
   return requireAuth(req, res, next);
 }
 
+// GET /api/files/avatars/:filename - Direct fallback for avatar filenames
+router.get('/avatars/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const candidateBases = [];
+  if (process.env.UPLOADS_DIR) candidateBases.push(path.resolve(process.env.UPLOADS_DIR));
+  candidateBases.push(path.resolve(__dirname, '../../uploads'));
+  candidateBases.push(path.resolve(__dirname, '../../../uploads'));
+  candidateBases.push(path.resolve(process.cwd(), 'uploads'));
+
+  for (const base of Array.from(new Set(candidateBases))) {
+    if (!fs.existsSync(base)) continue;
+    try {
+      const entries = fs.readdirSync(base, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const potentialPath = path.join(base, entry.name, 'avatars', filename);
+          if (fs.existsSync(potentialPath)) {
+            const ext = path.extname(potentialPath).toLowerCase();
+            const mimeMap = {
+              '.jpg': 'image/jpeg',
+              '.jpeg': 'image/jpeg',
+              '.png': 'image/png',
+              '.webp': 'image/webp',
+              '.gif': 'image/gif',
+              '.svg': 'image/svg+xml'
+            };
+            const contentType = mimeMap[ext] || 'image/png';
+            const stat = fs.statSync(potentialPath);
+            res.writeHead(200, {
+              'Content-Type': contentType,
+              'Content-Length': stat.size,
+              'Content-Disposition': 'inline',
+              'Cache-Control': 'public, max-age=86400',
+              'X-Content-Type-Options': 'nosniff'
+            });
+            return fs.createReadStream(potentialPath).pipe(res);
+          }
+        }
+      }
+    } catch {}
+  }
+  return res.status(404).json({ error: { message: 'Avatar not found', code: 'NOT_FOUND' } });
+});
+
 // GET /api/files/:tenantId/* - Tenant-isolated file download
 router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   const requestedTenantId = Number(req.params.tenantId);
   const userTenantId = req.tenant ? Number(req.tenant.id) : null;
 
-  // Item 6: Must return 403 if :tenantId differs from the token's tenant
-  if (userTenantId && requestedTenantId !== userTenantId) {
+  // Item 6: Must return 403 if :tenantId differs from the token's tenant (only for non-avatar files)
+  if (!req.isAvatarRequest && userTenantId && requestedTenantId !== userTenantId) {
     return res.status(403).json({
       error: { message: 'Access denied: Foreign tenant', code: 'FORBIDDEN' }
     });
@@ -263,25 +313,14 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
-  // Authorize by database record using unified userHasPermission (unless validated by preview token)
+  // Authorize by database record using unified userHasPermission (unless validated by preview token or avatar request)
   try {
     const { userHasPermission } = require('../middleware/permissions');
 
-    if (!req.isPreviewToken) {
-      if (relativeSubpath.startsWith('avatars/')) {
-        // Avatars stay tenant-wide for users within the same tenant
-        const avatarFilename = path.basename(relativeSubpath);
-        const userRows = await req.db.query(
-          'SELECT id FROM users WHERE avatar_url LIKE ?',
-          [`%${avatarFilename}`]
-        );
-        if (userRows.length === 0) {
-          return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
-        }
-      } else {
-        // All non-avatar files (cards attachments, etc.) require board membership + file.view
-        let boardId = null;
-        let workspaceId = null;
+    if (!req.isPreviewToken && !req.isAvatarRequest) {
+      // All non-avatar files (cards attachments, etc.) require board membership + file.view
+      let boardId = null;
+      let workspaceId = null;
 
         const fileUrl = `/api/files/${requestedTenantId}/${relativeSubpath}`;
         const attRows = await req.db.query(
@@ -327,7 +366,6 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
           });
         }
       }
-    }
   } catch (dbErr) {
     console.error('[FILES_DB_ERR]', dbErr.message);
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });

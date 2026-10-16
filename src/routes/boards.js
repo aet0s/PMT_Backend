@@ -272,7 +272,7 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
 
         // Fetch Card Assigners
         const caRes = await req.db.query(
-          `SELECT ca.card_id, u.id, u.name, u.email 
+          `SELECT ca.card_id, u.id, u.name, u.email, u.avatar_url 
            FROM card_assigners ca
            JOIN users u ON ca.user_id = u.id
            WHERE ca.card_id IN (?)
@@ -281,7 +281,7 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
         );
         caRes.forEach((row) => {
           if (!cardAssignersMap[row.card_id]) cardAssignersMap[row.card_id] = [];
-          cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email });
+          cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
         });
 
         // Fetch Card Members
@@ -331,7 +331,7 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
 
         // Fetch Comments
         const comRes = await req.db.query(
-          `SELECT com.id, com.card_id, com.user_id, com.body, com.created_at, u.name as author_name
+          `SELECT com.id, com.card_id, com.user_id, com.body, com.created_at, u.name as author_name, u.avatar_url as author_avatar
            FROM comments com
            JOIN users u ON com.user_id = u.id
            WHERE com.card_id IN (?)
@@ -345,7 +345,7 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
 
         // Fetch Attachments
         const attRes = await req.db.query(
-          `SELECT a.*, u.name as uploader_name
+          `SELECT a.*, u.name as uploader_name, u.avatar_url as uploader_avatar
            FROM attachments a
            LEFT JOIN users u ON a.uploaded_by_user_id = u.id
            WHERE a.card_id IN (?)

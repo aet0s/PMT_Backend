@@ -99,7 +99,7 @@ async function getFullCard(cardId, dbInstance = null) {
     card.checklists = checklists;
 
     const commentsRes = await db.query(
-      `SELECT c.*, u.name as author_name 
+      `SELECT c.*, u.name as author_name, u.avatar_url as author_avatar 
        FROM comments c 
        JOIN users u ON c.user_id = u.id 
        WHERE c.card_id = ? 
@@ -110,7 +110,7 @@ async function getFullCard(cardId, dbInstance = null) {
     card.comments_count = commentsRes.length;
 
     const attRes = await db.query(
-      `SELECT a.*, u.name as uploader_name 
+      `SELECT a.*, u.name as uploader_name, u.avatar_url as uploader_avatar 
        FROM attachments a 
        LEFT JOIN users u ON a.uploaded_by_user_id = u.id 
        WHERE a.card_id = ? 
@@ -1271,7 +1271,7 @@ router.get('/:id/comments', requireAuth, requirePermission('comment.view'), asyn
   const cardId = Number(req.params.id);
   try {
     const comments = await req.db.query(
-      `SELECT c.*, u.name as author_name 
+      `SELECT c.*, u.name as author_name, u.avatar_url as author_avatar 
        FROM comments c 
        JOIN users u ON c.user_id = u.id 
        WHERE c.card_id = ? 
@@ -1310,8 +1310,9 @@ router.post('/:id/comments', requireAuth, requirePermission('comment.create'), a
       const [resComment] = await tx.query('SELECT * FROM comments WHERE id = ?', [comExec.insertId]);
       comment = resComment;
 
-      const userRes = await tx.query('SELECT name FROM users WHERE id = ?', [req.user.id]);
+      const userRes = await tx.query('SELECT name, avatar_url FROM users WHERE id = ?', [req.user.id]);
       author_name = userRes[0]?.name || 'Unknown';
+      const author_avatar = userRes[0]?.avatar_url || null;
 
       const cardRes = await tx.query(
         'SELECT l.board_id, c.title FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
@@ -1376,11 +1377,13 @@ router.post('/:id/comments', requireAuth, requirePermission('comment.create'), a
 
     if (boardId) {
       fullCard = await getFullCard(cardId, req.db);
-      broadcastBoardEvent(boardId, 'comment:added', { cardId, comment: { ...comment, author_name }, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+      const author_avatar = (await req.db.query('SELECT avatar_url FROM users WHERE id = ?', [req.user.id]))[0]?.avatar_url || null;
+      broadcastBoardEvent(boardId, 'comment:added', { cardId, comment: { ...comment, author_name, author_avatar }, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
     await processOutbox(req.db, req.tenant?.id);
 
-    return res.status(201).json({ comment: { ...comment, author_name } });
+    const author_avatar = (await req.db.query('SELECT avatar_url FROM users WHERE id = ?', [req.user.id]))[0]?.avatar_url || null;
+    return res.status(201).json({ comment: { ...comment, author_name, author_avatar } });
   } catch (err) {
     next(err);
   }

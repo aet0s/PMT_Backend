@@ -22,13 +22,13 @@ async function getFullCard(cardId, db) {
   card.labels = labelsRes;
 
   const assignersRes = await db.query(
-    'SELECT u.id, u.name, u.email FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
+    'SELECT u.id, u.name, u.email, u.avatar_url FROM users u JOIN card_assigners ca ON u.id = ca.user_id WHERE ca.card_id = ? ORDER BY u.name ASC',
     [cardId]
   );
   card.assigners = assignersRes;
 
   const membersRes = await db.query(
-    'SELECT u.id, u.name, u.email FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
+    'SELECT u.id, u.name, u.email, u.avatar_url FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
     [cardId]
   );
   card.members = membersRes;
@@ -40,7 +40,7 @@ async function getFullCard(cardId, db) {
   card.checklists = checklistsRes;
 
   const commentsRes = await db.query(
-    `SELECT co.*, u.name as author_name FROM comments co
+    `SELECT co.*, u.name as author_name, u.avatar_url as author_avatar FROM comments co
      LEFT JOIN users u ON co.user_id = u.id
      WHERE co.card_id = ? ORDER BY co.created_at ASC`,
     [cardId]
