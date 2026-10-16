@@ -1,0 +1,90 @@
+{
+  "admin_exclusions": [
+    "workspace.delete",
+    "company.delete",
+    "company.export_data",
+    "billing.manage",
+    "company.manage_billing"
+  ],
+  "roles": {
+    "Owner": "all",
+    "Admin": "all_except_exclusions",
+    "Project Manager": [
+      "workspace.view", "company.view", "member.view", "member.invite_guest", "role.view", "team.view",
+      "project.view", "project.create", "project.edit_settings", "project.archive", "project.manage_members", "project.assign_role",
+      "project.manage_templates", "project.change_status", "project.duplicate", "project.change_visibility",
+      "list.create", "list.edit", "list.reorder", "list.delete",
+      "task.view", "task.create", "task.edit", "task.move", "task.assign", "task.assign_self", "task.complete", "task.delete", "task.delete_own",
+      "task.watch", "task.set_priority", "task.bulk_edit", "task.bulk_delete", "task.duplicate", "task.archive", "task.restore",
+      "subtask.create", "subtask.edit", "subtask.delete", "checklist.create", "checklist.edit", "checklist.delete",
+      "comment.view", "comment.create", "comment.edit_own", "comment.delete_own", "comment.delete_any",
+      "attachment.view", "attachment.upload", "attachment.delete_own", "attachment.delete_any", "attachment.version", "file.view",
+      "label.view", "label.create", "label.edit", "label.delete", "label.delete_own",
+      "custom_field.view", "custom_field.create", "custom_field.edit", "custom_field.delete",
+      "milestone.view", "milestone.create", "milestone.edit", "milestone.delete",
+      "sprint.view", "sprint.create", "sprint.edit", "sprint.start", "sprint.complete", "sprint.delete",
+      "backlog.view", "backlog.reorder", "epic.view", "epic.create", "epic.edit", "epic.delete",
+      "time.view_own", "time.log", "time.edit_own", "time.view_all", "time.approve_timesheet",
+      "report.view_project", "report.view_team", "report.export", "dashboard.view_project",
+      "view.view", "view.create", "view.edit", "view.delete", "import_export.import", "import_export.export",
+      "archive.view", "archive.restore", "activity.view",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ],
+    "Team Lead": [
+      "workspace.view", "company.view", "member.view", "team.view",
+      "project.view", "list.create", "list.edit", "list.reorder",
+      "task.view", "task.create", "task.edit", "task.move", "task.assign", "task.assign_self", "task.complete", "task.delete_own",
+      "task.watch", "task.set_priority", "task.bulk_edit", "task.duplicate", "task.archive", "task.restore",
+      "subtask.create", "subtask.edit", "subtask.delete", "checklist.create", "checklist.edit", "checklist.delete",
+      "comment.view", "comment.create", "comment.edit_own", "comment.delete_own", "comment.delete_any",
+      "attachment.view", "attachment.upload", "attachment.delete_own", "attachment.delete_any", "file.view",
+      "label.view", "label.create", "label.edit", "label.delete_own",
+      "custom_field.view", "custom_field.create", "custom_field.edit", "milestone.view", "milestone.create", "milestone.edit",
+      "sprint.view", "sprint.create", "sprint.edit", "sprint.start", "sprint.complete", "backlog.view", "backlog.reorder",
+      "epic.view", "epic.create", "epic.edit",
+      "time.view_own", "time.log", "time.edit_own", "time.view_all",
+      "report.view_project", "report.view_team", "dashboard.view_project",
+      "view.view", "view.create", "view.edit", "view.delete", "import_export.export",
+      "archive.view", "archive.restore", "activity.view",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ],
+    "Team Member": [
+      "workspace.view", "company.view", "member.view", "team.view",
+      "project.view",
+      "task.view", "task.create", "task.edit", "task.move", "task.assign_self", "task.complete", "task.delete_own",
+      "task.watch", "task.set_priority", "task.duplicate", "task.archive", "task.restore",
+      "subtask.create", "subtask.edit", "subtask.delete", "checklist.create", "checklist.edit", "checklist.delete",
+      "comment.view", "comment.create", "comment.edit_own", "comment.delete_own",
+      "attachment.view", "attachment.upload", "attachment.delete_own", "file.view",
+      "label.view", "label.create", "label.delete_own",
+      "custom_field.view", "milestone.view", "sprint.view", "backlog.view", "epic.view",
+      "time.view_own", "time.log", "time.edit_own",
+      "report.view_project", "dashboard.view_project",
+      "view.view", "view.create", "view.edit", "view.delete",
+      "archive.view", "archive.restore", "activity.view",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ],
+    "Viewer": [
+      "workspace.view", "company.view", "member.view", "team.view",
+      "project.view", "task.view", "task.watch", "comment.view", "attachment.view", "file.view", "label.view",
+      "custom_field.view", "milestone.view", "sprint.view", "backlog.view", "epic.view",
+      "report.view_project", "dashboard.view_project", "view.view", "activity.view",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ],
+    "Auditor": [
+      "workspace.view", "company.view", "member.view", "role.view", "team.view",
+      "project.access_all", "project.view", "task.view", "view.view", "comment.view", "attachment.view", "file.view", "label.view",
+      "custom_field.view", "milestone.view", "sprint.view", "backlog.view", "epic.view",
+      "audit.view", "audit.export", "archive.view", "activity.view",
+      "report.view_project", "report.view_team", "report.view_all", "report.export",
+      "dashboard.view_project", "dashboard.view_executive", "time.view_all",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ],
+    "Guest": [
+      "project.view", "view.view", "task.view", "task.watch",
+      "comment.view", "comment.create", "comment.edit_own", "comment.delete_own",
+      "attachment.view", "file.view", "label.view", "member.view",
+      "notification.view_own", "notification.manage_own", "session.view_own", "session.revoke_own", "search.use"
+    ]
+  }
+}

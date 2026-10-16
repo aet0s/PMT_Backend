@@ -17,13 +17,19 @@
 //   - A route must have exactly one of: permission | publicReason | selfScoped.
 
 const ROUTE_PERMISSIONS = new Map([
-  // ─── Auth & Onboarding (Public / Self) ───────────────────────────────────
+  ['GET /api/auth/check-email',             { publicReason: 'Pre-login email lookup — unauthenticated',                           scope: 'company' }],
   ['POST /api/auth/register-company',       { publicReason: 'Company registration — unauthenticated by design',                    scope: 'company' }],
-  ['POST /api/auth/verify-registration',    { publicReason: 'OTP verification for pending registration',                           scope: 'company' }],
+  ['POST /api/auth/register/send-otp',      { publicReason: 'Onboarding OTP send',                                                scope: 'company' }],
+  ['POST /api/auth/register/verify-otp',    { publicReason: 'Onboarding OTP verify',                                              scope: 'company' }],
+  ['POST /api/auth/verify-registration',    { publicReason: 'Registration OTP verification',                                      scope: 'company' }],
   ['POST /api/auth/register',               { publicReason: 'Direct user registration via invite token',                           scope: 'company' }],
   ['POST /api/auth/login',                  { publicReason: 'Credential login step 1',                                            scope: 'company' }],
   ['POST /api/auth/2fa/verify-login',       { publicReason: 'TOTP / recovery-code login step 2 (pre-session)',                    scope: 'company' }],
   ['POST /api/auth/refresh',                { publicReason: 'Rotating refresh-token cookie exchange',                             scope: 'company' }],
+  ['POST /api/auth/forgot-password/send-otp', { publicReason: 'Password reset OTP send',                                          scope: 'company' }],
+  ['POST /api/auth/forgot-password/verify-otp', { publicReason: 'Password reset OTP verify',                                      scope: 'company' }],
+  ['POST /api/auth/forgot-password/verify-token', { publicReason: 'Password reset token verification',                            scope: 'company' }],
+  ['POST /api/auth/forgot-password/reset',  { publicReason: 'Password reset submission',                                          scope: 'company' }],
 
   // ─── Session management (self-scoped — owns their own sessions) ───────────
   ['GET /api/auth/sessions',                { selfScoped: 'session.view_own — user reads their own sessions',                     scope: 'company' }],
@@ -36,6 +42,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/auth/2fa/generate',           { selfScoped: 'User generates their own TOTP secret',                                  scope: 'company' }],
   ['POST /api/auth/2fa/setup',              { selfScoped: 'Alias for 2fa/generate',                                               scope: 'company' }],
   ['POST /api/auth/2fa/confirm',            { selfScoped: 'User confirms their own TOTP setup',                                   scope: 'company' }],
+  ['POST /api/auth/2fa/verify',             { selfScoped: 'Alias for 2fa/confirm',                                                scope: 'company' }],
   ['POST /api/auth/2fa/disable',            { selfScoped: 'User disables their own TOTP',                                         scope: 'company' }],
   ['GET /api/auth/2fa/status',              { selfScoped: 'User reads their own 2FA status',                                      scope: 'company' }],
 
@@ -69,6 +76,10 @@ const ROUTE_PERMISSIONS = new Map([
   ['DELETE /api/workspaces/:id/members/:userId',                      { permission: 'member.remove',              scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-password',{ permission: 'member.reset_password',      scope: 'company' }],
   ['POST /api/workspaces/:workspaceId/members/:userId/reset-2fa',     { permission: 'member.reset_2fa',           scope: 'company' }],
+  ['POST /api/workspaces/:id/members/:userId/deactivate',             { permission: 'member.deactivate',          scope: 'company' }],
+  ['POST /api/workspaces/:id/members/:userId/reactivate',             { permission: 'member.deactivate',          scope: 'company' }],
+  ['GET /api/workspaces/:id/security',                                { permission: 'company.manage_security',    scope: 'company' }],
+  ['PATCH /api/workspaces/:id/security',                              { permission: 'company.manage_security',    scope: 'company' }],
   ['GET /api/workspaces/:id/company-members',                         { permission: 'member.view',                scope: 'company' }],
   ['PATCH /api/workspaces/:id/company-members/:userId/role',          { permission: 'member.assign_role',         scope: 'company' }],
   ['POST /api/workspaces/:id/company-members/:userId/workspaces',     { permission: 'member.invite',              scope: 'company' }],
@@ -96,6 +107,7 @@ const ROUTE_PERMISSIONS = new Map([
   // workspace-members listed for board: authenticated, returns members of the parent workspace
   ['GET /api/boards/:id/workspace-members',  { permission: 'member.view',           scope: 'project', note: 'returns parent workspace members; enforced inline' }],
   ['POST /api/boards/:id/members',           { permission: 'project.manage_members',scope: 'project' }],
+  ['PATCH /api/boards/:id/members/:userId/role', { permission: 'project.assign_role', scope: 'project' }],
   ['DELETE /api/boards/:id/members/:userId', { permission: 'project.manage_members',scope: 'project' }],
   ['GET /api/boards/:id/labels',             { permission: 'label.view',            scope: 'project', note: 'requires label.view or project.view' }],
   ['POST /api/boards/:id/labels',            { permission: 'label.create',          scope: 'project' }],
@@ -154,6 +166,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/invitations',                  { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
   ['POST /api/invitations',                 { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
   ['POST /api/invitations/:id/regenerate',  { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
+  ['POST /api/invitations/:id/resend',      { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
   // POST accept: authenticated; handler validates token + tenant membership
   ['POST /api/invitations/accept',          { selfScoped: 'Accepts a valid signed invite token; no RBAC key needed', scope: 'company' }],
   ['DELETE /api/invitations/:id',           { permission: 'member.invite', scope: 'company', note: 'enforced via requireWorkspaceAdmin inline' }],
@@ -171,6 +184,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['PATCH /api/notifications/:id/read',     { selfScoped: 'notification.manage_own — user marks their own notification read',    scope: 'company' }],
   ['PATCH /api/notifications/:id/unread',   { selfScoped: 'notification.manage_own — user marks their own notification unread',  scope: 'company' }],
   ['PATCH /api/notifications/read-all',     { selfScoped: 'notification.manage_own — user marks all their notifications read',   scope: 'company' }],
+  ['PATCH /api/notifications/board/:id/read-all', { selfScoped: 'notification.manage_own — user marks board notifications read', scope: 'company' }],
   ['DELETE /api/notifications/:id',         { selfScoped: 'notification.manage_own — user deletes their own notification',       scope: 'company' }],
   ['DELETE /api/notifications/clear/read',  { selfScoped: 'notification.manage_own — user clears all read notifications',        scope: 'company' }],
 

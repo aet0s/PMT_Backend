@@ -79,37 +79,26 @@ async function safeQuery(db, sql, params = []) {
   return res || [];
 }
 
-    // 3. Deprecate database keys that are no longer present in the registry
-    const registryKeys = new Set(PERMISSIONS.map((p) => p.key));
-    const dbPermRows = await safeQuery(db, 'SELECT id, `key`, description FROM permissions');
-    for (const row of dbPermRows) {
-      if (!registryKeys.has(row.key)) {
-        const desc = row.description || '';
-        const newDesc = desc.startsWith('[DEPRECATED]') ? desc : `[DEPRECATED] ${desc}`.trim();
-        await db.execute(
-          'UPDATE permissions SET planned = 1, description = ? WHERE id = ?',
-          [newDesc, row.id]
-        );
-      }
-    }
-
-    // Clean up role_permissions for any planned permissions
+    // 3. Clean up role_permissions for any planned permissions (planned keys must never be granted)
     await db.execute(
       `DELETE rp FROM role_permissions rp
        JOIN permissions p ON rp.permission_id = p.id
        WHERE p.planned = 1`
     );
 
-    // 4. Ensure all 6 system roles exist with proper ranks (deduplicated by name WHERE workspace_id IS NULL)
+    // 4. Ensure all 8 system roles exist with proper ranks (deduplicated by name WHERE workspace_id IS NULL)
     const SYSTEM_ROLE_SPECS = [
       { name: 'Owner', rank: 100, is_editable: 0 },
       { name: 'Admin', rank: 80, is_editable: 1 },
       { name: 'Project Manager', rank: 60, is_editable: 1 },
+      { name: 'Team Lead', rank: 50, is_editable: 1 },
       { name: 'Team Member', rank: 40, is_editable: 1 },
       { name: 'Viewer', rank: 20, is_editable: 1 },
+      { name: 'Auditor', rank: 15, is_editable: 1 },
       { name: 'Guest', rank: 10, is_editable: 1 }
     ];
 
+    const newlyCreatedRoleNames = new Set();
     for (const spec of SYSTEM_ROLE_SPECS) {
       const existingRows = await safeQuery(
         db,
@@ -136,6 +125,7 @@ async function safeQuery(db, sql, params = []) {
           'INSERT INTO roles (name, is_system, is_editable, rank, workspace_id) VALUES (?, 1, ?, ?, NULL)',
           [spec.name, spec.is_editable, spec.rank]
         );
+        newlyCreatedRoleNames.add(spec.name);
       }
     }
 
@@ -143,14 +133,23 @@ async function safeQuery(db, sql, params = []) {
     const activePermsRes = await safeQuery(db, 'SELECT id, `key` FROM permissions WHERE planned = 0');
     const activePermMap = new Map(activePermsRes.map((p) => [p.key, p.id]));
 
-    // 6. Owner receives ALL active (non-planned) permissions automatically
+    // 6. Check existing grants for Owner to identify newly introduced or newly promoted permissions
     const ownerRoleRows = await safeQuery(
       db,
       "SELECT id FROM roles WHERE (name = 'Owner' OR name = 'Super Admin') AND is_system = 1 AND workspace_id IS NULL LIMIT 1"
     );
     const ownerRole = ownerRoleRows[0];
 
+    let newlyPromotedPerms = [];
     if (ownerRole) {
+      const existingOwnerPermRows = await safeQuery(
+        db,
+        'SELECT permission_id FROM role_permissions WHERE role_id = ?',
+        [ownerRole.id]
+      );
+      const existingOwnerPermIds = new Set(existingOwnerPermRows.map(r => r.permission_id));
+      newlyPromotedPerms = activePermsRes.filter(p => !existingOwnerPermIds.has(p.id));
+
       for (const p of activePermsRes) {
         await db.execute(
           'INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
@@ -159,9 +158,40 @@ async function safeQuery(db, sql, params = []) {
       }
     }
 
-    // 7. Admin and other system roles receive permissions per registry definition
+    // 6b. Admin receives:
+    // - ALL default permissions IF newly created or options.forceRoles = true
+    // - Newly promoted / newly introduced permissions automatically (except Owner-exclusive workspace.delete)
+    const adminRoleRows = await safeQuery(
+      db,
+      "SELECT id FROM roles WHERE name = 'Admin' AND is_system = 1 AND workspace_id IS NULL LIMIT 1"
+    );
+    const adminRole = adminRoleRows[0];
+
+    if (adminRole) {
+      if (newlyCreatedRoleNames.has('Admin') || options.forceRoles) {
+        for (const p of activePermsRes) {
+          if (p.key === 'workspace.delete') continue;
+          await db.execute(
+            'INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+            [adminRole.id, p.id]
+          );
+        }
+      } else if (newlyPromotedPerms.length > 0) {
+        for (const p of newlyPromotedPerms) {
+          if (p.key === 'workspace.delete') continue;
+          await db.execute(
+            'INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+            [adminRole.id, p.id]
+          );
+        }
+      }
+    }
+
+    // 7. Other system roles receive permissions ONLY IF newly created or options.forceRoles = true
     for (const [roleName, roleDef] of Object.entries(SYSTEM_ROLES)) {
-      if (roleName === 'Owner') continue;
+      if (roleName === 'Owner' || roleName === 'Admin') continue;
+      if (!newlyCreatedRoleNames.has(roleName) && !options.forceRoles) continue;
+
       const rRows = await safeQuery(
         db,
         'SELECT id FROM roles WHERE name = ? AND is_system = 1 AND workspace_id IS NULL LIMIT 1',

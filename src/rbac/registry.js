@@ -11,8 +11,7 @@ const PERMISSIONS = [
   // --- Company ---
   { key: 'company.view', module: 'company', label: 'View Company Info', description: 'View company profile and details', scope: 'company', dangerous: false, planned: true },
   { key: 'company.edit_settings', module: 'company', label: 'Edit Company Settings', description: 'Modify company preferences and profile', scope: 'company', dangerous: true, planned: true },
-  { key: 'company.manage_security', module: 'company', label: 'Manage Security Policies', description: 'Configure 2FA requirements and authentication policies', scope: 'company', dangerous: true, planned: true },
-  { key: 'company.manage_billing', module: 'company', label: 'Manage Billing', description: 'Access and modify subscriptions and billing', scope: 'company', dangerous: true, planned: true },
+  { key: 'company.manage_security', module: 'company', label: 'Manage Security Policies', description: 'Configure 2FA requirements and authentication policies', scope: 'company', dangerous: true },
   { key: 'company.delete', module: 'company', label: 'Delete Company', description: 'Permanently delete company and all tenant databases', scope: 'company', dangerous: true, planned: true },
   { key: 'company.export_data', module: 'company', label: 'Export Company Data', description: 'Generate and download full tenant database export', scope: 'company', dangerous: true, planned: true },
 
@@ -33,9 +32,10 @@ const PERMISSIONS = [
   // --- Member ---
   { key: 'member.view', module: 'member', label: 'View Members', description: 'View workspace member directory', scope: 'company', dangerous: false },
   { key: 'member.invite', module: 'member', label: 'Invite Members', description: 'Generate and send invitation links', scope: 'company', dangerous: false },
+  { key: 'member.invite_guest', module: 'member', label: 'Invite Guest Members', description: 'Invite external collaborators to specific boards', scope: 'company', dangerous: false },
   { key: 'member.remove', module: 'member', label: 'Remove Members', description: 'Remove members from workspace', scope: 'company', dangerous: true },
   { key: 'member.assign_role', module: 'member', label: 'Assign Roles', description: 'Change roles of workspace members', scope: 'company', dangerous: true },
-  { key: 'member.deactivate', module: 'member', label: 'Deactivate Members', description: 'Temporarily deactivate member accounts', scope: 'company', dangerous: true, planned: true },
+  { key: 'member.deactivate', module: 'member', label: 'Deactivate Members', description: 'Temporarily deactivate member accounts', scope: 'company', dangerous: true },
   { key: 'member.reset_password', module: 'member', label: 'Reset Password', description: 'Set temporary password for lower-ranked members', scope: 'company', dangerous: true },
   { key: 'member.reset_2fa', module: 'member', label: 'Reset 2FA', description: 'Reset two-factor authentication for lower-ranked members', scope: 'company', dangerous: true },
 
@@ -44,18 +44,20 @@ const PERMISSIONS = [
   { key: 'role.create', module: 'role', label: 'Create Custom Roles', description: 'Create new custom workspace roles', scope: 'company', dangerous: true },
   { key: 'role.edit', module: 'role', label: 'Edit Custom Roles', description: 'Modify permissions for custom roles', scope: 'company', dangerous: true },
   { key: 'role.delete', module: 'role', label: 'Delete Custom Roles', description: 'Delete custom roles not in use', scope: 'company', dangerous: true },
-  { key: 'role.assign', module: 'role', label: 'Assign Roles to Users', description: 'Assign roles to workspace members', scope: 'company', dangerous: true },
 
   // --- Project (Boards) ---
+  { key: 'project.access_all', module: 'project', label: 'Access All Projects', description: 'Permissions apply across all workspace boards without explicit board membership', scope: 'company', dangerous: true },
   { key: 'project.view', module: 'project', label: 'View Project', description: 'Access and view project boards', scope: 'project', dangerous: false },
   { key: 'project.create', module: 'project', label: 'Create Project', description: 'Create new project boards', scope: 'company', dangerous: false },
   { key: 'project.edit_settings', module: 'project', label: 'Edit Project Settings', description: 'Rename, recolor, and configure board settings', scope: 'project', dangerous: false },
   { key: 'project.delete', module: 'project', label: 'Delete Project', description: 'Permanently delete project board', scope: 'project', dangerous: true },
   { key: 'project.archive', module: 'project', label: 'Archive Project', description: 'Archive or restore project boards', scope: 'project', dangerous: false },
   { key: 'project.manage_members', module: 'project', label: 'Manage Project Members', description: 'Add or remove members from specific projects', scope: 'project', dangerous: false },
+  { key: 'project.assign_role', module: 'project', label: 'Assign Project Roles', description: 'Assign or modify board-level member roles', scope: 'project', dangerous: true },
   { key: 'project.manage_templates', module: 'project', label: 'Manage Templates', description: 'Save or apply board templates', scope: 'project', dangerous: false, planned: true },
   { key: 'project.change_status', module: 'project', label: 'Change Project Status', description: 'Update project health and lifecycle status', scope: 'project', dangerous: false, planned: true },
-  { key: 'project.view_dashboard', module: 'project', label: 'View Project Dashboard', description: 'View analytics and burndown metrics', scope: 'project', dangerous: false, planned: true },
+  { key: 'project.duplicate', module: 'project', label: 'Duplicate Project', description: 'Clone project board and structure', scope: 'project', dangerous: false, planned: true },
+  { key: 'project.change_visibility', module: 'project', label: 'Change Project Visibility', description: 'Toggle board public or private visibility', scope: 'project', dangerous: false, planned: true },
 
   // --- View ---
   { key: 'view.view', module: 'view', label: 'View Saved Views', description: 'Access Kanban, list, and table views', scope: 'project', dangerous: false, planned: true },
@@ -74,14 +76,15 @@ const PERMISSIONS = [
   { key: 'task.create', module: 'task', label: 'Create Tasks', description: 'Add new cards to project lists', scope: 'project', dangerous: false },
   { key: 'task.edit', module: 'task', label: 'Edit Tasks', description: 'Update card title, description, dates, labels', scope: 'project', dangerous: false },
   { key: 'task.move', module: 'task', label: 'Move Tasks', description: 'Drag and reorder cards within or across lists', scope: 'project', dangerous: false },
-  { key: 'task.delete', module: 'task', label: 'Delete Tasks', description: 'Permanently remove cards', scope: 'project', dangerous: true },
   { key: 'task.assign', module: 'task', label: 'Assign Tasks', description: 'Assign or unassign members on cards', scope: 'project', dangerous: false },
+  { key: 'task.assign_self', module: 'task', label: 'Assign Self to Tasks', description: 'Assign or unassign yourself on cards', scope: 'project', dangerous: false },
+  { key: 'task.complete', module: 'task', label: 'Complete Tasks', description: 'Mark tasks done or reopen completed tasks', scope: 'project', dangerous: false },
+  { key: 'task.delete', module: 'task', label: 'Delete Tasks', description: 'Permanently remove cards', scope: 'project', dangerous: true },
+  { key: 'task.delete_own', module: 'task', label: 'Delete Own Tasks', description: 'Delete cards created by yourself', scope: 'project', dangerous: true },
   { key: 'task.watch', module: 'task', label: 'Watch Tasks', description: 'Subscribe to card notifications', scope: 'project', dangerous: false, planned: true },
   { key: 'task.set_priority', module: 'task', label: 'Set Priority', description: 'Change task priority level', scope: 'project', dangerous: false, planned: true },
   { key: 'task.bulk_edit', module: 'task', label: 'Bulk Edit Tasks', description: 'Batch update multiple cards', scope: 'project', dangerous: false, planned: true },
   { key: 'task.bulk_delete', module: 'task', label: 'Bulk Delete Tasks', description: 'Batch delete multiple cards', scope: 'project', dangerous: true, planned: true },
-  { key: 'task.import', module: 'task', label: 'Import Tasks', description: 'Import tasks from CSV/Excel', scope: 'project', dangerous: false, planned: true },
-  { key: 'task.export', module: 'task', label: 'Export Tasks', description: 'Export tasks to CSV/Excel', scope: 'project', dangerous: false, planned: true },
   { key: 'task.duplicate', module: 'task', label: 'Duplicate Tasks', description: 'Clone card with checklist and labels', scope: 'project', dangerous: false },
   { key: 'task.archive', module: 'task', label: 'Archive Tasks', description: 'Archive cards without deleting', scope: 'project', dangerous: false },
   { key: 'task.restore', module: 'task', label: 'Restore Tasks', description: 'Restore archived cards', scope: 'project', dangerous: false },
@@ -124,6 +127,7 @@ const PERMISSIONS = [
   { key: 'label.create', module: 'label', label: 'Create Labels', description: 'Create new colored labels', scope: 'project', dangerous: false },
   { key: 'label.edit', module: 'label', label: 'Edit Labels', description: 'Modify label title and color', scope: 'project', dangerous: false },
   { key: 'label.delete', module: 'label', label: 'Delete Labels', description: 'Delete board labels', scope: 'project', dangerous: false },
+  { key: 'label.delete_own', module: 'label', label: 'Delete Own Labels', description: 'Delete custom labels created by yourself', scope: 'project', dangerous: false },
 
   // --- Custom Field ---
   { key: 'custom_field.view', module: 'custom_field', label: 'View Custom Fields', description: 'View custom attributes on cards', scope: 'project', dangerous: false, planned: true },
@@ -183,7 +187,7 @@ const PERMISSIONS = [
   { key: 'audit.export', module: 'audit', label: 'Export Audit Log', description: 'Download CSV of compliance audit logs', scope: 'company', dangerous: true },
 
   // --- Activity ---
-  { key: 'activity.view', module: 'activity', label: 'View Activity Feed', description: 'View card and board event stream', scope: 'project', dangerous: false },
+  { key: 'activity.view', module: 'activity', label: 'View Activity Feed', description: 'View card and board event stream', scope: 'company', dangerous: false },
 
   // --- API Key ---
   { key: 'api_key.view', module: 'api_key', label: 'View API Keys', description: 'List created developer API keys', scope: 'company', dangerous: false, planned: true },
@@ -206,7 +210,7 @@ const PERMISSIONS = [
 
   // --- Archive ---
   { key: 'archive.view', module: 'archive', label: 'View Archive', description: 'View archived workspaces, boards, and cards', scope: 'company', dangerous: false },
-  { key: 'archive.restore', module: 'archive', label: 'Restore from Archive', description: 'Restore archived resources to active state', scope: 'company', dangerous: false },
+  { key: 'archive.restore', module: 'archive', label: 'Restore from Archive', description: 'Restore archived resources to active state', scope: 'project', dangerous: false },
   { key: 'archive.permanent_delete', module: 'archive', label: 'Permanent Delete', description: 'Permanently purge archived items from database', scope: 'company', dangerous: true },
 
   // --- Search ---
@@ -218,40 +222,7 @@ const PERMISSIONS = [
 ];
 
 /**
- * Legacy permission key mapping for 100% backward compatibility
- */
-const LEGACY_PERMISSION_ALIASES = {
-  'workspace.edit_settings': 'workspace.edit',
-  'workspace.view_billing': 'billing.view',
-  'workspace.manage_roles': 'role.create',
-  'board.view': 'project.view',
-  'board.create': 'project.create',
-  'board.edit_settings': 'project.edit_settings',
-  'board.delete': 'project.delete',
-  'board.archive': 'project.archive',
-  'board.manage_members': 'project.manage_members',
-  'card.view': 'task.view',
-  'card.create': 'task.create',
-  'card.edit': 'task.edit',
-  'card.delete': 'task.delete',
-  'card.move': 'task.move',
-  'card.comment': 'comment.create',
-  'card.manage_attachments': 'attachment.upload',
-  'card.assign_members': 'task.assign',
-  'member.view_all': 'member.view',
-  'workspace.invite_members': 'member.invite',
-  'workspace.manage_members': 'member.assign_role'
-};
-
-// Reverse map
-const REVERSE_ALIASES = {};
-for (const [oldKey, newKey] of Object.entries(LEGACY_PERMISSION_ALIASES)) {
-  if (!REVERSE_ALIASES[newKey]) REVERSE_ALIASES[newKey] = [];
-  REVERSE_ALIASES[newKey].push(oldKey);
-}
-
-/**
- * 6 System Roles (seeded per tenant, is_system = 1)
+ * 8 System Roles (source of truth per Section 4)
  */
 const SYSTEM_ROLES = {
   Owner: {
@@ -271,7 +242,7 @@ const SYSTEM_ROLES = {
     is_editable: 1,
     description: 'Company-wide administrator. All permissions except company deletion, billing, and ownership transfer.',
     permissions: PERMISSIONS.filter(
-      (p) => !['company.delete', 'company.manage_billing', 'billing.manage'].includes(p.key)
+      (p) => !['workspace.delete', 'company.delete', 'company.export_data', 'billing.manage', 'company.manage_billing'].includes(p.key)
     ).map((p) => p.key)
   },
   'Project Manager': {
@@ -281,17 +252,53 @@ const SYSTEM_ROLES = {
     is_system: 1,
     is_editable: 1,
     description: 'Manages projects, tasks, workflows, and team members. Cannot manage company settings or security.',
-    permissions: PERMISSIONS.filter((p) => {
-      const pmModules = [
-        'project', 'view', 'list', 'task', 'subtask', 'checklist', 'comment',
-        'attachment', 'file', 'session', 'label', 'custom_field', 'milestone',
-        'sprint', 'backlog', 'epic', 'time', 'report', 'dashboard', 'notification',
-        'activity', 'webhook', 'import_export', 'archive', 'search'
-      ];
-      if (pmModules.includes(p.module)) return true;
-      if (['member.invite', 'member.view', 'team.view'].includes(p.key)) return true;
-      return false;
-    }).map((p) => p.key)
+    permissions: [
+      'workspace.view', 'company.view', 'member.view', 'member.invite_guest', 'role.view', 'team.view',
+      'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
+      'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
+      'list.create', 'list.edit', 'list.reorder', 'list.delete',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete', 'task.delete_own',
+      'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.bulk_delete', 'task.duplicate', 'task.archive', 'task.restore',
+      'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
+      'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
+      'attachment.view', 'attachment.upload', 'attachment.delete_own', 'attachment.delete_any', 'attachment.version', 'file.view',
+      'label.view', 'label.create', 'label.edit', 'label.delete', 'label.delete_own',
+      'custom_field.view', 'custom_field.create', 'custom_field.edit', 'custom_field.delete',
+      'milestone.view', 'milestone.create', 'milestone.edit', 'milestone.delete',
+      'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'sprint.delete',
+      'backlog.view', 'backlog.reorder', 'epic.view', 'epic.create', 'epic.edit', 'epic.delete',
+      'time.view_own', 'time.log', 'time.edit_own', 'time.view_all', 'time.approve_timesheet',
+      'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
+      'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.import', 'import_export.export',
+      'archive.view', 'archive.restore', 'activity.view',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+    ]
+  },
+  'Team Lead': {
+    name: 'Team Lead',
+    aliases: ['Lead'],
+    rank: 50,
+    is_system: 1,
+    is_editable: 1,
+    description: 'Leads project execution and list management, reviews team progress and assigns tasks.',
+    permissions: [
+      'workspace.view', 'company.view', 'member.view', 'team.view',
+      'project.view', 'list.create', 'list.edit', 'list.reorder',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own',
+      'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.duplicate', 'task.archive', 'task.restore',
+      'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
+      'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
+      'attachment.view', 'attachment.upload', 'attachment.delete_own', 'attachment.delete_any', 'file.view',
+      'label.view', 'label.create', 'label.edit', 'label.delete_own',
+      'custom_field.view', 'custom_field.create', 'custom_field.edit', 'milestone.view', 'milestone.create', 'milestone.edit',
+      'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
+      'epic.view', 'epic.create', 'epic.edit',
+      'time.view_own', 'time.log', 'time.edit_own', 'time.view_all',
+      'report.view_project', 'report.view_team', 'dashboard.view_project',
+      'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.export',
+      'archive.view', 'archive.restore', 'activity.view',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+    ]
   },
   'Team Member': {
     name: 'Team Member',
@@ -301,51 +308,20 @@ const SYSTEM_ROLES = {
     is_editable: 1,
     description: 'Collaborates on assigned projects, creates and moves tasks, and logs time.',
     permissions: [
-      'workspace.view',
+      'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view',
-      'view.view',
-      'list.create',
-      'task.view',
-      'task.create',
-      'task.edit',
-      'task.move',
-      'task.archive',
-      'task.restore',
-      'task.duplicate',
-      'task.assign',
-      'task.watch',
-      'subtask.create',
-      'subtask.edit',
-      'checklist.create',
-      'checklist.edit',
-      'checklist.delete',
-      'comment.view',
-      'comment.create',
-      'comment.edit_own',
-      'comment.delete_own',
-      'attachment.view',
-      'attachment.upload',
-      'attachment.delete_own',
-      'file.view',
-      'session.view_own',
-      'session.revoke_own',
-      'label.view',
-      'label.create',
-      'label.edit',
-      'custom_field.view',
-      'milestone.view',
-      'sprint.view',
-      'backlog.view',
-      'epic.view',
-      'time.view_own',
-      'time.log',
-      'time.edit_own',
-      'report.view_project',
-      'dashboard.view_project',
-      'notification.view_own',
-      'notification.manage_own',
-      'activity.view',
-      'search.use'
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own',
+      'task.watch', 'task.set_priority', 'task.duplicate', 'task.archive', 'task.restore',
+      'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
+      'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',
+      'attachment.view', 'attachment.upload', 'attachment.delete_own', 'file.view',
+      'label.view', 'label.create', 'label.delete_own',
+      'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
+      'time.view_own', 'time.log', 'time.edit_own',
+      'report.view_project', 'dashboard.view_project',
+      'view.view', 'view.create', 'view.edit', 'view.delete',
+      'archive.view', 'archive.restore', 'activity.view',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   Viewer: {
@@ -355,9 +331,30 @@ const SYSTEM_ROLES = {
     is_system: 1,
     is_editable: 1,
     description: 'Read-only access to projects and tasks. Cannot modify or create resources.',
-    permissions: PERMISSIONS.filter(
-      (p) => p.key.endsWith('.view') || ['search.use', 'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own'].includes(p.key)
-    ).map((p) => p.key)
+    permissions: [
+      'workspace.view', 'company.view', 'member.view', 'team.view',
+      'project.view', 'task.view', 'task.watch', 'comment.view', 'attachment.view', 'file.view', 'label.view',
+      'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
+      'report.view_project', 'dashboard.view_project', 'view.view', 'activity.view',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+    ]
+  },
+  Auditor: {
+    name: 'Auditor',
+    aliases: [],
+    rank: 15,
+    is_system: 1,
+    is_editable: 1,
+    description: 'Read-only compliance and auditing role across all workspace projects and reports.',
+    permissions: [
+      'workspace.view', 'company.view', 'member.view', 'role.view', 'team.view',
+      'project.access_all', 'project.view', 'task.view', 'view.view', 'comment.view', 'attachment.view', 'file.view', 'label.view',
+      'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
+      'audit.view', 'audit.export', 'archive.view', 'activity.view',
+      'report.view_project', 'report.view_team', 'report.view_all', 'report.export',
+      'dashboard.view_project', 'dashboard.view_executive', 'time.view_all',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+    ]
   },
   Guest: {
     name: 'Guest',
@@ -367,21 +364,25 @@ const SYSTEM_ROLES = {
     is_editable: 1,
     description: 'Restricted external collaborator. Access only to explicitly shared projects with view and comment rights.',
     permissions: [
-      'project.view',
-      'view.view',
-      'task.view',
-      'comment.view',
-      'comment.create',
-      'attachment.view',
-      'file.view',
-      'notification.view_own',
-      'notification.manage_own',
-      'session.view_own',
-      'session.revoke_own',
-      'search.use'
+      'project.view', 'view.view', 'task.view', 'task.watch',
+      'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',
+      'attachment.view', 'file.view', 'label.view', 'member.view',
+      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   }
 };
+
+/**
+ * Legacy permission key mapping eliminated for Section 7 / Phase E
+ */
+const LEGACY_PERMISSION_ALIASES = {};
+
+// Reverse map
+const REVERSE_ALIASES = {};
+for (const [oldKey, newKey] of Object.entries(LEGACY_PERMISSION_ALIASES)) {
+  if (!REVERSE_ALIASES[newKey]) REVERSE_ALIASES[newKey] = [];
+  REVERSE_ALIASES[newKey].push(oldKey);
+}
 
 /**
  * Get equivalent permission keys (including aliases)
@@ -410,7 +411,10 @@ const PREREQUISITE_PERMISSIONS = {
   'task.edit': ['task.view', 'project.view'],
   'task.move': ['task.view', 'project.view'],
   'task.delete': ['task.view', 'project.view'],
+  'task.delete_own': ['task.view', 'project.view'],
   'task.assign': ['task.view', 'project.view'],
+  'task.assign_self': ['task.view', 'project.view'],
+  'task.complete': ['task.view', 'project.view'],
   'task.duplicate': ['task.create', 'task.view', 'project.view'],
   'task.archive': ['task.view', 'project.view'],
   'task.restore': ['task.view', 'project.view'],
@@ -449,6 +453,7 @@ const PREREQUISITE_PERMISSIONS = {
   'label.create': ['label.view', 'project.view'],
   'label.edit': ['label.view', 'project.view'],
   'label.delete': ['label.view', 'project.view'],
+  'label.delete_own': ['label.view', 'project.view'],
 
   // Activity
   'activity.view': ['project.view'],
@@ -463,16 +468,19 @@ const PREREQUISITE_PERMISSIONS = {
   // Member operations
   'member.view': ['workspace.view'],
   'member.invite': ['member.view', 'workspace.view'],
+  'member.invite_guest': ['member.view', 'workspace.view', 'project.manage_members'],
   'member.remove': ['member.view', 'workspace.view'],
   'member.assign_role': ['member.view', 'workspace.view'],
   'member.reset_password': ['member.view', 'workspace.view'],
   'member.reset_2fa': ['member.view', 'workspace.view'],
 
   // Project operations
+  'project.access_all': ['project.view'],
   'project.edit_settings': ['project.view'],
   'project.delete': ['project.view'],
   'project.archive': ['project.view'],
   'project.manage_members': ['project.view'],
+  'project.assign_role': ['project.view'],
 
   // Workspace operations
   'workspace.edit': ['workspace.view'],
@@ -484,8 +492,8 @@ const PREREQUISITE_PERMISSIONS = {
   'audit.export': ['audit.view', 'workspace.view'],
 
   // Archive
-  'archive.restore': ['archive.view', 'workspace.view'],
-  'archive.permanent_delete': ['archive.view', 'workspace.view']
+  'archive.restore': ['archive.view', 'workspace.view', 'project.view'],
+  'archive.permanent_delete': ['archive.view', 'workspace.view', 'project.view']
 };
 
 function getPrerequisites(permissionKey) {

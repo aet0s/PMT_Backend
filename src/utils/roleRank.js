@@ -5,23 +5,42 @@ const RESERVED_ROLE_NAMES = new Set([
   'owner',
   'super admin',
   'admin',
+  'administrator',
   'project manager',
   'manager',
+  'team lead',
+  'lead',
   'team member',
   'member',
   'viewer',
+  'auditor',
   'guest'
 ]);
+
+const HOMOGLYPHS = {
+  '\u041E': 'o', '\u043E': 'o', // Cyrillic О, о
+  '\u0410': 'a', '\u0430': 'a', // Cyrillic А, а
+  '\u0415': 'e', '\u0435': 'e', // Cyrillic Е, е
+  '\u0420': 'p', '\u0440': 'p', // Cyrillic Р, р
+  '\u0421': 'c', '\u0441': 'c', // Cyrillic С, с
+  '\u0423': 'y', '\u0443': 'y', // Cyrillic У, у
+  '\u0425': 'x', '\u0445': 'x', // Cyrillic Х, х
+  '\u0406': 'i', '\u0456': 'i'  // Cyrillic І, і
+};
 
 const ROLE_RANKS = {
   'owner': 100,
   'super admin': 100,
   'admin': 80,
+  'administrator': 80,
   'project manager': 60,
   'manager': 60,
+  'team lead': 50,
+  'lead': 50,
   'team member': 40,
   'member': 40,
   'viewer': 20,
+  'auditor': 15,
   'guest': 10
 };
 
@@ -30,8 +49,11 @@ const ROLE_RANKS = {
  */
 function normalizeRoleName(name) {
   if (!name || typeof name !== 'string') return '';
-  return name
-    .normalize('NFKC')
+  let str = name.normalize('NFKC');
+  for (const [k, v] of Object.entries(HOMOGLYPHS)) {
+    str = str.split(k).join(v);
+  }
+  return str
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
@@ -69,20 +91,21 @@ function getRoleRank(roleOrName) {
 
 /**
  * Checks if a role is an Owner role.
- * If a role object is passed, enforces Boolean(is_system) so custom roles named "Owner" are rejected.
+ * Owner must be determined by is_system = 1 AND rank >= 100 (or is_editable = 0 and is_system = 1), NEVER by name.
  */
 function isOwnerRole(roleOrName) {
   if (!roleOrName) return false;
   if (typeof roleOrName === 'object') {
-    if (!roleOrName.is_system) return false;
-    const rank = getRoleRank(roleOrName);
-    if (rank >= 100) return true;
-    const normalized = normalizeRoleName(roleOrName.name);
-    return normalized === 'owner' || normalized === 'super admin';
+    const isSystem = Boolean(roleOrName.is_system);
+    if (!isSystem) return false;
+    const rank = typeof roleOrName.rank === 'number' ? roleOrName.rank : 0;
+    const isUneditable = roleOrName.is_editable === 0 || roleOrName.is_editable === false;
+    return rank >= 100 || isUneditable;
   }
-  const normalized = normalizeRoleName(roleOrName);
-  return normalized === 'owner' || normalized === 'super admin';
+  // String names alone cannot be verified as Owner without system metadata
+  return false;
 }
+
 
 /**
  * Validates authority to reset password or 2FA for a target user:
