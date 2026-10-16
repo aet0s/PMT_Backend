@@ -20,6 +20,7 @@ const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
 const { canResetTarget, isOwnerRole, getRoleRank, isReservedRoleName } = require('../utils/roleRank');
+const { syncCompanyOwners } = require('../utils/syncCompanyOwners');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { createInvitationHelper } = require('./invitations');
 const {
@@ -61,6 +62,9 @@ const assignRoleSchema = z.object({
 // GET /api/workspaces - List all workspaces user belongs to
 router.get('/', requireAuth, async (req, res, next) => {
   try {
+    // Auto-sync company owners so all active workspaces are immediately available to every Owner
+    await syncCompanyOwners(req.db, req.user.id);
+
     // Check if user has any pending invitations matching their email address and auto-accept
     if (req.user && req.user.email) {
       const pendingRes = await req.db.query(
@@ -229,17 +233,25 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
     const adminRoleId = roleIdMap['Admin'];
     const pmRoleId = roleIdMap['Project Manager'];
 
-    // Automatically enrol the creator as Owner in the new workspace
-    await req.db.execute(
-      'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
-      [workspaceId, req.user.id, 'Owner', ownerRoleId]
+    // Automatically enrol ALL Company Owners in the new workspace
+    const companyOwnersRes = await req.db.query(
+      `SELECT DISTINCT wm.user_id
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE (r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100))
+          OR wm.role IN ('Owner', 'Super Admin')`
     );
+    const ownerUserIds = new Set(companyOwnersRes.map((o) => Number(o.user_id)));
+    ownerUserIds.add(Number(req.user.id));
 
-    // Real-time notification to creator
-    const creatorRoleName = 'Owner';
-    const creatorRoleId = ownerRoleId;
-    sendUserEvent(req.user.id, 'workspace:created', { workspace: { ...workspace, role: creatorRoleName } }, req.tenant?.id);
-    sendUserEvent(req.user.id, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
+    for (const uid of ownerUserIds) {
+      await req.db.execute(
+        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+        [workspaceId, uid, 'Owner', ownerRoleId]
+      );
+      sendUserEvent(uid, 'workspace:created', { workspace: { ...workspace, role: 'Owner' } }, req.tenant?.id);
+      sendUserEvent(uid, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
+    }
 
     await logAuthEvent(req.db, {
       userId: req.user.id,
@@ -249,7 +261,7 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
       metadata: { workspace_id: workspaceId, name }
     });
 
-    return res.status(201).json({ workspace: { ...workspace, role: creatorRoleName, role_id: creatorRoleId } });
+    return res.status(201).json({ workspace: { ...workspace, role: 'Owner', role_id: ownerRoleId } });
   } catch (err) {
     next(err);
   }
@@ -2868,6 +2880,10 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
       'UPDATE workspace_members SET role = ?, role_id = ? WHERE user_id = ?',
       [roleRow.name, roleRow.id, targetUserId]
     );
+
+    if (newIsOwner) {
+      await syncCompanyOwners(req.db, targetUserId);
+    }
 
     // Notify user of permission update across workspaces
     sendUserEvent(targetUserId, 'user:permissions_updated', {

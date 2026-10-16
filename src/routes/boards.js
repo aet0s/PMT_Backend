@@ -13,6 +13,7 @@ const { logAuthEvent } = require('../services/authAudit');
 const { notify } = require('../services/notify');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
+const { syncCompanyOwners } = require('../utils/syncCompanyOwners');
 
 const router = express.Router();
 
@@ -44,6 +45,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     let candidateBoardIds = [];
     if (workspace_id) {
       const wsId = Number(workspace_id);
+      await syncCompanyOwners(req.db, req.user.id);
       const wsMember = await req.db.query(
         'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
         [wsId, req.user.id]
@@ -55,6 +57,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       }
       candidateBoardIds = await accessibleBoardIds(req.user.id, wsId, 'project.view', req.db);
     } else {
+      await syncCompanyOwners(req.db, req.user.id);
       const userWorkspaces = await req.db.query(
         'SELECT workspace_id FROM workspace_members WHERE user_id = ?',
         [req.user.id]
