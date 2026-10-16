@@ -28,8 +28,7 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
   candidateBases.push(path.resolve(__dirname, '../../uploads'));
   candidateBases.push(path.resolve(__dirname, '../../../uploads'));
   candidateBases.push(path.resolve(process.cwd(), 'uploads'));
-  candidateBases.push(path.resolve('/var/www/pmt/uploads'));
-  candidateBases.push(path.resolve('/var/www/pmt/server/uploads'));
+  candidateBases.push(path.resolve('/data/projects/pmt/server/uploads'));
 
   const uniqueBases = Array.from(new Set(candidateBases));
 
@@ -251,10 +250,10 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   const requestedTenantId = Number(req.params.tenantId);
   const userTenantId = req.tenant ? Number(req.tenant.id) : null;
 
-  // Item 6: Must return 404 if :tenantId differs from the token's tenant
+  // Item 6: Must return 403 if :tenantId differs from the token's tenant
   if (userTenantId && requestedTenantId !== userTenantId) {
-    return res.status(404).json({
-      error: { message: 'File not found', code: 'NOT_FOUND' }
+    return res.status(403).json({
+      error: { message: 'Access denied: Foreign tenant', code: 'FORBIDDEN' }
     });
   }
 
@@ -268,52 +267,65 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   try {
     const { userHasPermission } = require('../middleware/permissions');
 
-    if (!req.isPreviewToken && relativeSubpath.startsWith('cards/')) {
-      const fileUrl = `/api/files/${requestedTenantId}/${relativeSubpath}`;
-      const attRows = await req.db.query(
-        `SELECT a.id, a.card_id, l.board_id, b.workspace_id
-         FROM attachments a
-         JOIN cards c ON a.card_id = c.id
-         JOIN lists l ON c.list_id = l.id
-         JOIN boards b ON l.board_id = b.id
-         WHERE a.file_url = ? OR a.file_url LIKE ?`,
-        [fileUrl, `%${relativeSubpath}`]
-      );
-
-      if (attRows.length > 0) {
-        const att = attRows[0];
-        const hasPerm = await userHasPermission(req.user.id, att.workspace_id, 'file.view', req.db, att.board_id);
-        if (!hasPerm) {
+    if (!req.isPreviewToken) {
+      if (relativeSubpath.startsWith('avatars/')) {
+        // Avatars stay tenant-wide for users within the same tenant
+        const avatarFilename = path.basename(relativeSubpath);
+        const userRows = await req.db.query(
+          'SELECT id FROM users WHERE avatar_url LIKE ?',
+          [`%${avatarFilename}`]
+        );
+        if (userRows.length === 0) {
           return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
         }
       } else {
-        const match = relativeSubpath.match(/^cards\/(\d+)\//);
-        if (match) {
-          const cardId = Number(match[1]);
-          const cardAccess = await req.db.query(
-            `SELECT l.board_id, b.workspace_id FROM cards c
-             JOIN lists l ON c.list_id = l.id
-             JOIN boards b ON l.board_id = b.id
-             WHERE c.id = ?`,
-            [cardId]
-          );
-          if (cardAccess.length === 0) {
-            return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
-          }
-          const hasPerm = await userHasPermission(req.user.id, cardAccess[0].workspace_id, 'file.view', req.db, cardAccess[0].board_id);
-          if (!hasPerm) {
-            return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
+        // All non-avatar files (cards attachments, etc.) require board membership + file.view
+        let boardId = null;
+        let workspaceId = null;
+
+        const fileUrl = `/api/files/${requestedTenantId}/${relativeSubpath}`;
+        const attRows = await req.db.query(
+          `SELECT a.id, a.card_id, l.board_id, b.workspace_id
+           FROM attachments a
+           JOIN cards c ON a.card_id = c.id
+           JOIN lists l ON c.list_id = l.id
+           JOIN boards b ON l.board_id = b.id
+           WHERE a.file_url = ? OR a.file_url LIKE ?`,
+          [fileUrl, `%${relativeSubpath}`]
+        );
+
+        if (attRows.length > 0) {
+          boardId = attRows[0].board_id;
+          workspaceId = attRows[0].workspace_id;
+        } else {
+          const match = relativeSubpath.match(/^cards\/(\d+)\//);
+          if (match) {
+            const cardId = Number(match[1]);
+            const cardAccess = await req.db.query(
+              `SELECT l.board_id, b.workspace_id FROM cards c
+               JOIN lists l ON c.list_id = l.id
+               JOIN boards b ON l.board_id = b.id
+               WHERE c.id = ?`,
+              [cardId]
+            );
+            if (cardAccess.length > 0) {
+              boardId = cardAccess[0].board_id;
+              workspaceId = cardAccess[0].workspace_id;
+            }
           }
         }
-      }
-    } else if (relativeSubpath.startsWith('avatars/')) {
-      const avatarFilename = path.basename(relativeSubpath);
-      const userRows = await req.db.query(
-        'SELECT id FROM users WHERE avatar_url LIKE ?',
-        [`%${avatarFilename}`]
-      );
-      if (userRows.length === 0) {
-        return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
+
+        if (!boardId || !workspaceId) {
+          return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
+        }
+
+        // Enforce board membership + file.view
+        const hasFileView = await userHasPermission(req.user.id, workspaceId, 'file.view', req.db, boardId);
+        if (!hasFileView) {
+          return res.status(403).json({
+            error: { message: 'Access denied: file.view and board membership required', code: 'FORBIDDEN' }
+          });
+        }
       }
     }
   } catch (dbErr) {

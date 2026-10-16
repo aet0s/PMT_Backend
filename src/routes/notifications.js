@@ -413,7 +413,17 @@ router.patch('/read-all', requireAuth, requirePermission('notification.manage_ow
     let sql = `UPDATE notifications n SET n.is_read = 1 WHERE ${accessFilter.clause} AND n.is_read = 0`;
     const params = [...accessFilter.params];
 
+    const { userHasPermission } = require('../middleware/permissions');
+
     if (boardId) {
+      const bRows = await req.db.query('SELECT workspace_id FROM boards WHERE id = ?', [boardId]);
+      if (bRows.length === 0) {
+        return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+      }
+      const canView = await userHasPermission(req.user.id, bRows[0].workspace_id, 'project.view', req.db, boardId);
+      if (!canView) {
+        return res.status(403).json({ error: { message: 'Access denied: You do not have permission to view this board', code: 'FORBIDDEN' } });
+      }
       sql += ' AND n.board_id = ?';
       params.push(boardId);
     }
@@ -421,6 +431,33 @@ router.patch('/read-all', requireAuth, requirePermission('notification.manage_ow
     await req.db.execute(sql, params);
 
     return res.json({ message: boardId ? 'Board notifications marked as read' : 'All notifications marked as read' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/notifications/board/:id/read-all (client alias)
+router.patch('/board/:id/read-all', requireAuth, requirePermission('notification.manage_own'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+
+  try {
+    const { userHasPermission } = require('../middleware/permissions');
+    const bRows = await req.db.query('SELECT workspace_id FROM boards WHERE id = ?', [boardId]);
+    if (bRows.length === 0) {
+      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    }
+    const canView = await userHasPermission(req.user.id, bRows[0].workspace_id, 'project.view', req.db, boardId);
+    if (!canView) {
+      return res.status(403).json({ error: { message: 'Access denied: You do not have permission to view this board', code: 'FORBIDDEN' } });
+    }
+
+    const accessFilter = getReadTimeAccessFilter(req.user.id);
+    let sql = `UPDATE notifications n SET n.is_read = 1 WHERE ${accessFilter.clause} AND n.is_read = 0 AND n.board_id = ?`;
+    const params = [...accessFilter.params, boardId];
+
+    await req.db.execute(sql, params);
+
+    return res.json({ message: 'Board notifications marked as read' });
   } catch (err) {
     next(err);
   }

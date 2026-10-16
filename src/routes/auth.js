@@ -21,7 +21,8 @@ const {
   listSessions,
   revokeSession,
   revokeAllSessions,
-  revokeAllExceptCurrent
+  revokeAllExceptCurrent,
+  checkUserRequires2Fa
 } = require('../services/sessionService');
 const {
   generateTotpSetup,
@@ -136,8 +137,9 @@ const verifyLogin2FaSchema = z.object({
 
 const confirm2FaSchema = z.object({
   secret: z.string().min(16, 'TOTP secret is required'),
-  token: z.string().min(6, 'TOTP token is required')
-});
+  token: z.string().min(6).optional(),
+  code: z.string().min(6).optional()
+}).refine(data => data.token || data.code, { message: 'TOTP token or code is required' });
 
 const disable2FaSchema = z.object({
   password: z.string().min(1, 'Password is required'),
@@ -1103,6 +1105,15 @@ async function handleUserLoginVerification(db, user, password, req, tenant = nul
     [user.id]
   );
 
+  // Check if user is deactivated across all workspaces in tenant
+  const memberRows = await db.query('SELECT status FROM workspace_members WHERE user_id = ?', [user.id]);
+  if (memberRows && memberRows.length > 0 && memberRows.every(r => r.status === 'deactivated')) {
+    const error = new Error('Your account has been deactivated. Please contact your workspace administrator.');
+    error.status = 403;
+    error.code = 'ACCOUNT_DEACTIVATED';
+    throw error;
+  }
+
   // 4. Check if TOTP 2FA is enabled for this user
   if (user.totp_enabled) {
     // Generate short-lived (5 min) temporary 2FA verification token
@@ -1133,7 +1144,8 @@ async function handleUserLoginVerification(db, user, password, req, tenant = nul
   }
 
   // 5. Normal login: Create session, rotating refresh token, 15-min JWT
-  const session = await createSession(db, user, req, { tenantId: tenant?.id || null });
+  const requires2fa = await checkUserRequires2Fa(db, user.id, user.totp_enabled);
+  const session = await createSession(db, user, req, { tenantId: tenant?.id || null, two_fa_required: requires2fa });
 
   await logAuthEvent(db, {
     userId: user.id,
@@ -2012,6 +2024,33 @@ router.delete('/sessions/:id', requireAuth, async (req, res, next) => {
           error: { message: 'You do not have permission to revoke other users sessions', code: 'PERMISSION_DENIED' }
         });
       }
+
+      // Rank check: a user cannot revoke the sessions of someone of equal or higher rank
+      const callerRoleRows = await req.db.query(
+        `SELECT MAX(COALESCE(r.rank, 30)) as max_rank, MAX(r.is_system) as max_sys 
+         FROM workspace_members wm 
+         JOIN roles r ON wm.role_id = r.id 
+         WHERE wm.user_id = ?`,
+        [req.user.id]
+      );
+      const targetRoleRows = await req.db.query(
+        `SELECT MAX(COALESCE(r.rank, 30)) as max_rank, MAX(r.is_system) as max_sys 
+         FROM workspace_members wm 
+         JOIN roles r ON wm.role_id = r.id 
+         WHERE wm.user_id = ?`,
+        [sessionOwnerId]
+      );
+      const callerRank = Number(callerRoleRows[0]?.max_rank || 30);
+      const targetRank = Number(targetRoleRows[0]?.max_rank || 30);
+
+      if (callerRank <= targetRank) {
+        return res.status(403).json({
+          error: {
+            message: 'You cannot revoke the session of a user with equal or higher rank',
+            code: 'INSUFFICIENT_ROLE_RANK'
+          }
+        });
+      }
     }
 
     await revokeSession(req.db, sessionOwnerId, targetSessionId, req);
@@ -2117,9 +2156,9 @@ const handle2FaGenerate = async (req, res, next) => {
 router.post('/2fa/generate', requireAuth, handle2FaGenerate);
 router.post('/2fa/setup', requireAuth, handle2FaGenerate);
 
-// POST /api/auth/2fa/confirm - Verify code, enable TOTP, issue 10 recovery codes
-router.post('/2fa/confirm', requireAuth, validate(confirm2FaSchema), async (req, res, next) => {
-  const { secret, token } = req.body;
+const handle2FaConfirm = async (req, res, next) => {
+  const secret = req.body.secret;
+  const token = req.body.token || req.body.code;
 
   try {
     const isValid = verifyTotpCode(token, secret);
@@ -2154,7 +2193,10 @@ router.post('/2fa/confirm', requireAuth, validate(confirm2FaSchema), async (req,
   } catch (err) {
     next(err);
   }
-});
+};
+
+router.post('/2fa/confirm', requireAuth, validate(confirm2FaSchema), handle2FaConfirm);
+router.post('/2fa/verify', requireAuth, validate(confirm2FaSchema), handle2FaConfirm);
 
 // POST /api/auth/2fa/disable - Disable 2FA with password confirmation
 router.post('/2fa/disable', requireAuth, validate(disable2FaSchema), async (req, res, next) => {

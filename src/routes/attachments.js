@@ -5,7 +5,7 @@ const upload = require('../middleware/upload');
 const localStorage = require('../storage');
 const { broadcastBoardEvent } = require('../socket');
 const { notify } = require('../services/notify');
-const { userHasPermission } = require('../middleware/permissions');
+const { requirePermission, userHasPermission, getActiveDb } = require('../middleware/permissions');
 
 const router = express.Router();
 
@@ -121,7 +121,19 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/attachments/:id - Delete attachment
-router.delete('/:id', requireAuth, async (req, res, next) => {
+router.delete(
+  '/:id',
+  requireAuth,
+  requirePermission({
+    ownership: async (req) => {
+      const db = getActiveDb(req);
+      const rows = await db.query('SELECT uploaded_by_user_id FROM attachments WHERE id = ?', [req.params.id]);
+      return rows[0] && rows[0].uploaded_by_user_id && Number(rows[0].uploaded_by_user_id) === Number(req.user.id);
+    },
+    own: (req) => req.query?.file_only === 'true' ? 'file.delete' : ['attachment.delete_own', 'attachment.delete_any', 'file.delete'],
+    any: (req) => req.query?.file_only === 'true' ? 'file.delete' : ['attachment.delete_any', 'file.delete']
+  }),
+  async (req, res, next) => {
   const attachmentId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -141,20 +153,6 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     }
 
     const att = attRes[0];
-    const isOwn = att.uploaded_by_user_id === req.user.id;
-    const hasDeleteOwn = await userHasPermission(req.user.id, att.workspace_id, 'attachment.delete_own', req.db, att.board_id);
-    const hasDeleteAny = await userHasPermission(req.user.id, att.workspace_id, 'attachment.delete_any', req.db, att.board_id);
-    const hasFileDelete = await userHasPermission(req.user.id, att.workspace_id, 'file.delete', req.db, att.board_id);
-
-    if (isOwn) {
-      if (!hasDeleteOwn && !hasDeleteAny && !hasFileDelete) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete attachment', code: 'FORBIDDEN' } });
-      }
-    } else {
-      if (!hasDeleteAny && !hasFileDelete) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete others attachment', code: 'FORBIDDEN' } });
-      }
-    }
 
     if (att.file_type !== 'link') {
       if (att.file_url.startsWith('/uploads/')) {

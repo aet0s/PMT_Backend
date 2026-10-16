@@ -1,10 +1,11 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
+const { requirePermission, accessibleBoardIds } = require('../middleware/permissions');
 
 const router = express.Router();
 
 // GET /api/archive
-router.get('/', requireAuth, async (req, res, next) => {
+router.get('/', requireAuth, requirePermission('archive.view'), async (req, res, next) => {
   try {
     const workspaceIdFilter = req.query.workspace_id && req.query.workspace_id !== 'all' ? Number(req.query.workspace_id) : null;
     const boardIdFilter = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
@@ -30,16 +31,45 @@ router.get('/', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
-    // 2. Fetch user's active boards for board selection
-    const userBoards = await req.db.query(
-      `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color
-       FROM boards b
-       JOIN workspaces w ON b.workspace_id = w.id
-       JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
-       WHERE b.is_archived = 0 AND w.is_archived = 0
-       ORDER BY b.name ASC`,
-      [req.user.id]
-    );
+    // Section 5.4: Resolve accessibleBoardIds across candidate workspaces
+    let allAccessibleBoardIds = [];
+    if (workspaceIdFilter) {
+      allAccessibleBoardIds = await accessibleBoardIds(req.user.id, workspaceIdFilter, 'project.view', req.db);
+    } else {
+      for (const uw of userWorkspaces) {
+        const bIds = await accessibleBoardIds(req.user.id, uw.id, 'project.view', req.db);
+        allAccessibleBoardIds.push(...bIds);
+      }
+    }
+
+    if (boardIdFilter && !allAccessibleBoardIds.includes(boardIdFilter)) {
+      return res.json({
+        userWorkspaces,
+        userBoards: [],
+        workspaces: [],
+        boards: [],
+        cards: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        availableLabels: [],
+        availableMembers: []
+      });
+    }
+
+    // 2. Fetch user's active boards for board selection (filtered by accessibleBoardIds)
+    let userBoards = [];
+    if (allAccessibleBoardIds.length > 0) {
+      userBoards = await req.db.query(
+        `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color
+         FROM boards b
+         JOIN workspaces w ON b.workspace_id = w.id
+         WHERE b.id IN (?) AND b.is_archived = 0 AND w.is_archived = 0
+         ORDER BY b.name ASC`,
+        [allAccessibleBoardIds]
+      );
+    }
 
     // 3. Fetch archived workspaces
     const workspacesRes = await req.db.query(
@@ -51,17 +81,19 @@ router.get('/', requireAuth, async (req, res, next) => {
       [req.user.id]
     );
 
-    // 4. Fetch archived boards
-    const boardsRes = await req.db.query(
-      `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.created_at, w.name as workspace_name, wm.role
-       FROM boards b
-       JOIN workspaces w ON b.workspace_id = w.id
-       JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
-       LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = ?
-       WHERE (wm.user_id IS NOT NULL OR bm.user_id IS NOT NULL) AND b.is_archived = 1
-       ORDER BY b.created_at DESC`,
-      [req.user.id, req.user.id]
-    );
+    // 4. Fetch archived boards (filtered by accessibleBoardIds or workspace permissions)
+    let boardsRes = [];
+    if (allAccessibleBoardIds.length > 0) {
+      boardsRes = await req.db.query(
+        `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.created_at, w.name as workspace_name, wm.role
+         FROM boards b
+         JOIN workspaces w ON b.workspace_id = w.id
+         JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
+         WHERE b.id IN (?) AND b.is_archived = 1
+         ORDER BY b.created_at DESC`,
+        [req.user.id, allAccessibleBoardIds]
+      );
+    }
 
     // 5. Fetch available labels for dropdowns (scoped to selected workspace/board, or user's active workspaces)
     const labelParams = [req.user.id];

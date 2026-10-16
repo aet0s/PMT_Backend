@@ -221,6 +221,44 @@ const requireAuth = async (req, res, next) => {
       }
     }
 
+    // Item 6: require_2fa dynamic enforcement evaluated per request from workspace settings + user totp state (not frozen in token)
+    const { checkUserRequires2Fa } = require('../services/sessionService');
+    const isUserTwoFaRequired = !dbUser.totp_enabled && (await checkUserRequires2Fa(req.db, userId, dbUser.totp_enabled));
+
+    if (isUserTwoFaRequired) {
+      const fullUrl = req.originalUrl || req.url || '';
+      const pathname = fullUrl.split('?')[0].split('#')[0];
+
+      // Strict segment boundary matching for allowed paths
+      const allowedPrefixes = [
+        '/api/auth/2fa',
+        '/api/auth/logout',
+        '/api/auth/logout-all',
+        '/api/auth/me'
+      ];
+      const isAllowed = allowedPrefixes.some(prefix => pathname === prefix || pathname.startsWith(prefix + '/'));
+
+      if (!isAllowed) {
+        return res.status(403).json({
+          error: {
+            message: 'Two-factor authentication is required by workspace policy. Please set up 2FA to continue.',
+            code: 'TWO_FA_SETUP_REQUIRED'
+          }
+        });
+      }
+    }
+
+    // Check if user is deactivated across all workspaces in tenant
+    const memberRows = await req.db.query('SELECT status FROM workspace_members WHERE user_id = ?', [userId]);
+    if (memberRows && memberRows.length > 0 && memberRows.every(r => r.status === 'deactivated')) {
+      return res.status(403).json({
+        error: {
+          message: 'Your account has been deactivated. Please contact your workspace administrator.',
+          code: 'ACCOUNT_DEACTIVATED'
+        }
+      });
+    }
+
     // Item 3: Session active check on every request with max 5s in-memory cache
     if (sessionId) {
       const sessionStatus = await checkSessionActive(req.db, req.tenant?.id, sessionId);

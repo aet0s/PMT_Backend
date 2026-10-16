@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { broadcastBoardEvent } = require('../socket');
-const { requirePermission, userHasPermission } = require('../middleware/permissions');
+const { requirePermission, requirePermissionForBody, userHasPermission } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
 const { notify } = require('../services/notify');
@@ -75,7 +75,20 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 });
 
 // PATCH /api/lists/:id
-router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, next) => {
+router.patch(
+  '/:id',
+  requireAuth,
+  requirePermissionForBody((req) => {
+    const { name, position, is_archived, wip_limit_enabled, wip_limit } = req.body;
+    const isEdit = name !== undefined || is_archived !== undefined || wip_limit_enabled !== undefined || wip_limit !== undefined;
+    const isReorderOnly = position !== undefined && !isEdit;
+    if (isReorderOnly) {
+      return { any: ['list.reorder', 'list.edit'] };
+    }
+    return 'list.edit';
+  }),
+  validate(updateListSchema),
+  async (req, res, next) => {
   const listId = Number(req.params.id);
   const { name, position, is_archived, wip_limit_enabled, wip_limit } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -91,23 +104,7 @@ router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, n
     if (listCheck.length === 0) {
       return res.status(404).json({ error: { message: 'List not found', code: 'NOT_FOUND' } });
     }
-    const { board_id: boardId, workspace_id: workspaceId } = listCheck[0];
-
-    const isReorder = position !== undefined;
-    const isEdit = name !== undefined || is_archived !== undefined || wip_limit_enabled !== undefined || wip_limit !== undefined;
-
-    if (isReorder) {
-      const canReorder = await userHasPermission(req.user.id, workspaceId, 'list.reorder', req.db, boardId);
-      if (!canReorder) {
-        return res.status(403).json({ error: { message: 'Permission denied to reorder lists', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isEdit || !isReorder) {
-      const canEdit = await userHasPermission(req.user.id, workspaceId, 'list.edit', req.db, boardId);
-      if (!canEdit) {
-        return res.status(403).json({ error: { message: 'Permission denied to edit lists', code: 'PERMISSION_DENIED' } });
-      }
-    }
+    const { board_id: boardId } = listCheck[0];
 
     const updates = [];
     const values = [];
@@ -137,9 +134,9 @@ router.patch('/:id', requireAuth, validate(updateListSchema), async (req, res, n
       return res.status(400).json({ error: { message: 'No fields to update', code: 'BAD_REQUEST' } });
     }
 
-    values.push(listId);
+    values.push(listId, boardId);
     await req.db.execute(
-      `UPDATE lists SET ${updates.join(', ')} WHERE id = ?`,
+      `UPDATE lists SET ${updates.join(', ')} WHERE id = ? AND board_id = ?`,
       values
     );
 
@@ -207,7 +204,7 @@ router.delete('/:id', requireAuth, requirePermission('list.delete'), async (req,
     const boardId = listRes[0].board_id;
     const [bRes] = await req.db.query('SELECT workspace_id, name FROM boards WHERE id = ?', [boardId]);
 
-    await req.db.execute('DELETE FROM lists WHERE id = ?', [listId]);
+    await req.db.execute('DELETE FROM lists WHERE id = ? AND board_id = ?', [listId, boardId]);
     await logActivity(boardId, null, req.user.id, 'list_deleted', { list_name: listRes[0]?.name }, req.db, req.tenant?.id);
     broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId, req.tenant?.id);
 

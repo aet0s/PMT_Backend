@@ -19,7 +19,8 @@ PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
 
 const updateRoleSchema = z.object({
   name: z.string().min(1).optional(),
-  permission_keys: z.array(z.string()).optional()
+  permission_keys: z.array(z.string()).optional(),
+  rank: z.number().int().optional()
 });
 
 // PATCH /api/roles/:id - Edit custom role name and permissions
@@ -56,8 +57,7 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       (await req.db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]))[0]?.workspace_id;
 
     if (targetWsId) {
-      const hasPerm = (await userHasPermission(req.user.id, targetWsId, 'role.edit', req.db)) ||
-                      (await userHasPermission(req.user.id, targetWsId, 'workspace.manage_roles', req.db));
+      const hasPerm = await userHasPermission(req.user.id, targetWsId, 'role.edit', req.db);
       if (!hasPerm) {
         return res.status(403).json({
           error: { message: 'You do not have permission to edit roles', code: 'PERMISSION_DENIED' }
@@ -95,8 +95,50 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       }
     }
 
+    if (req.body.rank !== undefined) {
+      const requestedRank = Number(req.body.rank);
+      if (isNaN(requestedRank) || requestedRank < 11 || requestedRank > 79) {
+        return res.status(400).json({
+          error: { message: 'Custom role rank must be between 11 and 79', code: 'INVALID_ROLE_RANK' }
+        });
+      }
+
+      if (targetWsId) {
+        const callerPerms = await getUserPermissions(req.user.id, targetWsId, req.db);
+        const callerIsOwner = isOwnerRole(callerPerms.role);
+        const callerRank = getRoleRank(callerPerms.role);
+        const currentRoleRank = Number(role.rank || 30);
+
+        if (!callerIsOwner && (callerRank <= currentRoleRank || callerRank <= requestedRank)) {
+          return res.status(403).json({
+            error: {
+              message: 'You cannot edit a role with equal or higher rank, nor set a rank equal or higher than your own',
+              code: 'INSUFFICIENT_ROLE_RANK'
+            }
+          });
+        }
+      }
+
+      await req.db.execute('UPDATE roles SET rank = ? WHERE id = ?', [requestedRank, roleId]);
+      role.rank = requestedRank;
+    }
+
     if (Array.isArray(permission_keys)) {
-      // Validate unknown keys and filter out planned keys
+      // Fetch existing permissions for this role to track existing planned keys
+      const existingRolePermsRes = await req.db.query(
+        `SELECT p.id, p.key, p.planned
+         FROM role_permissions rp
+         JOIN permissions p ON rp.permission_id = p.id
+         WHERE rp.role_id = ?`,
+        [roleId]
+      );
+      const existingPlannedKeys = new Set(
+        existingRolePermsRes.filter((p) => p.planned).map((p) => p.key)
+      );
+
+      // Validate keys and check planned keys rules:
+      // 1. Adding a planned key that the role does not have returns 400
+      // 2. A planned key the role already has is accepted unchanged
       const activeKeysOnly = [];
       for (const rawKey of permission_keys) {
         const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
@@ -106,8 +148,25 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
             error: { message: `Unknown permission key: ${rawKey}`, code: 'UNKNOWN_PERMISSION_KEY' }
           });
         }
-        if (!meta.planned) {
+        if (meta.planned) {
+          if (!existingPlannedKeys.has(canonical)) {
+            return res.status(400).json({
+              error: {
+                message: `Cannot add planned permission key: ${rawKey}`,
+                code: 'CANNOT_ADD_PLANNED_KEY'
+              }
+            });
+          }
           activeKeysOnly.push(canonical);
+        } else {
+          activeKeysOnly.push(canonical);
+        }
+      }
+
+      // 3. Planned keys omitted from the submitted list are preserved
+      for (const plannedKey of existingPlannedKeys) {
+        if (!activeKeysOnly.includes(plannedKey)) {
+          activeKeysOnly.push(plannedKey);
         }
       }
 
@@ -121,7 +180,7 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 
       if (targetWsId) {
         const callerPerms = await getUserPermissions(req.user.id, targetWsId, req.db);
-        const callerIsOwner = callerPerms.role?.is_system === 1 && (callerPerms.role?.is_editable === 0 || callerPerms.role?.rank >= 100);
+        const callerIsOwner = isOwnerRole(callerPerms.role);
         if (!callerIsOwner) {
           const callerPermSet = new Set(
             callerPerms.permissions.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
@@ -230,8 +289,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     const targetWsId = role.workspace_id || req.body?.workspace_id || req.headers['x-workspace-id'] ||
       (await req.db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]))[0]?.workspace_id;
     if (targetWsId) {
-      const hasPerm = (await userHasPermission(req.user.id, targetWsId, 'role.delete', req.db)) ||
-                      (await userHasPermission(req.user.id, targetWsId, 'workspace.manage_roles', req.db));
+      const hasPerm = await userHasPermission(req.user.id, targetWsId, 'role.delete', req.db);
       if (!hasPerm) {
         return res.status(403).json({
           error: { message: 'You do not have permission to delete custom roles', code: 'PERMISSION_DENIED' }

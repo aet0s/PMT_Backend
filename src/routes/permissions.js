@@ -6,7 +6,24 @@ const router = express.Router();
 // GET /api/permissions - Full permission catalog grouped by category
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const result = await req.db.query('SELECT id, `key`, category, description FROM permissions ORDER BY category ASC, id ASC');
+    const includePlanned = req.query.include_planned === '1';
+    let allowPlanned = false;
+    if (includePlanned) {
+      const { userHasPermission } = require('../middleware/permissions');
+      const userWorkspaces = await req.db.query(
+        'SELECT DISTINCT workspace_id FROM workspace_members WHERE user_id = ?',
+        [req.user.id]
+      );
+      for (const ws of userWorkspaces) {
+        if (await userHasPermission(req.user.id, ws.workspace_id, 'role.edit', req.db)) {
+          allowPlanned = true;
+          break;
+        }
+      }
+    }
+
+    const filterClause = allowPlanned ? '' : 'WHERE planned = 0';
+    const result = await req.db.query(`SELECT id, \`key\`, category, description, planned FROM permissions ${filterClause} ORDER BY category ASC, id ASC`);
 
     const grouped = {};
     result.forEach((p) => {

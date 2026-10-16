@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { parseJson } = require('../db/mysql');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
-const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
+const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, accessibleBoardIds, getActiveDb } = require('../middleware/permissions');
 const { getRoleRank, normalizeRoleName } = require('../utils/roleRank');
 const { broadcastBoardEvent, sendUserEvent } = require('../socket');
 const path = require('path');
@@ -40,6 +40,35 @@ router.get('/', requireAuth, async (req, res, next) => {
       archivedCondition = '1=1';
     }
 
+    // Filter boards via accessibleBoardIds (Section 5.4)
+    let candidateBoardIds = [];
+    if (workspace_id) {
+      const wsId = Number(workspace_id);
+      const wsMember = await req.db.query(
+        'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        [wsId, req.user.id]
+      );
+      if (wsMember.length === 0) {
+        return res.status(403).json({
+          error: { message: 'You must be a member of this workspace to access its boards', code: 'FORBIDDEN' }
+        });
+      }
+      candidateBoardIds = await accessibleBoardIds(req.user.id, wsId, 'project.view', req.db);
+    } else {
+      const userWorkspaces = await req.db.query(
+        'SELECT workspace_id FROM workspace_members WHERE user_id = ?',
+        [req.user.id]
+      );
+      for (const uw of userWorkspaces) {
+        const bIds = await accessibleBoardIds(req.user.id, uw.workspace_id, 'project.view', req.db);
+        candidateBoardIds.push(...bIds);
+      }
+    }
+
+    if (candidateBoardIds.length === 0) {
+      return res.json({ boards: [] });
+    }
+
     let query = `
       SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.is_archived, b.created_at, w.name as workspace_name,
         (SELECT COUNT(*) FROM cards c JOIN lists l ON c.list_id = l.id WHERE l.board_id = b.id AND c.is_archived = 0) as card_count,
@@ -48,40 +77,13 @@ router.get('/', requireAuth, async (req, res, next) => {
         (SELECT COUNT(*) FROM board_members bm2 WHERE bm2.board_id = b.id) as member_count
       FROM boards b
       JOIN workspaces w ON b.workspace_id = w.id
-      JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
-      LEFT JOIN roles r ON wm.role_id = r.id
-      LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = ?
-      WHERE ${archivedCondition} 
+      WHERE b.id IN (?)
+        AND ${archivedCondition}
         AND w.is_archived = 0
-        AND (
-          (r.is_system = 1 AND (COALESCE(r.rank, 30) >= 80 OR r.is_editable = 0))
-          OR EXISTS (
-            SELECT 1 FROM role_permissions rp
-            JOIN permissions p ON rp.permission_id = p.id
-            WHERE rp.role_id = wm.role_id AND p.key IN ('workspace.edit_settings', 'workspace.delete')
-          )
-          OR bm.user_id IS NOT NULL
-        )
+      ORDER BY b.id ASC
     `;
-    const params = [req.user.id, req.user.id];
 
-    if (workspace_id) {
-      const wsMember = await req.db.query(
-        'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-        [Number(workspace_id), req.user.id]
-      );
-      if (wsMember.length === 0) {
-        return res.status(403).json({
-          error: { message: 'You must be a member of this workspace to access its boards', code: 'FORBIDDEN' }
-        });
-      }
-      query += ` AND b.workspace_id = ?`;
-      params.push(Number(workspace_id));
-    }
-
-    query += ` ORDER BY b.id ASC`;
-
-    const boardsRes = await req.db.query(query, params);
+    const boardsRes = await req.db.query(query, [candidateBoardIds]);
     return res.json({ boards: boardsRes });
   } catch (err) {
     next(err);
@@ -164,7 +166,7 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
 });
 
 // GET /api/boards/:id (Full Nested Fetch)
-router.get('/:id', requireAuth, async (req, res, next) => {
+router.get('/:id', requireAuth, requirePermission('project.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
 
   try {
@@ -430,7 +432,12 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 });
 
 // PATCH /api/boards/:id
-router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, requirePermissionForBody((req) => {
+  const { name, background_color, is_archived } = req.body;
+  if (is_archived === true) return 'project.archive';
+  if (is_archived === false) return 'archive.restore';
+  return 'project.edit_settings';
+}), validate(updateBoardSchema), async (req, res, next) => {
   const boardId = Number(req.params.id);
   const { name, background_color, is_archived } = req.body;
 
@@ -438,31 +445,6 @@ router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, 
     const [existingBoard] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
     if (!existingBoard) {
       return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
-    }
-    const workspaceId = existingBoard.workspace_id;
-
-    // Granular per-operation permission enforcement
-    const isArchive = is_archived === true && Boolean(existingBoard.is_archived) !== true;
-    const isRestore = is_archived === false && Boolean(existingBoard.is_archived) === true;
-    const isEditSettings = name !== undefined || background_color !== undefined;
-
-    if (isArchive) {
-      const canArchive = await userHasPermission(req.user.id, workspaceId, 'project.archive', req.db, boardId);
-      if (!canArchive) {
-        return res.status(403).json({ error: { message: 'Permission denied to archive project', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isRestore) {
-      const canRestore = await userHasPermission(req.user.id, workspaceId, 'archive.restore', req.db, boardId);
-      if (!canRestore) {
-        return res.status(403).json({ error: { message: 'Permission denied to restore project', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isEditSettings || (!isArchive && !isRestore)) {
-      const canEdit = await userHasPermission(req.user.id, workspaceId, 'project.edit_settings', req.db, boardId);
-      if (!canEdit) {
-        return res.status(403).json({ error: { message: 'Permission denied to edit project settings', code: 'PERMISSION_DENIED' } });
-      }
     }
     const updates = [];
     const values = [];
@@ -543,7 +525,18 @@ router.patch('/:id', requireAuth, validate(updateBoardSchema), async (req, res, 
 });
 
 // DELETE /api/boards/:id
-router.delete('/:id', requireAuth, requirePermission(['project.delete', 'archive.permanent_delete']), async (req, res, next) => {
+router.delete(
+  '/:id',
+  requireAuth,
+  requirePermissionForBody(async (req) => {
+    const db = getActiveDb(req);
+    const rows = await db.query('SELECT is_archived FROM boards WHERE id = ?', [req.params.id]);
+    if (rows[0] && rows[0].is_archived) {
+      return 'archive.permanent_delete';
+    }
+    return 'project.delete';
+  }),
+  async (req, res, next) => {
   const boardId = Number(req.params.id);
 
   // 1. Resolve board and verify existence
@@ -633,7 +626,7 @@ router.delete('/:id', requireAuth, requirePermission(['project.delete', 'archive
 });
 
 // GET /api/boards/:id/workspace-members (List workspace members and their access status to this board)
-router.get('/:id/workspace-members', requireAuth, async (req, res, next) => {
+router.get('/:id/workspace-members', requireAuth, requirePermission('member.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
 
   try {
@@ -786,6 +779,100 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('project.ma
   }
 });
 
+// PATCH /api/boards/:id/members/:userId/role (Assign or change member's board role - Section 5.2)
+router.patch('/:id/members/:userId/role', requireAuth, requirePermission('project.assign_role'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const { role_id } = req.body;
+
+  try {
+    const [board] = await req.db.query('SELECT name, workspace_id FROM boards WHERE id = ?', [boardId]);
+    if (!board) {
+      return res.status(404).json({ error: { message: 'Board not found', code: 'NOT_FOUND' } });
+    }
+    const workspaceId = board.workspace_id;
+
+    // Check target is a board member
+    const [existingMember] = await req.db.query(
+      'SELECT role_id FROM board_members WHERE board_id = ? AND user_id = ?',
+      [boardId, targetUserId]
+    );
+    if (!existingMember) {
+      return res.status(404).json({ error: { message: 'Board member not found', code: 'NOT_FOUND' } });
+    }
+
+    // Caller rank in workspace/board
+    const callerWsRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    const callerRank = Number(callerWsRows[0]?.rank || 30);
+
+    // Target workspace rank (for guest cap check)
+    const targetWsRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, targetUserId]
+    );
+    const targetWsRank = Number(targetWsRows[0]?.rank || 30);
+
+    let newRoleId = null;
+    let newRank = 0;
+    if (role_id) {
+      const [role] = await req.db.query(
+        'SELECT id, name, rank FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR is_system = 1)',
+        [role_id, workspaceId]
+      );
+      if (!role) {
+        return res.status(400).json({ error: { message: 'Role not found', code: 'ROLE_NOT_FOUND' } });
+      }
+      newRoleId = role.id;
+      newRank = Number(role.rank || 30);
+
+      // Board role cap rules (Section 2 & 5):
+      // Board roles are capped at rank <= 60 (PM)
+      if (newRank > 60) {
+        return res.status(400).json({
+          error: { message: 'Board role rank cannot exceed 60', code: 'BOARD_ROLE_CAP_EXCEEDED' }
+        });
+      }
+      // If target is Guest (rank <= 10), board role is capped at rank <= 40 (Team Lead)
+      if (targetWsRank <= 10 && newRank > 40) {
+        return res.status(400).json({
+          error: { message: 'Guest members cannot be assigned board roles above rank 40', code: 'GUEST_ROLE_CAP_EXCEEDED' }
+        });
+      }
+
+      // Rank rule: caller cannot assign a role higher or equal to their own rank
+      if (newRank >= callerRank) {
+        return res.status(403).json({
+          error: { message: 'Cannot assign a role with equal or higher rank than your own', code: 'FORBIDDEN' }
+        });
+      }
+    }
+
+    await req.db.execute(
+      'UPDATE board_members SET role_id = ? WHERE board_id = ? AND user_id = ?',
+      [newRoleId, boardId, targetUserId]
+    );
+
+    sendUserEvent(targetUserId, 'user:permissions_updated', {
+      workspaceId,
+      boardId,
+      action: 'role_updated',
+      roleId: newRoleId
+    }, req.tenant ? req.tenant.id : null);
+
+    return res.json({
+      message: 'Board member role updated',
+      board_id: boardId,
+      user_id: targetUserId,
+      role_id: newRoleId
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/boards/:id/labels
 router.get('/:id/labels', requireAuth, requirePermission('label.view'), async (req, res, next) => {
   const boardId = Number(req.params.id);
@@ -931,15 +1018,15 @@ router.delete('/:id/labels/:labelId', requireAuth, requirePermission(['label.vie
     // Role-based authority rules:
     // 1. Owner, Project Manager, Admin can delete all custom created labels
     // 2. Regular members can ONLY delete custom labels created by themselves
-    const { role, permissions } = await getUserPermissions(req.user.id, bRes.workspace_id, req.db, boardId);
-    const normalizedRole = normalizeRoleName(role?.name);
-    const roleRank = getRoleRank(role);
-    const isPrivileged = roleRank >= 60 || ['owner', 'super admin', 'admin', 'project manager', 'manager'].includes(normalizedRole) || permissions.includes('label.delete');
+    const { permissions } = await getUserPermissions(req.user.id, bRes.workspace_id, req.db, boardId);
+    const hasDeleteAny = permissions.includes('label.delete');
+    const hasDeleteOwn = permissions.includes('label.delete_own');
 
     const isCustom = Boolean(existing.is_custom);
-    const isOwnerOfLabel = isCustom && existing.created_by_user_id && Number(existing.created_by_user_id) === Number(req.user.id);
+    const creatorId = existing.created_by_user_id || existing.created_by;
+    const isOwnerOfLabel = isCustom && creatorId && Number(creatorId) === Number(req.user.id);
 
-    if (!isPrivileged && !isOwnerOfLabel) {
+    if (!hasDeleteAny && !(hasDeleteOwn && isOwnerOfLabel)) {
       if (!isCustom) {
         return res.status(403).json({
           error: {

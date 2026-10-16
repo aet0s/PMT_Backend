@@ -234,7 +234,7 @@ async function createInvitationHelper({ db, user, tenant, workspaceId, email, ro
       throw err;
     }
     const selRole = roleRes[0];
-    if (selRole.is_system === 1 && (selRole.is_editable === 0 || selRole.rank >= 100)) {
+    if (isOwnerRole(selRole)) {
       const err = new Error('Cannot invite a member with Owner role');
       err.status = 403;
       err.code = 'FORBIDDEN';
@@ -431,11 +431,67 @@ router.post('/', requireAuth, validate(inviteSchema), async (req, res, next) => 
   const { email, workspace_id, role_id, board_ids = [] } = req.body;
 
   try {
-    const isAdmin = await requireWorkspaceAdmin(workspace_id, req.user.id, req.db);
-    if (!isAdmin) {
-      return res.status(403).json({
-        error: { message: 'Only workspace admins can invite others', code: 'FORBIDDEN' }
-      });
+    // 1. Resolve target role rank
+    let targetRank = 30; // Default Team Member rank
+    if (role_id) {
+      const roleRows = await req.db.query(
+        'SELECT rank FROM roles WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR is_system = 1)',
+        [role_id, workspace_id]
+      );
+      if (roleRows[0]) {
+        targetRank = Number(roleRows[0].rank || 30);
+      }
+    }
+
+    // 2. Caller permissions in workspace
+    const hasInvite = await userHasPermission(req.user.id, workspace_id, 'member.invite', req.db);
+    const hasInviteGuest = await userHasPermission(req.user.id, workspace_id, 'member.invite_guest', req.db);
+
+    const callerWsRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspace_id, req.user.id]
+    );
+    const callerRank = Number(callerWsRows[0]?.rank || 30);
+
+    // 3. Section 5.2 rule enforcement:
+    // Inviting a role of rank <= 10 (Guest) -> member.invite_guest (or member.invite)
+    // Any other role -> member.invite AND target role rank < caller rank.
+    // A caller holding only member.invite_guest (PM) may invite Guests only,
+    // and only to boards where the caller has project.manage_members.
+    if (targetRank <= 10) {
+      if (!hasInviteGuest && !hasInvite) {
+        return res.status(403).json({
+          error: { message: 'You do not have permission to invite guest members', code: 'PERMISSION_DENIED' }
+        });
+      }
+      if (!hasInvite && hasInviteGuest) {
+        // Holding ONLY member.invite_guest: can only invite to boards where caller has project.manage_members
+        if (board_ids.length === 0) {
+          return res.status(400).json({
+            error: { message: 'Guest invitations must specify at least one board you manage', code: 'BOARD_REQUIRED' }
+          });
+        }
+        for (const bId of board_ids) {
+          const canManage = await userHasPermission(req.user.id, workspace_id, 'project.manage_members', req.db, bId);
+          if (!canManage) {
+            return res.status(403).json({
+              error: { message: `Cannot invite guest to board ${bId} without project.manage_members permission`, code: 'FORBIDDEN' }
+            });
+          }
+        }
+      }
+    } else {
+      // Non-guest role: requires member.invite and strictly lower rank than caller
+      if (!hasInvite) {
+        return res.status(403).json({
+          error: { message: 'You do not have permission to invite workspace members', code: 'PERMISSION_DENIED' }
+        });
+      }
+      if (targetRank >= callerRank) {
+        return res.status(403).json({
+          error: { message: 'Cannot invite a member with equal or higher rank than your own', code: 'FORBIDDEN' }
+        });
+      }
     }
 
     const result = await createInvitationHelper({

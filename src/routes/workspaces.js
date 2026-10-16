@@ -6,8 +6,10 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const {
   requirePermission,
+  requirePermissionForBody,
   userHasPermission,
   getUserPermissions,
+  accessibleBoardIds,
   countSuperAdmins,
   countOwners
 } = require('../middleware/permissions');
@@ -25,6 +27,7 @@ const {
   LEGACY_PERMISSION_ALIASES,
   getTransitivePrerequisites
 } = require('../rbac/registry');
+const { evaluatePermission } = require('../rbac/evaluate');
 
 const validPermMap = new Map();
 PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
@@ -46,7 +49,8 @@ const updateWorkspaceSchema = z.object({
 const createRoleSchema = z.object({
   name: z.string().min(1, 'Role name is required').transform((v) => sanitizePlain(v)),
   permission_keys: z.array(z.string()).optional().default([]),
-  clone_role_id: z.number().int().positive().optional()
+  clone_role_id: z.number().int().positive().optional(),
+  rank: z.number().int().optional()
 });
 
 const assignRoleSchema = z.object({
@@ -173,21 +177,36 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
   const name = sanitizePlain(req.body.name);
   try {
     // Check permission to create workspace:
-    // User must have workspace.create in at least one workspace or be an Owner/Admin
-    const canCreateRes = await req.db.query(
-      `SELECT 1
+    // User must hold workspace.create in at least one of their workspaces in this tenant, evaluated through evaluate.js.
+    const userMemberships = await req.db.query(
+      `SELECT wm.workspace_id, wm.role_id, r.is_system, r.is_editable, r.rank, r.name as role_name
        FROM workspace_members wm
        JOIN roles r ON wm.role_id = r.id
-       LEFT JOIN role_permissions rp ON r.id = rp.role_id
-       LEFT JOIN permissions p ON rp.permission_id = p.id
-       WHERE wm.user_id = ?
-         AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)) OR p.key = 'workspace.create')
-       LIMIT 1`,
+       WHERE wm.user_id = ?`,
       [req.user.id]
     );
 
+    let canCreateWorkspace = false;
+    for (const m of userMemberships) {
+      const permData = await getUserPermissions(req.user.id, m.workspace_id, req.db);
+      const evalRes = evaluatePermission({
+        key: 'workspace.create',
+        workspaceRole: {
+          id: m.role_id,
+          name: m.role_name,
+          rank: m.rank,
+          is_system: m.is_system,
+          permissions: permData.permissions
+        }
+      });
+      if (evalRes.allowed) {
+        canCreateWorkspace = true;
+        break;
+      }
+    }
+
     const existingWsCount = (await req.db.query('SELECT COUNT(*) as count FROM workspaces'))[0]?.count || 0;
-    if (existingWsCount > 0 && canCreateRes.length === 0) {
+    if (existingWsCount > 0 && !canCreateWorkspace) {
       return res.status(403).json({
         error: { message: 'You do not have permission to create workspaces', code: 'PERMISSION_DENIED' }
       });
@@ -237,27 +256,22 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
 });
 
 // PATCH /api/workspaces/:id - Update workspace
-router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, res, next) => {
+router.patch(
+  '/:id',
+  requireAuth,
+  requirePermissionForBody((req) => {
+    const { is_archived } = req.body;
+    if (is_archived === true) return 'workspace.archive';
+    if (is_archived === false) return 'workspace.restore';
+    return { any: ['workspace.edit', 'workspace.edit_settings'] };
+  }),
+  validate(updateWorkspaceSchema),
+  async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const { name, description, settings, is_archived, require_2fa_for_admins } = req.body;
 
   try {
     const isArchive = is_archived !== undefined;
-    const isEdit = name !== undefined || description !== undefined || settings !== undefined || require_2fa_for_admins !== undefined;
-
-    if (isArchive) {
-      const canArchive = await userHasPermission(req.user.id, workspaceId, 'workspace.archive', req.db);
-      if (!canArchive) {
-        return res.status(403).json({ error: { message: 'Permission denied to archive workspace', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isEdit || !isArchive) {
-      const canEdit = (await userHasPermission(req.user.id, workspaceId, 'workspace.edit', req.db)) ||
-                      (await userHasPermission(req.user.id, workspaceId, 'workspace.edit_settings', req.db));
-      if (!canEdit) {
-        return res.status(403).json({ error: { message: 'Permission denied to edit workspace', code: 'PERMISSION_DENIED' } });
-      }
-    }
     const updates = [];
     const values = [];
 
@@ -323,14 +337,76 @@ router.patch('/:id', requireAuth, validate(updateWorkspaceSchema), async (req, r
   }
 });
 
+// GET /api/workspaces/:id/security - Company security settings (Section 6)
+router.get('/:id/security', requireAuth, requirePermission('company.manage_security'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const [ws] = await req.db.query(
+      'SELECT id, require_2fa_for_admins, settings FROM workspaces WHERE id = ?',
+      [workspaceId]
+    );
+    if (!ws) {
+      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+    let parsedSettings = ws.settings;
+    if (typeof parsedSettings === 'string') {
+      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+    }
+    const settings = parsedSettings || {};
+    return res.json({
+      require_2fa: Boolean(settings.require_2fa || ws.require_2fa_for_admins),
+      require_2fa_for_admins: Boolean(ws.require_2fa_for_admins)
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/workspaces/:id/security - Update company security settings (Section 6)
+router.patch('/:id/security', requireAuth, requirePermission('company.manage_security'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const { require_2fa, require_2fa_for_admins } = req.body;
+  try {
+    const [ws] = await req.db.query('SELECT id, settings, require_2fa_for_admins FROM workspaces WHERE id = ?', [workspaceId]);
+    if (!ws) {
+      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+    let parsedSettings = ws.settings;
+    if (typeof parsedSettings === 'string') {
+      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+    }
+    const settings = parsedSettings || {};
+    if (require_2fa !== undefined) {
+      settings.require_2fa = Boolean(require_2fa);
+    }
+    let req2faAdmins = ws.require_2fa_for_admins;
+    if (require_2fa_for_admins !== undefined) {
+      req2faAdmins = require_2fa_for_admins ? 1 : 0;
+    }
+
+    await req.db.execute(
+      'UPDATE workspaces SET settings = ?, require_2fa_for_admins = ? WHERE id = ?',
+      [JSON.stringify(settings), req2faAdmins, workspaceId]
+    );
+
+    return res.json({
+      message: 'Security settings updated',
+      require_2fa: Boolean(settings.require_2fa),
+      require_2fa_for_admins: Boolean(req2faAdmins)
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/workspaces/:id/auto-archive - Auto-archive completed tasks older than N days
-router.post('/:id/auto-archive', requireAuth, async (req, res, next) => {
+router.post('/:id/auto-archive', requireAuth, requirePermission(['task.archive', 'workspace.edit_settings']), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const days = req.body.days !== undefined ? Number(req.body.days) : 7;
 
   try {
     const canArchive = (await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db)) ||
-                       (await userHasPermission(req.user.id, workspaceId, 'workspace.edit_settings', req.db));
+                       (await userHasPermission(req.user.id, workspaceId, 'workspace.edit', req.db));
     if (!canArchive) {
       return res.status(403).json({ error: { message: 'Permission denied to archive tasks', code: 'PERMISSION_DENIED' } });
     }
@@ -396,9 +472,26 @@ router.delete('/:id', requireAuth, requirePermission('workspace.delete'), async 
 // GET /api/workspaces/:id/my-permissions - Get user's effective role and permissions
 router.get('/:id/my-permissions', requireAuth, async (req, res, next) => {
   const workspaceId = Number(req.params.id);
+  const rawProjectId = req.query.board_id || req.query.project_id;
+  const projectId = rawProjectId ? Number(rawProjectId) : null;
 
   try {
-    const permData = await getUserPermissions(req.user.id, workspaceId, req.db);
+    const isMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    if (isMember.length === 0) {
+      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+
+    if (projectId) {
+      const bRes = await req.db.query('SELECT workspace_id FROM boards WHERE id = ?', [projectId]);
+      if (bRes.length === 0 || Number(bRes[0].workspace_id) !== Number(workspaceId)) {
+        return res.status(400).json({ error: { message: 'Board does not belong to workspace', code: 'BOARD_MISMATCH' } });
+      }
+    }
+
+    const permData = await getUserPermissions(req.user.id, workspaceId, req.db, projectId);
     return res.json(permData);
   } catch (err) {
     next(err);
@@ -411,7 +504,7 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
 
   try {
     const rolesRes = await req.db.query(
-      `SELECT r.id, r.name, r.is_system, r.is_editable, r.workspace_id, r.created_at,
+      `SELECT r.id, r.name, r.is_system, r.is_editable, r.rank, r.workspace_id, r.created_at,
               COUNT(DISTINCT wm.user_id) as member_count,
               GROUP_CONCAT(DISTINCT p.key) as permission_keys_str
        FROM roles r
@@ -419,9 +512,9 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
        LEFT JOIN role_permissions rp ON r.id = rp.role_id
        LEFT JOIN permissions p ON rp.permission_id = p.id AND p.planned = 0
        WHERE r.workspace_id IS NULL OR r.workspace_id = ?
-       GROUP BY r.id, r.name, r.is_system, r.is_editable, r.workspace_id, r.created_at
+       GROUP BY r.id, r.name, r.is_system, r.is_editable, r.rank, r.workspace_id, r.created_at
        ORDER BY r.is_system DESC,
-                FIELD(r.name, 'Owner', 'Super Admin', 'Admin', 'Project Manager', 'Team Member', 'Viewer', 'Guest'),
+                FIELD(r.name, 'Owner', 'Super Admin', 'Admin', 'Project Manager', 'Team Lead', 'Team Member', 'Viewer', 'Auditor', 'Guest'),
                 r.id ASC`,
       [workspaceId, workspaceId]
     );
@@ -439,7 +532,7 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
         seenSystemRoleNames.add(r.name);
       }
       const keys = r.permission_keys_str ? r.permission_keys_str.split(',') : [];
-      if (r.name === 'Super Admin' || r.name === 'Owner') {
+      if (isOwnerRole(r)) {
         roles.push({ ...r, permission_keys: allPermKeys });
       } else {
         roles.push({ ...r, permission_keys: Array.from(new Set(keys)) });
@@ -515,7 +608,7 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
 
     // Privilege escalation check: caller cannot grant permissions they do not possess
     const callerPerms = await getUserPermissions(req.user.id, workspaceId, req.db);
-    const callerIsOwner = callerPerms.role?.is_system === 1 && (callerPerms.role?.is_editable === 0 || callerPerms.role?.rank >= 100);
+    const callerIsOwner = isOwnerRole(callerPerms.role);
     if (!callerIsOwner) {
       const callerPermSet = new Set(
         callerPerms.permissions.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
@@ -531,15 +624,33 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
       }
     }
 
+    // Custom role rank rule: rank-capped below 80 and defaulting to 30, but allowed to be set between 11 and 79
+    const requestedRank = req.body.rank !== undefined ? Number(req.body.rank) : 30;
+    if (isNaN(requestedRank) || requestedRank < 11 || requestedRank > 79) {
+      return res.status(400).json({
+        error: { message: 'Custom role rank must be between 11 and 79', code: 'INVALID_ROLE_RANK' }
+      });
+    }
+
+    const callerRank = getRoleRank(callerPerms.role);
+    if (!callerIsOwner && callerRank <= requestedRank) {
+      return res.status(403).json({
+        error: {
+          message: 'You cannot create a custom role with equal or higher rank than your own',
+          code: 'INSUFFICIENT_ROLE_RANK'
+        }
+      });
+    }
+
     const roleExec = await req.db.execute(
-      `INSERT INTO roles (workspace_id, name, is_system, is_editable, created_by_user_id)
-       VALUES (?, ?, 0, 1, ?)`,
-      [workspaceId, cleanName, req.user.id]
+      `INSERT INTO roles (workspace_id, name, is_system, is_editable, rank, created_by_user_id)
+       VALUES (?, ?, 0, 1, ?, ?)`,
+      [workspaceId, cleanName, requestedRank, req.user.id]
     );
 
     const roleId = roleExec.insertId;
     const [role] = await req.db.query(
-      'SELECT id, workspace_id, name, is_system, is_editable, created_at FROM roles WHERE id = ?',
+      'SELECT id, workspace_id, name, is_system, is_editable, rank, created_at FROM roles WHERE id = ?',
       [roleId]
     );
 
@@ -599,8 +710,8 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
     const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
     const workspaceName = wsRes[0]?.name || 'Workspace';
 
-    const membersRes = await req.db.query(
-      `SELECT u.id, u.name, u.email, u.avatar_url, r.id as role_id, r.name as role_name, r.is_system, r.is_editable
+    let membersRes = await req.db.query(
+      `SELECT u.id, u.name, u.email, u.avatar_url, r.id as role_id, r.name as role_name, r.is_system, r.is_editable, r.rank, wm.status
        FROM workspace_members wm
        JOIN users u ON wm.user_id = u.id
        JOIN roles r ON wm.role_id = r.id
@@ -616,6 +727,23 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
        WHERE b.workspace_id = ? AND b.is_archived = 0`,
       [workspaceId]
     );
+
+    // Section 5.4: Member lists for Guests: Guests only see members of boards they belong to
+    const callerRoleRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    const callerRank = Number(callerRoleRows[0]?.rank || 30);
+    const isGuest = callerRank <= 10;
+
+    if (isGuest) {
+      const callerBoards = boardMembersRes.filter((bm) => bm.user_id === req.user.id).map((bm) => bm.board_id);
+      const allowedUserIds = new Set(boardMembersRes.filter((bm) => callerBoards.includes(bm.board_id)).map((bm) => bm.user_id));
+      allowedUserIds.add(req.user.id);
+      membersRes = membersRes.filter((m) => allowedUserIds.has(m.id) && m.status !== 'deactivated');
+    } else {
+      membersRes = membersRes.filter((m) => m.status !== 'deactivated');
+    }
 
     const userBoardsMap = {};
     boardMembersRes.forEach((row) => {
@@ -643,7 +771,7 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
     const allPermKeys = allPermsRes.map((p) => p.key);
 
     const members = membersRes.map((m) => {
-      const isOwner = isOwnerRole(m.role_name);
+      const isOwner = isOwnerRole({ name: m.role_name, is_system: m.is_system, rank: m.rank });
       const permissions = isOwner ? allPermKeys : (rolePermMap[m.role_id] || []);
       const userBoards = userBoardsMap[m.id] || [];
       return {
@@ -678,15 +806,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
   const workspaceId = Number(req.params.id);
   const targetUserId = Number(req.params.userId);
   const { role_id, board_ids } = req.body;
-
   try {
-    // Anti-escalation Rule 0: Cannot change your own role
-    if (Number(req.user.id) === targetUserId) {
-      return res.status(403).json({
-        error: { message: 'You cannot change your own role', code: 'SELF_ROLE_CHANGE_FORBIDDEN' }
-      });
-    }
-
     // 1. Fetch current role of target user
     const targetMemberRes = await req.db.query(
       `SELECT r.id as role_id, r.name as role_name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
@@ -704,6 +824,26 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     const targetIsOwner = isOwnerRole(targetRole);
     const targetRank = getRoleRank(targetRole);
 
+    // Last Owner Protection: Cannot demote the last Owner of the workspace
+    if (targetIsOwner) {
+      const ownerCount = await countOwners(workspaceId, req.db);
+      if (ownerCount <= 1) {
+        return res.status(400).json({
+          error: {
+            message: 'Cannot demote the last Owner of the workspace.',
+            code: 'LAST_OWNER_PROTECTION'
+          }
+        });
+      }
+    }
+
+    // Anti-escalation Rule 0: Cannot change your own role
+    if (Number(req.user.id) === targetUserId) {
+      return res.status(403).json({
+        error: { message: 'You cannot change your own role', code: 'SELF_ROLE_CHANGE_FORBIDDEN' }
+      });
+    }
+
     // Fetch caller role & ranks
     const callerMemberRes = await req.db.query(
       `SELECT r.id as role_id, r.name as role_name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
@@ -717,19 +857,11 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     const callerRank = getRoleRank(callerRole);
 
     // Rule: Owner role is locked and cannot be changed by non-owners
-    if (targetIsOwner) {
-      if (!callerIsOwner) {
-        return res.status(403).json({
-          error: {
-            message: 'Only an Owner may modify the Owner role',
-            code: 'ONLY_OWNER_MAY_MODIFY_OWNER'
-          }
-        });
-      }
+    if (targetIsOwner && !callerIsOwner) {
       return res.status(403).json({
         error: {
-          message: 'The Owner role is locked and cannot be changed.',
-          code: 'OWNER_ROLE_LOCKED'
+          message: 'Only an Owner may modify the Owner role',
+          code: 'ONLY_OWNER_MAY_MODIFY_OWNER'
         }
       });
     }
@@ -1007,23 +1139,16 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
       await req.db.execute('DELETE FROM pending_invitations WHERE email = ? AND workspace_id = ?', [targetUserEmail, workspaceId]);
     }
 
-    // Revoke all sessions for removed member
-    await revokeAllSessions(req.db, targetUserId, 'MEMBER_REMOVED', req);
-
-    // If the removed member has no other owned workspaces (invited member), clean up user completely from DB
-    const ownedOtherWs = await req.db.query(
-      `SELECT COUNT(*) as count FROM workspace_members wm 
-       JOIN roles r ON wm.role_id = r.id 
-       WHERE wm.user_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`,
+    // Check remaining workspaces in the tenant for this user
+    const remainingWs = await req.db.query(
+      'SELECT COUNT(*) as count FROM workspace_members WHERE user_id = ?',
       [targetUserId]
     );
+    const hasOtherWorkspaces = (remainingWs[0]?.count || 0) > 0;
 
-    if (ownedOtherWs[0]?.count === 0) {
-      await req.db.execute('DELETE FROM workspace_members WHERE user_id = ?', [targetUserId]);
-      await req.db.execute('DELETE FROM board_members WHERE user_id = ?', [targetUserId]);
-      if (targetUserEmail) {
-        await req.db.execute('DELETE FROM pending_invitations WHERE email = ?', [targetUserEmail]);
-      }
+    if (!hasOtherWorkspaces) {
+      // Revoke all sessions only if member has no other workspaces in tenant
+      await revokeAllSessions(req.db, targetUserId, 'MEMBER_REMOVED', req);
       await req.db.execute('DELETE FROM users WHERE id = ?', [targetUserId]);
 
       if (req.tenant?.id && targetUserEmail) {
@@ -1037,6 +1162,140 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
 
     broadcastWorkspaceEvent(workspaceId, 'workspace:member_removed', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
     return res.json({ message: 'Member removed from workspace and database' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/members/:userId/deactivate (Section 6)
+router.post('/:id/members/:userId/deactivate', requireAuth, requirePermission('member.deactivate'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+
+  try {
+    if (Number(req.user.id) === targetUserId) {
+      return res.status(400).json({ error: { message: 'Cannot deactivate yourself', code: 'SELF_DEACTIVATION_FORBIDDEN' } });
+    }
+
+    const callerWsRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    const callerRank = Number(callerWsRows[0]?.rank || 30);
+
+    const targetWsRows = await req.db.query(
+      'SELECT r.rank, r.is_system, r.is_editable, wm.status FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, targetUserId]
+    );
+    if (targetWsRows.length === 0) {
+      return res.status(404).json({ error: { message: 'Member not found in workspace', code: 'NOT_FOUND' } });
+    }
+
+    const targetRank = Number(targetWsRows[0]?.rank || 30);
+    if (targetRank >= callerRank) {
+      return res.status(403).json({ error: { message: 'Cannot deactivate member with equal or higher rank', code: 'FORBIDDEN' } });
+    }
+
+    // Last Owner check across all workspaces in tenant where target is an Owner
+    const targetOwnerWorkspaces = await req.db.query(
+      `SELECT wm.workspace_id, w.name as workspace_name
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       JOIN workspaces w ON wm.workspace_id = w.id
+       WHERE wm.user_id = ? AND r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`,
+      [targetUserId]
+    );
+
+    for (const ow of targetOwnerWorkspaces) {
+      const ownerCount = await countOwners(ow.workspace_id, req.db);
+      if (ownerCount <= 1) {
+        return res.status(400).json({
+          error: {
+            message: 'Cannot deactivate the last Owner of the workspace',
+            code: 'LAST_OWNER'
+          }
+        });
+      }
+    }
+
+    // Company-level offboarding: set status = 'deactivated' in EVERY workspace of tenant
+    await req.db.execute(
+      "UPDATE workspace_members SET status = 'deactivated' WHERE user_id = ?",
+      [targetUserId]
+    );
+
+    // Revoke all sessions for deactivated user
+    await req.db.execute(
+      'UPDATE sessions SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
+      [targetUserId]
+    );
+
+    try {
+      const { invalidateSessionCache } = require('../middleware/auth');
+      invalidateSessionCache(req.tenant?.id);
+    } catch (e) {}
+
+    await logActivity({
+      workspaceId,
+      userId: req.user.id,
+      actionType: 'member_deactivated',
+      metaJson: { target_user_id: targetUserId },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
+    disconnectUserSockets(targetUserId, req.tenant ? req.tenant.id : null, 'MEMBER_DEACTIVATED');
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_deactivated', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
+
+    return res.json({ message: 'Member deactivated', user_id: targetUserId, status: 'deactivated' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/members/:userId/reactivate (Section 6)
+router.post('/:id/members/:userId/reactivate', requireAuth, requirePermission('member.deactivate'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+
+  try {
+    const callerWsRows = await req.db.query(
+      'SELECT r.rank FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, req.user.id]
+    );
+    const callerRank = Number(callerWsRows[0]?.rank || 30);
+
+    const targetWsRows = await req.db.query(
+      'SELECT r.rank, wm.status FROM workspace_members wm JOIN roles r ON wm.role_id = r.id WHERE wm.workspace_id = ? AND wm.user_id = ?',
+      [workspaceId, targetUserId]
+    );
+    if (targetWsRows.length === 0) {
+      return res.status(404).json({ error: { message: 'Member not found in workspace', code: 'NOT_FOUND' } });
+    }
+
+    const targetRank = Number(targetWsRows[0]?.rank || 30);
+    if (targetRank >= callerRank) {
+      return res.status(403).json({ error: { message: 'Cannot reactivate member with equal or higher rank', code: 'FORBIDDEN' } });
+    }
+
+    // Company-level reactivation: restores status = 'active' across all workspaces (previous roles preserved)
+    await req.db.execute(
+      "UPDATE workspace_members SET status = 'active' WHERE user_id = ?",
+      [targetUserId]
+    );
+
+    await logActivity({
+      workspaceId,
+      userId: req.user.id,
+      actionType: 'member_reactivated',
+      metaJson: { target_user_id: targetUserId },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_reactivated', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
+
+    return res.json({ message: 'Member reactivated', user_id: targetUserId, status: 'active' });
   } catch (err) {
     next(err);
   }
@@ -1439,6 +1698,15 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
     const whereConditions = ['(a.workspace_id = ? OR b.workspace_id = ?)'];
     const queryParams = [workspaceId, workspaceId];
 
+    // Section 5.4: Filter activity by accessibleBoardIds
+    const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
+    if (allowedBoardIds.length > 0) {
+      whereConditions.push('(a.board_id IS NULL OR a.board_id IN (?))');
+      queryParams.push(allowedBoardIds);
+    } else {
+      whereConditions.push('a.board_id IS NULL');
+    }
+
     if (boardId) {
       whereConditions.push('a.board_id = ?');
       queryParams.push(boardId);
@@ -1594,13 +1862,24 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: { message: 'Access denied: not a workspace member', code: 'FORBIDDEN' } });
     }
 
-    // 1. Fetch active boards
+    // Section 5.4: Filter active boards via accessibleBoardIds
+    const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
+    if (allowedBoardIds.length === 0) {
+      return res.json({
+        workspace: { id: workspaceId, name: ws[0].name },
+        boards: [],
+        summary: { totalTasks: 0, completedTasks: 0, overdueTasks: 0, dueSoonTasks: 0, completionRate: 0 },
+        breakdowns: { byStage: {}, byPriority: {}, byBoard: [] },
+        trends: { tasksCreatedOverTime: [], tasksCompletedOverTime: [] }
+      });
+    }
+
     const boardsRes = await req.db.query(
       `SELECT id, name, background_color, is_archived, created_at
        FROM boards
-       WHERE workspace_id = ? AND is_archived = 0
+       WHERE workspace_id = ? AND is_archived = 0 AND id IN (?)
        ORDER BY name ASC`,
-      [workspaceId]
+      [workspaceId, allowedBoardIds]
     );
 
     // Build timeframe conditions
@@ -2655,7 +2934,7 @@ router.post('/:id/company-members/:userId/workspaces', requireAuth, requirePermi
     for (const remWsId of toRemove) {
       // Safety Floor: cannot remove if sole owner of that workspace
       const currentMember = currentWsRows.find((r) => r.workspace_id === remWsId);
-      const isOwner = currentMember && currentMember.is_system === 1 && (currentMember.is_editable === 0 || currentMember.rank >= 100);
+      const isOwner = isOwnerRole(currentMember);
       if (isOwner) {
         const otherOwners = await req.db.query(
           `SELECT wm.user_id FROM workspace_members wm
@@ -2771,23 +3050,23 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
 
     // Safety Floor: Cannot remove an Owner
     const targetRoles = await req.db.query(
-      `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+      `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank, r.name
        FROM workspace_members wm
        JOIN roles r ON wm.role_id = r.id
        WHERE wm.user_id = ?`,
       [targetUserId]
     );
-    const targetIsOwner = targetRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
+    const targetIsOwner = targetRoles.some((r) => isOwnerRole(r));
 
     if (targetIsOwner) {
       const callerRoles = await req.db.query(
-        `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+        `SELECT r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank, r.name
          FROM workspace_members wm
          JOIN roles r ON wm.role_id = r.id
          WHERE wm.user_id = ?`,
         [req.user.id]
       );
-      const callerIsOwner = callerRoles.some((r) => r.is_system === 1 && (r.is_editable === 0 || r.rank >= 100));
+      const callerIsOwner = callerRoles.some((r) => isOwnerRole(r));
       if (!callerIsOwner) {
         return res.status(403).json({
           error: { message: 'Only an Owner may remove an Owner from the organization', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
@@ -2910,18 +3189,25 @@ router.get('/:id/search', requireAuth, requirePermission('search.use'), async (r
     if (!q) {
       return res.json({ cards: [], boards: [] });
     }
+
+    // Section 5.4: Filter search results by accessibleBoardIds
+    const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
+    if (allowedBoardIds.length === 0) {
+      return res.json({ cards: [], boards: [] });
+    }
+
     const cards = await req.db.query(
       `SELECT c.id, c.title, l.board_id, b.name as board_name
        FROM cards c
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
-       WHERE b.workspace_id = ? AND (c.title LIKE ? OR c.description LIKE ?)
+       WHERE b.workspace_id = ? AND b.id IN (?) AND (c.title LIKE ? OR c.description LIKE ?)
        LIMIT 50`,
-      [workspaceId, `%${q}%`, `%${q}%`]
+      [workspaceId, allowedBoardIds, `%${q}%`, `%${q}%`]
     );
     const boards = await req.db.query(
-      `SELECT id, name FROM boards WHERE workspace_id = ? AND name LIKE ? LIMIT 20`,
-      [workspaceId, `%${q}%`]
+      `SELECT id, name FROM boards WHERE workspace_id = ? AND id IN (?) AND name LIKE ? LIMIT 20`,
+      [workspaceId, allowedBoardIds, `%${q}%`]
     );
     return res.json({ cards, boards });
   } catch (err) {
@@ -2930,7 +3216,7 @@ router.get('/:id/search', requireAuth, requirePermission('search.use'), async (r
 });
 
 // GET /api/workspaces/:id/issues - Server-side paginated & filtered issue list
-router.get('/:id/issues', requireAuth, async (req, res, next) => {
+router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
 
   try {
@@ -2961,14 +3247,21 @@ router.get('/:id/issues', requireAuth, async (req, res, next) => {
     const sort = req.query.sort ? String(req.query.sort).trim().toLowerCase() : 'newest';
     const onlyBugs = req.query.only_bugs !== 'false';
 
+    // Section 5.4: Filter issues by accessibleBoardIds
+    const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'task.view', req.db);
+    if (allowedBoardIds.length === 0) {
+      return res.json({ issues: [], total: 0, page, limit, totalPages: 0 });
+    }
+
     // Base conditions: active cards, active lists, active boards in workspace
     const whereConditions = [
       'b.workspace_id = ?',
       'b.is_archived = 0',
       'l.is_archived = 0',
-      'c.is_archived = 0'
+      'c.is_archived = 0',
+      'b.id IN (?)'
     ];
-    const queryParams = [workspaceId];
+    const queryParams = [workspaceId, allowedBoardIds];
 
     // Filter to only cards that have a label matching 'bug' (case-insensitive)
     if (onlyBugs) {

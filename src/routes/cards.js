@@ -10,7 +10,7 @@ const { broadcastBoardEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
 const { processOutbox } = require('../services/notificationOutbox');
-const { requirePermission, userHasPermission } = require('../middleware/permissions');
+const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, getActiveDb } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
 
@@ -195,8 +195,8 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
     const formattedStartDate = formatSqlDateTime(effectiveStartDate);
 
     const cardExec = await req.db.execute(
-      'INSERT INTO cards (list_id, title, description, position, start_date, due_date) VALUES (?, ?, ?, ?, ?, ?)',
-      [list_id, title, cleanDescription, position, formattedStartDate, formattedDueDate]
+      'INSERT INTO cards (list_id, title, description, position, start_date, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [list_id, title, cleanDescription, position, formattedStartDate, formattedDueDate, req.user.id]
     );
     const cardId = cardExec.insertId;
 
@@ -235,7 +235,27 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
 });
 
 // PATCH /api/cards/:id
-router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
+    const { list_id, title, description, position, start_date, due_date, is_complete, is_archived, priority } = req.body;
+    const reqs = [];
+    if (is_archived === true) reqs.push('task.archive');
+    if (is_archived === false) reqs.push('task.restore');
+    if (list_id !== undefined || position !== undefined) reqs.push('task.move');
+    if (priority !== undefined) reqs.push({ any: ['task.set_priority', 'task.edit'] });
+
+    const isToggleCompleteOnly = is_complete !== undefined && title === undefined && description === undefined && start_date === undefined && due_date === undefined && req.body.cover_url === undefined && priority === undefined;
+    if (isToggleCompleteOnly) {
+      reqs.push({ any: ['task.complete', 'task.edit'] });
+    } else if (title !== undefined || description !== undefined || start_date !== undefined || due_date !== undefined || req.body.cover_url !== undefined || (is_complete !== undefined && !isToggleCompleteOnly)) {
+      reqs.push('task.edit');
+    }
+
+    if (reqs.length === 0) return 'task.edit';
+    if (reqs.length === 1) return reqs[0];
+    return { all: reqs };
+  }),
+  validate(updateCardSchema),
+  async (req, res, next) => {
   const cardId = Number(req.params.id);
   if (isNaN(cardId)) return next();
   const { list_id, title, description, position, start_date, due_date, is_complete, is_archived } = req.body;
@@ -255,39 +275,6 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
     const oldCard = oldCardRes[0];
-    const workspaceId = oldCard.workspace_id;
-    const boardId = oldCard.board_id;
-
-    // Granular per-operation permission enforcement
-    const isMove = list_id !== undefined || position !== undefined;
-    const isArchive = is_archived === true && Boolean(oldCard.is_archived) !== true;
-    const isRestore = is_archived === false && Boolean(oldCard.is_archived) === true;
-    const isEdit = title !== undefined || description !== undefined || start_date !== undefined || due_date !== undefined || is_complete !== undefined || req.body.cover_url !== undefined;
-
-    if (isMove) {
-      const canMove = await userHasPermission(req.user.id, workspaceId, 'task.move', req.db, boardId);
-      if (!canMove) {
-        return res.status(403).json({ error: { message: 'You do not have permission to move tasks', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isArchive) {
-      const canArchive = await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db, boardId);
-      if (!canArchive) {
-        return res.status(403).json({ error: { message: 'You do not have permission to archive tasks', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isRestore) {
-      const canRestore = await userHasPermission(req.user.id, workspaceId, 'task.restore', req.db, boardId);
-      if (!canRestore) {
-        return res.status(403).json({ error: { message: 'You do not have permission to restore tasks', code: 'PERMISSION_DENIED' } });
-      }
-    }
-    if (isEdit || (!isMove && !isArchive && !isRestore)) {
-      const canEdit = await userHasPermission(req.user.id, workspaceId, 'task.edit', req.db, boardId);
-      if (!canEdit) {
-        return res.status(403).json({ error: { message: 'You do not have permission to edit tasks', code: 'PERMISSION_DENIED' } });
-      }
-    }
 
     const updates = [];
     const values = [];
@@ -532,14 +519,26 @@ router.patch('/:id', requireAuth, validate(updateCardSchema), async (req, res, n
 });
 
 // DELETE /api/cards/:id
-router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req, res, next) => {
+router.delete(
+  '/:id',
+  requireAuth,
+  requirePermission({
+    ownership: async (req) => {
+      const db = getActiveDb(req);
+      const rows = await db.query('SELECT created_by FROM cards WHERE id = ?', [req.params.id]);
+      return rows[0] && rows[0].created_by && Number(rows[0].created_by) === Number(req.user.id);
+    },
+    own: ['task.delete_own', 'task.delete'],
+    any: 'task.delete'
+  }),
+  async (req, res, next) => {
   const cardId = Number(req.params.id);
   if (isNaN(cardId)) return next();
   const originId = req.headers['x-origin-id'];
 
   try {
     const cardRes = await req.db.query(
-      'SELECT c.title, l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+      'SELECT c.title, c.created_by, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
       [cardId]
     );
 
@@ -547,7 +546,7 @@ router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req,
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
 
-    const { title: cardTitle, board_id: boardId } = cardRes[0];
+    const { title: cardTitle, board_id: boardId, workspace_id: workspaceId } = cardRes[0];
 
     await notify(
       {
@@ -561,7 +560,7 @@ router.delete('/:id', requireAuth, requirePermission('task.delete'), async (req,
       req.db
     );
 
-    await req.db.execute('DELETE FROM cards WHERE id = ?', [cardId]);
+    await req.db.execute('DELETE FROM cards WHERE id = ? AND list_id IN (SELECT id FROM lists WHERE board_id = ?)', [cardId, boardId]);
 
     await logActivity(boardId, null, req.user.id, 'card_deleted', {
       card_id: cardId,
@@ -649,18 +648,43 @@ router.post('/:id/labels', requireAuth, requirePermission('task.edit'), async (r
 });
 
 // POST /api/cards/:id/members (Toggle member assignment on card)
-router.post('/:id/members', requireAuth, requirePermission('task.assign'), async (req, res, next) => {
+router.post(
+  '/:id/members',
+  requireAuth,
+  requirePermissionForBody((req) => {
+    const isSelf = Number(req.body.user_id) === Number(req.user.id);
+    if (isSelf) {
+      return { any: ['task.assign_self', 'task.assign'] };
+    }
+    return 'task.assign';
+  }),
+  async (req, res, next) => {
   const cardId = Number(req.params.id);
   const { user_id } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
     const cardRes = await req.db.query(
-      'SELECT c.title, l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+      'SELECT c.title, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
       [cardId]
     );
+    if (cardRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+    }
     const boardId = cardRes[0]?.board_id;
+    const workspaceId = cardRes[0]?.workspace_id;
     const cardTitle = cardRes[0]?.title || 'Card';
+
+    // Section 5.2: The target must be a member of that board with task.view
+    const canTargetView = await userHasPermission(user_id, workspaceId, 'task.view', req.db, boardId);
+    if (!canTargetView) {
+      return res.status(400).json({
+        error: {
+          message: 'Target user must be a member of this board with task.view permission',
+          code: 'INVALID_ASSIGNEE'
+        }
+      });
+    }
 
     const userRes = await req.db.query('SELECT name FROM users WHERE id = ?', [req.user.id]);
     const actorName = userRes[0]?.name || 'Someone';
@@ -695,9 +719,6 @@ router.post('/:id/members', requireAuth, requirePermission('task.assign'), async
       }
     } else {
       await req.db.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
-      if (boardId) {
-        await req.db.execute('INSERT IGNORE INTO board_members (board_id, user_id, role) VALUES (?, ?, ?)', [boardId, user_id, 'member']);
-      }
       action = 'added';
       if (boardId) {
         await logActivity(boardId, cardId, req.user.id, 'member_added', { member_name: targetUserName }, req.db);
@@ -825,7 +846,7 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
     const targetWorkspaceId = targetList.workspace_id;
 
     // Check permission on target workspace / board
-    const hasCreatePerm = await userHasPermission(req.user.id, targetWorkspaceId, 'card.create', req.db, targetBoardId);
+    const hasCreatePerm = await userHasPermission(req.user.id, targetWorkspaceId, 'task.create', req.db, targetBoardId);
     if (!hasCreatePerm) {
       return res.status(403).json({ error: { message: 'No permission to create cards in target board', code: 'FORBIDDEN' } });
     }
@@ -842,8 +863,8 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
 
     // 4. Insert new card
     const cardExec = await req.db.execute(
-      `INSERT INTO cards (list_id, title, description, position, start_date, due_date, is_complete) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO cards (list_id, title, description, position, start_date, due_date, is_complete, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         list_id,
         newTitle,
@@ -851,7 +872,8 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
         position,
         sourceCard.start_date ? formatSqlDateTime(sourceCard.start_date) : formatSqlDateTime(new Date()),
         sourceCard.due_date ? formatSqlDateTime(sourceCard.due_date) : null,
-        sourceCard.is_complete ? 1 : 0
+        sourceCard.is_complete ? 1 : 0,
+        req.user.id
       ]
     );
     const newCardId = cardExec.insertId;
@@ -1152,13 +1174,17 @@ router.post('/:id/attachments/link', requireAuth, requirePermission('attachment.
     const [attachment] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
 
     await logActivity(boardId, cardId, req.user.id, 'attachment_added', { file_name: attachment.file_name }, req.db);
-    await notify({
-      eventType: 'attachment.added',
-      actorUserId: req.user.id,
-      boardId,
-      cardId,
-      meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
-    });
+    await notify(
+      {
+        eventType: 'attachment.added',
+        actorUserId: req.user.id,
+        boardId,
+        cardId,
+        tenantId: req.tenant ? req.tenant.id : null,
+        meta: { fileName: attachment.file_name, cardTitle: cardRes[0].title }
+      },
+      req.db
+    );
 
     const fullCard = await getFullCard(cardId, req.db);
     broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
@@ -1170,7 +1196,19 @@ router.post('/:id/attachments/link', requireAuth, requirePermission('attachment.
 });
 
 // DELETE /api/cards/attachments/:id
-router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
+router.delete(
+  '/attachments/:id',
+  requireAuth,
+  requirePermission({
+    ownership: async (req) => {
+      const db = getActiveDb(req);
+      const rows = await db.query('SELECT uploaded_by_user_id FROM attachments WHERE id = ?', [req.params.id]);
+      return rows[0] && rows[0].uploaded_by_user_id && Number(rows[0].uploaded_by_user_id) === Number(req.user.id);
+    },
+    own: ['attachment.delete_own', 'attachment.delete_any', 'file.delete'],
+    any: ['attachment.delete_any', 'file.delete']
+  }),
+  async (req, res, next) => {
   const attachmentId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -1191,20 +1229,6 @@ router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
     const boardId = att.board_id;
     const workspaceId = att.workspace_id;
 
-    const isOwn = att.uploaded_by_user_id === req.user.id;
-    const hasDeleteOwn = await userHasPermission(req.user.id, workspaceId, 'attachment.delete_own', req.db, boardId);
-    const hasDeleteAny = await userHasPermission(req.user.id, workspaceId, 'attachment.delete_any', req.db, boardId);
-
-    if (isOwn) {
-      if (!hasDeleteOwn && !hasDeleteAny) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete attachment', code: 'PERMISSION_DENIED' } });
-      }
-    } else {
-      if (!hasDeleteAny) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete others attachment', code: 'PERMISSION_DENIED' } });
-      }
-    }
-
     if (att.file_type !== 'link') {
       if (att.file_url.startsWith('/uploads/')) {
         const relativeKey = att.file_url.replace('/uploads/', '');
@@ -1215,7 +1239,7 @@ router.delete('/attachments/:id', requireAuth, async (req, res, next) => {
       }
     }
 
-    await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
+    await req.db.execute('DELETE FROM attachments WHERE id = ? AND card_id = ?', [attachmentId, att.card_id]);
 
     await logActivity(boardId, att.card_id, req.user.id, 'attachment_removed', {
       file_name: att.file_name,
@@ -1363,7 +1387,19 @@ router.post('/:id/comments', requireAuth, requirePermission('comment.create'), a
 });
 
 // PATCH /api/cards/comments/:id
-router.patch('/comments/:id', requireAuth, async (req, res, next) => {
+router.patch(
+  '/comments/:id',
+  requireAuth,
+  requirePermission({
+    ownership: async (req) => {
+      const db = getActiveDb(req);
+      const rows = await db.query('SELECT user_id FROM comments WHERE id = ?', [req.params.id]);
+      return rows[0] && rows[0].user_id && Number(rows[0].user_id) === Number(req.user.id);
+    },
+    own: 'comment.edit_own',
+    any: 'comment.edit_any'
+  }),
+  async (req, res, next) => {
   const commentId = Number(req.params.id);
   const { body } = req.body;
   const originId = req.headers['x-origin-id'];
@@ -1390,15 +1426,6 @@ router.patch('/comments/:id', requireAuth, async (req, res, next) => {
     const boardId = com.board_id;
     const workspaceId = com.workspace_id;
 
-    if (com.user_id !== req.user.id) {
-      return res.status(403).json({ error: { message: 'Only author can edit comment', code: 'PERMISSION_DENIED' } });
-    }
-
-    const hasEditOwn = await userHasPermission(req.user.id, workspaceId, 'comment.edit_own', req.db, boardId);
-    if (!hasEditOwn) {
-      return res.status(403).json({ error: { message: 'Permission denied to edit comment', code: 'PERMISSION_DENIED' } });
-    }
-
     const cleanBody = sanitizeDescription(body.trim());
     await req.db.execute('UPDATE comments SET body = ? WHERE id = ?', [cleanBody, commentId]);
 
@@ -1420,7 +1447,19 @@ router.patch('/comments/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/comments/:id
-router.delete('/comments/:id', requireAuth, async (req, res, next) => {
+router.delete(
+  '/comments/:id',
+  requireAuth,
+  requirePermission({
+    ownership: async (req) => {
+      const db = getActiveDb(req);
+      const rows = await db.query('SELECT user_id FROM comments WHERE id = ?', [req.params.id]);
+      return rows[0] && rows[0].user_id && Number(rows[0].user_id) === Number(req.user.id);
+    },
+    own: ['comment.delete_own', 'comment.delete_any'],
+    any: 'comment.delete_any'
+  }),
+  async (req, res, next) => {
   const commentId = Number(req.params.id);
   const originId = req.headers['x-origin-id'];
 
@@ -1442,21 +1481,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
     const boardId = com.board_id;
     const workspaceId = com.workspace_id;
 
-    const isOwn = com.user_id === req.user.id;
-    const hasDeleteOwn = await userHasPermission(req.user.id, workspaceId, 'comment.delete_own', req.db, boardId);
-    const hasDeleteAny = await userHasPermission(req.user.id, workspaceId, 'comment.delete_any', req.db, boardId);
-
-    if (isOwn) {
-      if (!hasDeleteOwn && !hasDeleteAny) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete comment', code: 'PERMISSION_DENIED' } });
-      }
-    } else {
-      if (!hasDeleteAny) {
-        return res.status(403).json({ error: { message: 'Permission denied to delete others comment', code: 'PERMISSION_DENIED' } });
-      }
-    }
-
-    await req.db.execute('DELETE FROM comments WHERE id = ?', [commentId]);
+    await req.db.execute('DELETE FROM comments WHERE id = ? AND card_id = ?', [commentId, cardId]);
 
     await logActivity(boardId, cardId, req.user.id, 'deleted_comment', {
       comment_id: commentId
@@ -1548,9 +1573,12 @@ router.delete('/checklists/:id', requireAuth, requirePermission('checklist.delet
 
   try {
     const chRes = await req.db.query('SELECT card_id, title FROM checklists WHERE id = ?', [checklistId]);
+    if (chRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Checklist not found', code: 'NOT_FOUND' } });
+    }
     const cardId = chRes[0]?.card_id;
 
-    await req.db.execute('DELETE FROM checklists WHERE id = ?', [checklistId]);
+    await req.db.execute('DELETE FROM checklists WHERE id = ? AND card_id = ?', [checklistId, cardId]);
 
     if (cardId) {
       const cardRes = await req.db.query('SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?', [cardId]);
@@ -1697,7 +1725,7 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
             await notify({
               db: tx,
               tenantId: req.tenant?.id,
-              boardId,
+              boardId: board_id,
               cardId: card_id,
               eventType: 'checklist_item.edited',
               actorId: req.user.id,

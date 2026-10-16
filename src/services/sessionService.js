@@ -32,13 +32,14 @@ function hashToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
-function generateAccessToken(user, tenantId = null, sessionId = null, expiresInSeconds = null) {
+function generateAccessToken(user, tenantId = null, sessionId = null, expiresInSeconds = null, extraClaims = {}) {
   const payload = {
     sub: user.id,
     userId: user.id,
     email: user.email,
     name: user.name,
-    sid: sessionId
+    sid: sessionId,
+    ...extraClaims
   };
   if (tenantId) {
     payload.tid = Number(tenantId);
@@ -70,7 +71,8 @@ async function createSession(db, user, req, options = {}) {
     [sessionId, user.id, tokenHash, familyId, deviceInfo, ipAddress, userAgent.substring(0, 500), expiresAt]
   );
 
-  const accessToken = generateAccessToken(user, options.tenantId || null, sessionId, remainingSeconds);
+  const extraClaims = options.two_fa_required ? { two_fa_required: true } : {};
+  const accessToken = generateAccessToken(user, options.tenantId || null, sessionId, remainingSeconds, extraClaims);
 
   // Notify if user has previous sessions (new device/session login)
   try {
@@ -249,6 +251,15 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
     throw error;
   }
 
+  // Check if user is deactivated across all workspaces in tenant
+  const memberRows = await db.query('SELECT status FROM workspace_members WHERE user_id = ?', [user.id]);
+  if (memberRows && memberRows.length > 0 && memberRows.every(r => r.status === 'deactivated')) {
+    const error = new Error('Your account has been deactivated. Please contact your workspace administrator.');
+    error.status = 403;
+    error.code = 'ACCOUNT_DEACTIVATED';
+    throw error;
+  }
+
   // Revoke the old session
   await db.execute(
     'UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP(3) WHERE id = ?',
@@ -256,10 +267,12 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
   );
 
   // Issue new session in the same family (capped to 5-day ceiling)
+  const requires2fa = await checkUserRequires2Fa(db, user.id, user.totp_enabled);
   const newSession = await createSession(db, user, req, {
     familyId: session.family_id,
     tenantId,
-    expiresAt: maxFamilyExpiresAt
+    expiresAt: maxFamilyExpiresAt,
+    two_fa_required: requires2fa
   });
 
   await logAuthEvent(db, {
@@ -362,6 +375,29 @@ async function revokeAllExceptCurrent(db, userId, currentSessionId, req = null) 
   });
 }
 
+async function checkUserRequires2Fa(db, userId, totpEnabled) {
+  if (totpEnabled) return false;
+  try {
+    const wsRows = await db.query(
+      `SELECT w.settings, w.require_2fa_for_admins, r.rank
+       FROM workspace_members wm
+       JOIN workspaces w ON wm.workspace_id = w.id
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ? AND wm.status = 'active'`,
+      [userId]
+    );
+    for (const row of wsRows) {
+      let settings = row.settings;
+      if (typeof settings === 'string') {
+        try { settings = JSON.parse(settings); } catch (e) { settings = {}; }
+      }
+      if (settings?.require_2fa) return true;
+      if (row.require_2fa_for_admins && Number(row.rank || 0) >= 50) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 module.exports = {
   createSession,
   rotateSession,
@@ -370,5 +406,6 @@ module.exports = {
   revokeAllSessions,
   revokeAllExceptCurrent,
   generateAccessToken,
-  parseDeviceInfo
+  parseDeviceInfo,
+  checkUserRequires2Fa
 };
