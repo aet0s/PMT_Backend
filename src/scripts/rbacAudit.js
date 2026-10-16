@@ -9,9 +9,21 @@ const { PERMISSIONS, SYSTEM_ROLES } = require('../rbac/registry');
 
 // Explicit allow-list of public routes with justification (login, register-company, refresh, logout where applicable, invitation verify, health, public config if any)
 const ALLOWED_PUBLIC_ROUTES = new Map([
+  ['GET /api/auth/check-email', {
+    category: 'login/session',
+    justification: 'Pre-login email lookup — unauthenticated'
+  }],
   ['POST /api/auth/register-company', {
     category: 'registration',
     justification: 'Company registration flow — unauthenticated tenant onboarding'
+  }],
+  ['POST /api/auth/register/send-otp', {
+    category: 'registration',
+    justification: 'Onboarding OTP send — unauthenticated verification step'
+  }],
+  ['POST /api/auth/register/verify-otp', {
+    category: 'registration',
+    justification: 'Onboarding OTP verify — unauthenticated verification step'
   }],
   ['POST /api/auth/verify-registration', {
     category: 'registration',
@@ -20,6 +32,22 @@ const ALLOWED_PUBLIC_ROUTES = new Map([
   ['POST /api/auth/register', {
     category: 'registration',
     justification: 'User registration flow — onboarding via cryptographically signed invite token'
+  }],
+  ['POST /api/auth/forgot-password/send-otp', {
+    category: 'login/session',
+    justification: 'Password reset OTP send'
+  }],
+  ['POST /api/auth/forgot-password/verify-otp', {
+    category: 'login/session',
+    justification: 'Password reset OTP verify'
+  }],
+  ['POST /api/auth/forgot-password/verify-token', {
+    category: 'login/session',
+    justification: 'Password reset token verification'
+  }],
+  ['POST /api/auth/forgot-password/reset', {
+    category: 'login/session',
+    justification: 'Password reset submission'
   }],
   ['POST /api/auth/login', {
     category: 'login/session',
@@ -357,13 +385,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 126 || prodSingleResult.count !== 126) {
-    console.error(`[AUDIT FAILED] Expected exactly 126 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 142 || prodSingleResult.count !== 142) {
+    console.error(`[AUDIT FAILED] Expected exactly 142 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 127 || testSingleResult.count !== 127) {
-    console.error(`[AUDIT FAILED] Expected exactly 127 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 143 || testSingleResult.count !== 143) {
+    console.error(`[AUDIT FAILED] Expected exactly 143 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -386,16 +414,16 @@ function runAudit() {
   const nonPlannedPermissions = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
   const plannedPermissions = PERMISSIONS.filter((p) => p.planned).map((p) => p.key);
 
-  if (PERMISSIONS.length !== 140) {
-    console.error(`[AUDIT FAILED] Expected exactly 140 registry permissions, found ${PERMISSIONS.length}`);
+  if (PERMISSIONS.length !== 144) {
+    console.error(`[AUDIT FAILED] Expected exactly 144 registry permissions, found ${PERMISSIONS.length}`);
     process.exit(1);
   }
-  if (nonPlannedPermissions.length !== 65 || plannedPermissions.length !== 75) {
-    console.error(`[AUDIT FAILED] Expected 65 active and 75 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+  if (nonPlannedPermissions.length !== 73 || plannedPermissions.length !== 71) {
+    console.error(`[AUDIT FAILED] Expected 73 active and 71 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
     process.exit(1);
   }
 
-  // The 24 fine-grained or handler-enforced permissions complementing the 41 direct route declarations:
+  // The fine-grained or handler-enforced permissions complementing direct route declarations:
   const FINE_GRAINED_AND_HANDLER_PERMISSIONS = new Set([
     'workspace.archive',
     'role.assign',
@@ -420,7 +448,13 @@ function runAudit() {
     'audit.export',
     'activity.view',
     'archive.permanent_delete',
-    'search.use'
+    'search.use',
+    'task.complete',
+    'task.assign_self',
+    'task.delete_own',
+    'label.delete_own',
+    'member.invite_guest',
+    'project.access_all'
   ]);
 
   const activeEnforcedKeys = new Set();

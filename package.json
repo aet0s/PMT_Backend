@@ -30,7 +30,11 @@
     "backup:restore": "node src/scripts/restoreBackup.js",
     "permtest:provision": "node src/scripts/permtestProvision.js",
     "permtest:drop": "node src/scripts/permtestDrop.js",
-    "permcheck": "node src/scripts/permcheck.js"
+    "permcheck": "node src/scripts/permcheck.js",
+    "test:perm": "node src/scripts/permtest/index.js",
+    "test:perm:fast": "node src/scripts/permtest/index.js --fast",
+    "test:perm:static": "node src/scripts/permtest/static.js",
+    "test:perm:reg": "node src/scripts/permtest/runRegressions.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

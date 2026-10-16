@@ -219,7 +219,75 @@ async function createBackup(customOptions = {}) {
 }
 
 if (require.main === module) {
-  createBackup()
+  const cliArgs = process.argv.slice(2);
+  const options = {};
+
+  for (let i = 0; i < cliArgs.length; i++) {
+    const a = cliArgs[i];
+    if (a === '--tenant' && cliArgs[i + 1]) {
+      options.tenantSlug = cliArgs[++i];
+    } else if (a.startsWith('--tenant=')) {
+      options.tenantSlug = a.split('=')[1];
+    } else if (a === '--database' && cliArgs[i + 1]) {
+      options.specificDatabase = cliArgs[++i];
+    } else if (a.startsWith('--database=')) {
+      options.specificDatabase = a.split('=')[1];
+    } else if (a === '--out' || a === '--dir') {
+      options.backupDir = cliArgs[++i];
+    } else if (a.startsWith('--out=') || a.startsWith('--dir=')) {
+      options.backupDir = a.split('=')[1];
+    } else if (a === '--skip-master') {
+      options.skipMaster = true;
+    }
+  }
+
+  async function runCli() {
+    if (options.tenantSlug) {
+      const mysql = require('mysql2/promise');
+      const conn = await mysql.createConnection({
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 3306,
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_MASTER_NAME || 'pm_master'
+      });
+      const [t] = await conn.execute('SELECT id FROM tenants WHERE slug = ?', [options.tenantSlug]);
+      await conn.end();
+      if (t.length > 0) {
+        options.tenantIds = [t[0].id];
+      } else {
+        console.error(`Tenant slug "${options.tenantSlug}" not found in master database.`);
+        process.exit(1);
+      }
+    }
+
+    if (options.specificDatabase) {
+      options.skipMaster = true;
+      options.tenantIds = [-999]; // prevent standard tenant iteration
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const baseDir = options.backupDir || path.join(__dirname, '../../backups');
+      const backupDir = path.join(baseDir, `backup_${timestamp}`);
+      fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      const outFile = path.join(backupDir, `${options.specificDatabase}.sql`);
+
+      const host = process.env.DB_HOST || 'localhost';
+      const port = process.env.DB_PORT || 3306;
+      const user = process.env.DB_USER || 'root';
+      const password = process.env.DB_PASSWORD || '';
+      const mysqldumpBin = resolveMysqlBin('mysqldump');
+      const cmd = `${mysqldumpBin} --host=${host} --port=${port} --user=${user} --single-transaction --routines --triggers --no-tablespaces ${options.specificDatabase} > "${outFile}"`;
+      const { execSync } = require('child_process');
+      execSync(cmd, { stdio: 'pipe', env: { ...process.env, MYSQL_PWD: password } });
+      const stat = fs.statSync(outFile);
+      console.log(`  ✓ Successfully dumped '${options.specificDatabase}' (${(stat.size / 1024).toFixed(2)} KB)`);
+      console.log(`  - Location: ${outFile}`);
+      return { backupDir, outFile };
+    }
+
+    return createBackup(options);
+  }
+
+  runCli()
     .then(() => process.exit(0))
     .catch((err) => {
       console.error('Fatal backup failure:', err);
@@ -227,4 +295,5 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createBackup, encryptBuffer };
+module.exports = { createBackup, encryptBuffer, resolveMysqlBin };
+

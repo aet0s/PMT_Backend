@@ -42,6 +42,7 @@ src/scripts/generatePermissionMatrixDoc.js
 src/scripts/generateRbacMigration.js
 
 # Test results, matrices, catalogs, and test report documents
+src/scripts/permtest/reports/
 src/scripts/rbac_test_results.json
 src/scripts/rbac_catalog_dump.json
 .coverage_records.json

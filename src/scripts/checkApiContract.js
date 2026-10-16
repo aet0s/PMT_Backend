@@ -82,9 +82,11 @@ function extractClientApiCalls(clientSrcDir) {
         method = methodMatch[1].toUpperCase();
       }
 
+      // Handle template ternary query strings e.g. /api/archive${qs ? `?${qs}` : ''}
+      let cleanedUrl = rawUrl.replace(/\$\{\s*[\w$]+\s*\?\s*[`'"]\?[\s\S]*$/, '');
       // Strip query parameters and query variable interpolations like ${query} or ?${params}
-      let cleanedUrl = rawUrl.split('?')[0];
-      cleanedUrl = cleanedUrl.replace(/\$\{(?:query|params|search|qs|filters)[^}]*\}/gi, '');
+      cleanedUrl = cleanedUrl.split('?')[0];
+      cleanedUrl = cleanedUrl.replace(/\$\{(?:query|params|search|qs|filters)[\s\S]*$/gi, '');
 
       // Normalize path template variables: ${param} -> :id
       let normalizedPath = cleanedUrl.replace(templateParamRegex, ':id');
