@@ -68,6 +68,27 @@ const localStorage = {
     };
   },
 
+  async saveWorkspaceIcon(tenantId, workspaceId, file) {
+    const tId = String(tenantId || 1);
+    const wsDir = path.join(UPLOADS_DIR, tId, 'workspaces');
+    if (!fs.existsSync(wsDir)) {
+      fs.mkdirSync(wsDir, { recursive: true });
+    }
+    const ext = path.extname(file.originalname) || '.png';
+    const uniqueName = `ws_${workspaceId}_${Date.now()}${ext}`;
+    const targetPath = path.join(wsDir, uniqueName);
+    if (file.buffer) {
+      fs.writeFileSync(targetPath, file.buffer);
+    } else if (file.path) {
+      fs.copyFileSync(file.path, targetPath);
+    }
+    const relativeKey = `${tId}/workspaces/${uniqueName}`;
+    return {
+      key: relativeKey,
+      file_url: `/api/files/${relativeKey}`
+    };
+  },
+
   getUrl(key) {
     return `/api/files/${key}`;
   },

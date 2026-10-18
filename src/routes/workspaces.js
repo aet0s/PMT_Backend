@@ -33,6 +33,40 @@ const { evaluatePermission } = require('../rbac/evaluate');
 const validPermMap = new Map();
 PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
 
+const multer = require('multer');
+const storage = require('../storage');
+
+function detectImageMagicBytes(buffer) {
+  if (!buffer || buffer.length < 8) return null;
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'image/jpeg';
+  if (
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47 &&
+    buffer[4] === 0x0D && buffer[5] === 0x0A && buffer[6] === 0x1A && buffer[7] === 0x0A
+  ) return 'image/png';
+  const header6 = buffer.slice(0, 6).toString('ascii');
+  if (header6 === 'GIF87a' || header6 === 'GIF89a') return 'image/gif';
+  if (
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer.length >= 12 && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) return 'image/webp';
+  return null;
+}
+
+const iconUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
+    if (!allowed.includes(file.mimetype)) {
+      const err = new Error('Invalid file type. Only JPEG, PNG, WebP, GIF, and SVG images are permitted.');
+      err.code = 'INVALID_IMAGE_TYPE';
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  }
+});
+
 const router = express.Router();
 
 const createWorkspaceSchema = z.object({
@@ -42,6 +76,7 @@ const createWorkspaceSchema = z.object({
 const updateWorkspaceSchema = z.object({
   name: z.string().min(1).transform((v) => sanitizePlain(v)).optional(),
   description: z.string().transform((v) => sanitizePlain(v)).optional(),
+  icon_url: z.string().max(500).nullable().optional(),
   settings: z.any().optional(),
   is_archived: z.boolean().optional(),
   require_2fa_for_admins: z.boolean().optional()
@@ -129,7 +164,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     }
 
     const wsRes = await req.db.query(
-      `SELECT w.id, w.name, w.description, w.settings, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
+      `SELECT w.*, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
        LEFT JOIN roles r ON wm.role_id = r.id
@@ -142,7 +177,8 @@ router.get('/', requireAuth, async (req, res, next) => {
       if (typeof parsed === 'string') {
         try { parsed = JSON.parse(parsed); } catch {}
       }
-      return { ...w, settings: parsed };
+      const iconUrl = w.icon_url || parsed?.icon_url || null;
+      return { ...w, icon_url: iconUrl, settings: parsed };
     });
     return res.json({ workspaces: workspacesWithParsedSettings });
   } catch (err) {
@@ -155,7 +191,7 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
   const workspaceId = Number(req.params.id);
   try {
     const wsRes = await req.db.query(
-      `SELECT w.id, w.name, w.description, w.settings, w.is_archived, w.created_at, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
+      `SELECT w.*, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
        LEFT JOIN roles r ON wm.role_id = r.id
@@ -170,7 +206,8 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
     if (typeof parsed === 'string') {
       try { parsed = JSON.parse(parsed); } catch {}
     }
-    return res.json({ workspace: { ...w, settings: parsed } });
+    const iconUrl = w.icon_url || parsed?.icon_url || null;
+    return res.json({ workspace: { ...w, icon_url: iconUrl, settings: parsed } });
   } catch (err) {
     next(err);
   }
@@ -280,7 +317,7 @@ router.patch(
   validate(updateWorkspaceSchema),
   async (req, res, next) => {
   const workspaceId = Number(req.params.id);
-  const { name, description, settings, is_archived, require_2fa_for_admins } = req.body;
+  const { name, description, icon_url, settings, is_archived, require_2fa_for_admins } = req.body;
 
   try {
     const isArchive = is_archived !== undefined;
@@ -294,6 +331,10 @@ router.patch(
     if (description !== undefined) {
       updates.push('description = ?');
       values.push(sanitizePlain(description));
+    }
+    if (icon_url !== undefined) {
+      updates.push('icon_url = ?');
+      values.push(icon_url);
     }
     if (settings !== undefined) {
       updates.push('settings = ?');
@@ -313,22 +354,41 @@ router.patch(
     }
 
     values.push(workspaceId);
-    const execRes = await req.db.execute(
-      `UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`,
-      values
-    );
+    let execRes;
+    try {
+      execRes = await req.db.execute(
+        `UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`,
+        values
+      );
+    } catch (dbErr) {
+      // If icon_url column is not yet present on legacy DB schema, fallback gracefully
+      if (icon_url !== undefined) {
+        const fallbackUpdates = updates.filter(u => u !== 'icon_url = ?');
+        const fallbackValues = values.filter((_, idx) => idx !== updates.indexOf('icon_url = ?'));
+        if (fallbackUpdates.length > 0) {
+          execRes = await req.db.execute(
+            `UPDATE workspaces SET ${fallbackUpdates.join(', ')} WHERE id = ?`,
+            fallbackValues
+          );
+        }
+      } else {
+        throw dbErr;
+      }
+    }
 
-    if (execRes.affectedRows === 0) {
+    if (execRes && execRes.affectedRows === 0) {
       return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
     }
 
-    const [updatedWs] = await req.db.query('SELECT id, name, description, settings, is_archived, require_2fa_for_admins, created_at FROM workspaces WHERE id = ?', [workspaceId]);
+    const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
     let parsedSettings = updatedWs.settings;
     if (typeof parsedSettings === 'string') {
       try { parsedSettings = JSON.parse(parsedSettings); } catch {}
     }
+    const finalIconUrl = updatedWs.icon_url || parsedSettings?.icon_url || null;
     const wsPayload = {
       ...updatedWs,
+      icon_url: finalIconUrl,
       settings: parsedSettings,
       require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
     };
@@ -344,6 +404,149 @@ router.patch(
     });
 
     return res.json({ workspace: wsPayload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/icon - Upload workspace icon
+router.post('/:id/icon', requireAuth, requirePermission('workspace.edit'), (req, res, next) => {
+  iconUpload.single('icon')(req, res, async (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: { message: 'Image must not exceed 5MB', code: 'FILE_TOO_LARGE' } });
+      }
+      return res.status(err.status || 400).json({ error: { message: err.message, code: err.code || 'UPLOAD_ERROR' } });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: { message: 'No image file uploaded', code: 'NO_FILE' } });
+    }
+
+    const verifiedMime = detectImageMagicBytes(req.file.buffer);
+    if (!verifiedMime && !req.file.mimetype.includes('svg')) {
+      return res.status(400).json({
+        error: {
+          message: 'Invalid file format. Magic bytes do not match a valid JPEG, PNG, WebP, GIF, or SVG image.',
+          code: 'INVALID_IMAGE_TYPE'
+        }
+      });
+    }
+
+    const workspaceId = Number(req.params.id);
+    try {
+      const tenantId = req.tenant ? req.tenant.id : '1';
+      const saveRes = await storage.saveWorkspaceIcon(tenantId, workspaceId, req.file);
+
+      // Update icon_url column and settings.icon_url for backwards compatibility
+      const [existingWs] = await req.db.query('SELECT settings FROM workspaces WHERE id = ?', [workspaceId]);
+      let settingsObj = {};
+      if (existingWs?.settings) {
+        try {
+          settingsObj = typeof existingWs.settings === 'string' ? JSON.parse(existingWs.settings) : existingWs.settings;
+        } catch {}
+      }
+      settingsObj.icon_url = saveRes.file_url;
+
+      try {
+        await req.db.execute(
+          'UPDATE workspaces SET icon_url = ?, settings = ? WHERE id = ?',
+          [saveRes.file_url, JSON.stringify(settingsObj), workspaceId]
+        );
+      } catch (colErr) {
+        // Fallback if icon_url column is pending migration
+        await req.db.execute(
+          'UPDATE workspaces SET settings = ? WHERE id = ?',
+          [JSON.stringify(settingsObj), workspaceId]
+        );
+      }
+
+      const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
+      let parsedSettings = updatedWs.settings;
+      if (typeof parsedSettings === 'string') {
+        try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+      }
+      const wsPayload = {
+        ...updatedWs,
+        icon_url: saveRes.file_url,
+        settings: parsedSettings,
+        require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
+      };
+
+      broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
+
+      await logActivity({
+        workspaceId,
+        userId: req.user.id,
+        actionType: 'workspace_icon_updated',
+        metaJson: { workspace_name: updatedWs.name, icon_url: saveRes.file_url },
+        dbInstance: req.db,
+        tenantId: req.tenant?.id
+      });
+
+      return res.json({
+        message: 'Workspace icon uploaded successfully',
+        icon_url: saveRes.file_url,
+        workspace: wsPayload
+      });
+    } catch (saveErr) {
+      next(saveErr);
+    }
+  });
+});
+
+// DELETE /api/workspaces/:id/icon - Remove workspace icon
+router.delete('/:id/icon', requireAuth, requirePermission('workspace.edit'), async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  try {
+    const [existingWs] = await req.db.query('SELECT settings FROM workspaces WHERE id = ?', [workspaceId]);
+    let settingsObj = {};
+    if (existingWs?.settings) {
+      try {
+        settingsObj = typeof existingWs.settings === 'string' ? JSON.parse(existingWs.settings) : existingWs.settings;
+      } catch {}
+    }
+    delete settingsObj.icon_url;
+
+    try {
+      await req.db.execute(
+        'UPDATE workspaces SET icon_url = NULL, settings = ? WHERE id = ?',
+        [JSON.stringify(settingsObj), workspaceId]
+      );
+    } catch (colErr) {
+      await req.db.execute(
+        'UPDATE workspaces SET settings = ? WHERE id = ?',
+        [JSON.stringify(settingsObj), workspaceId]
+      );
+    }
+
+    const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
+    let parsedSettings = updatedWs.settings;
+    if (typeof parsedSettings === 'string') {
+      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+    }
+    const wsPayload = {
+      ...updatedWs,
+      icon_url: null,
+      settings: parsedSettings,
+      require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
+    };
+
+    broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
+
+    await logActivity({
+      workspaceId,
+      userId: req.user.id,
+      actionType: 'workspace_icon_removed',
+      metaJson: { workspace_name: updatedWs.name },
+      dbInstance: req.db,
+      tenantId: req.tenant?.id
+    });
+
+    return res.json({
+      message: 'Workspace icon removed successfully',
+      workspace: wsPayload
+    });
   } catch (err) {
     next(err);
   }

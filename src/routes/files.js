@@ -231,7 +231,7 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
 // Middleware: allow valid requireAuth, valid signed ?token=..., OR public avatar images
 async function authOrPreviewToken(req, res, next) {
   const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
-  if (relativeSubpath.startsWith('avatars/')) {
+  if (relativeSubpath.startsWith('avatars/') || relativeSubpath.startsWith('workspaces/')) {
     req.isAvatarRequest = true;
     return next();
   }
