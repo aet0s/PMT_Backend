@@ -11,10 +11,12 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
 if (!fs.existsSync(UPLOADS_DIR)) {
   try {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    console.log(`[STORAGE] Created uploads storage directory at: ${UPLOADS_DIR}`);
   } catch (err) {
     console.warn('[STORAGE] Could not create UPLOADS_DIR:', UPLOADS_DIR, err.message);
   }
 }
+console.log(`[STORAGE] Uploads storage directory initialized at: ${UPLOADS_DIR} (Custom external dir: ${Boolean(process.env.UPLOADS_DIR)})`);
 
 const localStorage = {
   async save(file, cardId, tenantId = 1) {
@@ -81,5 +83,7 @@ const localStorage = {
     }
   }
 };
+
+localStorage.UPLOADS_DIR = UPLOADS_DIR;
 
 module.exports = localStorage;

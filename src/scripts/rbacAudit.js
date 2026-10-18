@@ -389,13 +389,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 143 || prodSingleResult.count !== 143) {
-    console.error(`[AUDIT FAILED] Expected exactly 143 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 144 || prodSingleResult.count !== 144) {
+    console.error(`[AUDIT FAILED] Expected exactly 144 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 144 || testSingleResult.count !== 144) {
-    console.error(`[AUDIT FAILED] Expected exactly 144 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 145 || testSingleResult.count !== 145) {
+    console.error(`[AUDIT FAILED] Expected exactly 145 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -418,12 +418,12 @@ function runAudit() {
   const nonPlannedPermissions = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
   const plannedPermissions = PERMISSIONS.filter((p) => p.planned).map((p) => p.key);
 
-  if (PERMISSIONS.length !== 144) {
-    console.error(`[AUDIT FAILED] Expected exactly 144 registry permissions, found ${PERMISSIONS.length}`);
+  if (PERMISSIONS.length !== 145) {
+    console.error(`[AUDIT FAILED] Expected exactly 145 registry permissions, found ${PERMISSIONS.length}`);
     process.exit(1);
   }
-  if (nonPlannedPermissions.length !== 74 || plannedPermissions.length !== 70) {
-    console.error(`[AUDIT FAILED] Expected 74 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+  if (nonPlannedPermissions.length !== 75 || plannedPermissions.length !== 70) {
+    console.error(`[AUDIT FAILED] Expected 75 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
     process.exit(1);
   }
 

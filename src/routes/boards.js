@@ -14,6 +14,7 @@ const { notify } = require('../services/notify');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
 const { syncCompanyOwners } = require('../utils/syncCompanyOwners');
+const storage = require('../storage');
 
 const router = express.Router();
 
@@ -588,7 +589,7 @@ router.delete(
   }
 
   // 4. AFTER COMMIT: Remove files from disk (rejecting path traversal)
-  const tenantUploadDir = path.resolve(process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads'));
+  const tenantUploadDir = storage.UPLOADS_DIR;
   for (const att of attachments) {
     if (att.file_url && att.file_type !== 'link') {
       const relativeKey = att.file_url.startsWith('/api/files/')

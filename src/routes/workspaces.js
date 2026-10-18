@@ -3527,4 +3527,454 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
   }
 });
 
+// GET /api/workspaces/:id/daily-tracker - Server-side paginated & filtered daily task tracking
+router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.view'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+
+  try {
+    const isMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [routeWsId, req.user.id]
+    );
+    if (isMember.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
+    }
+
+    const hasPerm = await userHasPermission(req.user.id, routeWsId, 'daily_tracker.view', req.db);
+    if (!hasPerm) {
+      return res.status(403).json({ error: { message: 'Permission denied: daily_tracker.view required', code: 'FORBIDDEN' } });
+    }
+
+    // 1. Date parameter: default to today (YYYY-MM-DD)
+    const targetDate = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date).trim())
+      ? String(req.query.date).trim()
+      : new Date().toISOString().slice(0, 10);
+
+    // 2. Mode & Pagination: exactly 20 cards per page default
+    const mode = req.query.mode ? String(req.query.mode).trim().toLowerCase() : 'created'; // 'created' | 'active' | 'in_progress'
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    // 3. Filters
+    const reqWsId = req.query.workspace_id;
+    const filterWsId = reqWsId && reqWsId !== 'all' ? Number(reqWsId) : (reqWsId === 'all' ? null : routeWsId);
+    const labelId = req.query.label_id && req.query.label_id !== 'all' ? Number(req.query.label_id) : null;
+    const boardId = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
+    const search = (req.query.search || '').trim().toLowerCase();
+    const sort = req.query.sort ? String(req.query.sort).trim().toLowerCase() : 'newest';
+
+    // Workspaces user can access
+    const userWorkspaces = await req.db.query(
+      `SELECT w.id, w.name
+       FROM workspaces w
+       JOIN workspace_members wm ON w.id = wm.workspace_id
+       WHERE wm.user_id = ? AND w.is_archived = 0
+       ORDER BY w.name ASC`,
+      [req.user.id]
+    );
+    const accessibleWsIds = userWorkspaces.map((w) => w.id);
+    if (accessibleWsIds.length === 0) {
+      return res.json({
+        cards: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+        summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
+        filterOptions: { workspaces: [], labels: [], boards: [] }
+      });
+    }
+
+    // Filter by target workspace or all user workspaces
+    const activeWsIds = filterWsId ? (accessibleWsIds.includes(filterWsId) ? [filterWsId] : []) : accessibleWsIds;
+    if (activeWsIds.length === 0) {
+      return res.json({
+        cards: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+        summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
+        filterOptions: { workspaces: userWorkspaces, labels: [], boards: [] }
+      });
+    }
+
+    // Boards user can view in these workspaces
+    const allowedBoardIds = await accessibleBoardIds(req.user.id, routeWsId, 'daily_tracker.view', req.db);
+    const whereConditions = [
+      'b.workspace_id IN (?)',
+      'b.is_archived = 0',
+      'l.is_archived = 0',
+      'c.is_archived = 0'
+    ];
+    const queryParams = [activeWsIds];
+
+    if (mode === 'active') {
+      whereConditions.push(`(
+        DATE(c.created_at) = ?
+        OR EXISTS (SELECT 1 FROM activity_log a WHERE a.card_id = c.id AND DATE(a.created_at) = ?)
+        OR EXISTS (SELECT 1 FROM comments cm WHERE cm.card_id = c.id AND DATE(cm.created_at) = ?)
+        OR EXISTS (SELECT 1 FROM attachments att WHERE att.card_id = c.id AND DATE(att.created_at) = ?)
+      )`);
+      queryParams.push(targetDate, targetDate, targetDate, targetDate);
+    } else if (mode === 'in_progress') {
+      whereConditions.push(`(
+        c.is_complete = 0
+        AND LOWER(l.name) NOT LIKE '%done%'
+        AND LOWER(l.name) NOT LIKE '%completed%'
+      )`);
+    } else {
+      // Default: 'created'
+      whereConditions.push('DATE(c.created_at) = ?');
+      queryParams.push(targetDate);
+    }
+
+    if (allowedBoardIds && allowedBoardIds.length > 0) {
+      whereConditions.push('b.id IN (?)');
+      queryParams.push(allowedBoardIds);
+    }
+
+    if (boardId) {
+      whereConditions.push('b.id = ?');
+      queryParams.push(boardId);
+    }
+
+    if (labelId) {
+      whereConditions.push(`EXISTS (
+        SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = ?
+      )`);
+      queryParams.push(labelId);
+    }
+
+    if (search) {
+      whereConditions.push('(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.description, "")) LIKE ? OR CAST(c.id AS CHAR) = ?)');
+      const wild = `%${search}%`;
+      queryParams.push(wild, wild, search);
+    }
+
+    const whereSql = whereConditions.join(' AND ');
+
+    // 1. Aggregate summary for that date across the filtered set
+    const summarySql = `
+      SELECT
+        COUNT(DISTINCT c.id) as total,
+        SUM(CASE WHEN c.is_complete = 1 OR LOWER(l.name) LIKE '%done%' OR LOWER(l.name) LIKE '%completed%' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN c.is_complete = 0 AND LOWER(l.name) NOT LIKE '%done%' AND LOWER(l.name) NOT LIKE '%completed%' THEN 1 ELSE 0 END) as in_progress
+      FROM cards c
+      JOIN lists l ON c.list_id = l.id
+      JOIN boards b ON l.board_id = b.id
+      JOIN workspaces w ON b.workspace_id = w.id
+      WHERE ${whereSql}
+    `;
+    const summaryRes = await req.db.query(summarySql, queryParams);
+    const total = Number(summaryRes[0]?.total || 0);
+    const completed = Number(summaryRes[0]?.completed || 0);
+    const in_progress = Number(summaryRes[0]?.in_progress || 0);
+    const completion_rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    // Sorting
+    let orderSql = 'c.created_at DESC, c.id DESC';
+    if (sort === 'oldest') {
+      orderSql = 'c.created_at ASC, c.id ASC';
+    } else if (sort === 'title_asc') {
+      orderSql = 'c.title ASC, c.id ASC';
+    } else if (sort === 'title_desc') {
+      orderSql = 'c.title DESC, c.id DESC';
+    }
+
+    // 2. Paginated cards query
+    const selectSql = `
+      SELECT
+        c.id,
+        c.list_id,
+        c.title,
+        c.description,
+        c.position,
+        c.due_date,
+        c.start_date,
+        c.is_complete,
+        c.is_archived,
+        c.created_at,
+        l.name as list_name,
+        l.board_id,
+        b.name as board_name,
+        b.workspace_id,
+        w.name as workspace_name
+      FROM cards c
+      JOIN lists l ON c.list_id = l.id
+      JOIN boards b ON l.board_id = b.id
+      JOIN workspaces w ON b.workspace_id = w.id
+      WHERE ${whereSql}
+      ORDER BY ${orderSql}
+      LIMIT ? OFFSET ?
+    `;
+    const cardsRes = await req.db.query(selectSql, [...queryParams, limit, offset]);
+    const cardIds = cardsRes.map((c) => c.id);
+
+    const cardMembersMap = {};
+    const cardAssignersMap = {};
+    const cardLabelsMap = {};
+    const cardActivitiesMap = {};
+    const cardCommentsMap = {};
+
+    if (cardIds.length > 0) {
+      // Fetch Card Assignees (Members)
+      const cmRes = await req.db.query(
+        `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url
+         FROM card_members cm
+         JOIN users u ON cm.user_id = u.id
+         WHERE cm.card_id IN (?)
+         ORDER BY u.name ASC`,
+        [cardIds]
+      );
+      cmRes.forEach((row) => {
+        if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
+        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
+      });
+
+      // Fetch Card Assigners
+      const caRes = await req.db.query(
+        `SELECT ca.card_id, u.id, u.name, u.email, u.avatar_url
+         FROM card_assigners ca
+         JOIN users u ON ca.user_id = u.id
+         WHERE ca.card_id IN (?)
+         ORDER BY u.name ASC`,
+        [cardIds]
+      );
+      caRes.forEach((row) => {
+        if (!cardAssignersMap[row.card_id]) cardAssignersMap[row.card_id] = [];
+        cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
+      });
+
+      // Fetch Card Labels
+      const clRes = await req.db.query(
+        `SELECT cl.card_id, l.id, l.name, l.color
+         FROM card_labels cl
+         JOIN labels l ON cl.label_id = l.id
+         WHERE cl.card_id IN (?)`,
+        [cardIds]
+      );
+      clRes.forEach((row) => {
+        if (!cardLabelsMap[row.card_id]) cardLabelsMap[row.card_id] = [];
+        cardLabelsMap[row.card_id].push({ id: row.id, name: row.name, color: row.color });
+      });
+
+      // Fetch recent Activity Logs for cards
+      const actRes = await req.db.query(
+        `SELECT a.card_id, a.action_type, a.meta_json, a.created_at, u.name as user_name
+         FROM activity_log a
+         LEFT JOIN users u ON a.user_id = u.id
+         WHERE a.card_id IN (?)
+         ORDER BY a.created_at DESC`,
+        [cardIds]
+      );
+      actRes.forEach((row) => {
+        if (!cardActivitiesMap[row.card_id]) cardActivitiesMap[row.card_id] = [];
+        cardActivitiesMap[row.card_id].push(row);
+      });
+
+      // Fetch recent Comments for cards
+      const commRes = await req.db.query(
+        `SELECT co.card_id, co.body, co.created_at, u.name as user_name
+         FROM comments co
+         LEFT JOIN users u ON co.user_id = u.id
+         WHERE co.card_id IN (?)
+         ORDER BY co.created_at DESC`,
+        [cardIds]
+      );
+      commRes.forEach((row) => {
+        if (!cardCommentsMap[row.card_id]) cardCommentsMap[row.card_id] = [];
+        cardCommentsMap[row.card_id].push(row);
+      });
+    }
+
+    const now = new Date();
+
+    const cards = cardsRes.map((c) => {
+      const activities = cardActivitiesMap[c.id] || [];
+      const comments = cardCommentsMap[c.id] || [];
+
+      // Find latest activity timestamp across activity_log, comments, and card created_at
+      let latestActivityAt = new Date(c.created_at);
+      let latestActivityEvent = 'created';
+      let latestActor = null;
+      let latestMeta = null;
+
+      if (activities.length > 0) {
+        const topAct = activities[0];
+        const actDate = new Date(topAct.created_at);
+        if (actDate > latestActivityAt) {
+          latestActivityAt = actDate;
+          latestActivityEvent = topAct.action_type;
+          latestActor = topAct.user_name;
+          latestMeta = topAct.meta_json;
+        }
+      }
+
+      if (comments.length > 0) {
+        const topComm = comments[0];
+        const commDate = new Date(topComm.created_at);
+        if (commDate > latestActivityAt) {
+          latestActivityAt = commDate;
+          latestActivityEvent = 'added_comment';
+          latestActor = topComm.user_name;
+          latestMeta = { body: topComm.body };
+        }
+      }
+
+      // Format human-readable last activity
+      const timeStr = latestActivityAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+      const isActToday = latestActivityAt.toDateString() === now.toDateString();
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isActYesterday = latestActivityAt.toDateString() === yesterday.toDateString();
+
+      let lastActivityDisplayTime = `Today at ${timeStr}`;
+      if (!isActToday) {
+        if (isActYesterday) {
+          lastActivityDisplayTime = `Yesterday at ${timeStr}`;
+        } else {
+          lastActivityDisplayTime = `${latestActivityAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${timeStr}`;
+        }
+      }
+
+      // Friendly text for last activity
+      let lastActivityDescription = 'Created';
+      if (latestActivityEvent === 'added_comment') {
+        lastActivityDescription = latestActor ? `Comment by ${latestActor}` : 'New comment';
+      } else if (latestActivityEvent === 'moved_card') {
+        let meta = latestMeta;
+        if (typeof meta === 'string') {
+          try { meta = JSON.parse(meta); } catch {}
+        }
+        lastActivityDescription = meta?.to ? `Moved to ${meta.to}` : 'Moved column';
+      } else if (latestActivityEvent === 'checklist_toggled') {
+        lastActivityDescription = 'Checklist updated';
+      } else if (latestActivityEvent === 'checklist_item_added') {
+        lastActivityDescription = 'Checklist item added';
+      } else if (latestActivityEvent === 'marked_complete') {
+        lastActivityDescription = 'Marked complete';
+      } else if (latestActivityEvent === 'marked_incomplete') {
+        lastActivityDescription = 'Reopened';
+      } else if (latestActivityEvent === 'attachment_uploaded') {
+        lastActivityDescription = 'Attachment added';
+      } else if (latestActivityEvent === 'card_renamed') {
+        lastActivityDescription = 'Renamed';
+      } else if (latestActivityEvent !== 'created') {
+        lastActivityDescription = 'Updated';
+      }
+
+      const hoursSinceActivity = Math.max(0, (now.getTime() - latestActivityAt.getTime()) / (1000 * 60 * 60));
+      const isInactive = hoursSinceActivity >= 48;
+      const daysInactive = Math.max(2, Math.floor(hoursSinceActivity / 24));
+
+      // Calculate days in progress
+      const startDate = c.start_date ? new Date(c.start_date) : new Date(c.created_at);
+      const diffMs = Math.max(0, now.getTime() - startDate.getTime());
+      const daysInProgress = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
+
+      // Synthesize Activity Pill for "Active Today" (activity on targetDate)
+      const targetDateActivities = activities.filter((a) => {
+        try {
+          return new Date(a.created_at).toISOString().slice(0, 10) === targetDate;
+        } catch {
+          return false;
+        }
+      });
+      const targetDateComments = comments.filter((cm) => {
+        try {
+          return new Date(cm.created_at).toISOString().slice(0, 10) === targetDate;
+        } catch {
+          return false;
+        }
+      });
+
+      let activityPill = null;
+      const checklistCount = targetDateActivities.filter((a) => a.action_type === 'checklist_toggled' || a.action_type === 'checklist_item_added').length;
+      const commentsCount = targetDateComments.length;
+      const movedAct = targetDateActivities.find((a) => a.action_type === 'moved_card');
+
+      if (checklistCount > 0 && commentsCount > 0) {
+        activityPill = `${checklistCount} checklist item(s) done • ${commentsCount} note(s) posted`;
+      } else if (checklistCount > 0) {
+        activityPill = `${checklistCount} checklist item(s) completed today`;
+      } else if (commentsCount > 0) {
+        activityPill = `${commentsCount} note/comment posted today`;
+      } else if (movedAct) {
+        let meta = movedAct.meta_json;
+        if (typeof meta === 'string') {
+          try { meta = JSON.parse(meta); } catch {}
+        }
+        activityPill = meta?.to ? `Moved to ${meta.to} today` : 'Column moved today';
+      } else if (targetDateActivities.length > 0) {
+        activityPill = `Updated today (${lastActivityDescription})`;
+      } else if (new Date(c.created_at).toISOString().slice(0, 10) === targetDate) {
+        activityPill = `Created today at ${c.created_at ? new Date(c.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : ''}`;
+      } else {
+        activityPill = `Active today • ${lastActivityDescription}`;
+      }
+
+      return {
+        ...c,
+        boardId: c.board_id,
+        workspaceId: c.workspace_id,
+        listName: c.list_name,
+        boardName: c.board_name,
+        workspaceName: c.workspace_name,
+        members: cardMembersMap[c.id] || [],
+        assigned_users: cardMembersMap[c.id] || [],
+        assigners: cardAssignersMap[c.id] || [],
+        labels: cardLabelsMap[c.id] || [],
+        days_in_progress: daysInProgress,
+        last_activity_at: latestActivityAt.toISOString(),
+        last_activity_time: lastActivityDisplayTime,
+        last_activity_text: `${lastActivityDescription} (${lastActivityDisplayTime})`,
+        is_inactive: isInactive,
+        days_inactive: daysInactive,
+        hours_since_activity: Math.round(hoursSinceActivity),
+        activity_pill: activityPill
+      };
+    });
+
+    // Filter options: labels in these workspaces/boards
+    const labels = await req.db.query(
+      `SELECT DISTINCT l.id, l.name, l.color
+       FROM labels l
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id IN (?) AND b.is_archived = 0
+       ORDER BY l.name ASC`,
+      [activeWsIds]
+    );
+
+    const boards = await req.db.query(
+      `SELECT id, name, workspace_id
+       FROM boards
+       WHERE workspace_id IN (?) AND is_archived = 0
+       ORDER BY name ASC`,
+      [activeWsIds]
+    );
+
+    return res.json({
+      cards,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages
+      },
+      summary: {
+        total,
+        completed,
+        in_progress,
+        completion_rate,
+        date: targetDate,
+        mode
+      },
+      filterOptions: {
+        workspaces: userWorkspaces,
+        labels,
+        boards
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

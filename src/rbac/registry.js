@@ -174,6 +174,9 @@ const PERMISSIONS = [
   { key: 'report.export', module: 'report', label: 'Export Reports', description: 'Download PDF and CSV reports', scope: 'company', dangerous: false, planned: true },
   { key: 'report.create_custom', module: 'report', label: 'Create Custom Reports', description: 'Build and save custom report configurations', scope: 'company', dangerous: false, planned: true },
 
+  // --- Daily Tracker ---
+  { key: 'daily_tracker.view', module: 'daily_tracker', label: 'View Daily Tracker', description: 'View and track daily added cards across projects', scope: 'company', dangerous: false },
+
   // --- Dashboard ---
   { key: 'dashboard.view_project', module: 'dashboard', label: 'View Project Dashboard', description: 'View project KPIs and task status overview', scope: 'project', dangerous: false, planned: true },
   { key: 'dashboard.view_executive', module: 'dashboard', label: 'View Executive Dashboard', description: 'View organization-wide health roll-up', scope: 'company', dangerous: false, planned: true },
@@ -270,7 +273,7 @@ const SYSTEM_ROLES = {
       'time.view_own', 'time.log', 'time.edit_own', 'time.view_all', 'time.approve_timesheet',
       'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.import', 'import_export.export',
-      'archive.view', 'archive.restore', 'activity.view',
+      'archive.view', 'archive.restore', 'activity.view', 'daily_tracker.view',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },

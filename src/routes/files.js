@@ -9,9 +9,9 @@ const { requireAuth, getJwtSecret } = require('../middleware/auth');
 const storage = require('../storage');
 
 const router = express.Router();
-const UPLOADS_DIR = process.env.UPLOADS_DIR
+const UPLOADS_DIR = storage.UPLOADS_DIR || (process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
-  : path.resolve(__dirname, '../../uploads');
+  : path.resolve(__dirname, '../../uploads'));
 
 /**
  * Safely resolves an uploaded file path across known upload roots.
@@ -22,6 +22,9 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
   const tId = String(tenantId);
 
   const candidateBases = [];
+  if (storage.UPLOADS_DIR) {
+    candidateBases.push(storage.UPLOADS_DIR);
+  }
   if (process.env.UPLOADS_DIR) {
     candidateBases.push(path.resolve(process.env.UPLOADS_DIR));
   }

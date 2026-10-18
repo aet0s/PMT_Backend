@@ -89,6 +89,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id/audit',                                   { permission: 'audit.view',                 scope: 'company' }],
   ['GET /api/workspaces/:id/audit/export',                            { permission: 'audit.export',               scope: 'company' }],
   ['GET /api/workspaces/:id/search',                                  { permission: 'search.use',                 scope: 'company' }],
+  ['GET /api/workspaces/:id/daily-tracker',                           { permission: 'daily_tracker.view',         scope: 'company' }],
 
   // ─── Roles ────────────────────────────────────────────────────────────────
   ['PATCH /api/roles/:id',   { permission: 'role.edit',   scope: 'company', note: 'enforced inline in handler' }],
