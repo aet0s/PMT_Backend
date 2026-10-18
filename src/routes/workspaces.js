@@ -3607,9 +3607,29 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     if (mode === 'active') {
       whereConditions.push(`(
         DATE(c.created_at) = ?
-        OR EXISTS (SELECT 1 FROM activity_log a WHERE a.card_id = c.id AND DATE(a.created_at) = ?)
-        OR EXISTS (SELECT 1 FROM comments cm WHERE cm.card_id = c.id AND DATE(cm.created_at) = ?)
-        OR EXISTS (SELECT 1 FROM attachments att WHERE att.card_id = c.id AND DATE(att.created_at) = ?)
+        OR EXISTS (
+          SELECT 1 FROM activity_log a
+          WHERE a.card_id = c.id
+            AND DATE(a.created_at) = ?
+            AND a.action_type IN ('checklist_toggled', 'moved_card', 'attachment_uploaded', 'marked_complete')
+            AND (
+              a.action_type != 'checklist_toggled'
+              OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, '$.is_checked')) IN ('true', '1')
+              OR a.meta_json LIKE '%"is_checked":true%'
+              OR a.meta_json LIKE '%"is_checked":1%'
+            )
+        )
+        OR EXISTS (
+          SELECT 1 FROM comments cm
+          WHERE cm.card_id = c.id
+            AND DATE(cm.created_at) = ?
+            AND LENGTH(TRIM(cm.body)) >= 10
+        )
+        OR EXISTS (
+          SELECT 1 FROM attachments att
+          WHERE att.card_id = c.id
+            AND DATE(att.created_at) = ?
+        )
       )`);
       queryParams.push(targetDate, targetDate, targetDate, targetDate);
     } else if (mode === 'in_progress') {
@@ -3872,42 +3892,118 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       // Synthesize Activity Pill for "Active Today" (activity on targetDate)
       const targetDateActivities = activities.filter((a) => {
         try {
-          return new Date(a.created_at).toISOString().slice(0, 10) === targetDate;
+          const actD = new Date(a.created_at);
+          const isoDate = actD.toISOString().slice(0, 10);
+          const localDate = `${actD.getFullYear()}-${String(actD.getMonth() + 1).padStart(2, '0')}-${String(actD.getDate()).padStart(2, '0')}`;
+          return isoDate === targetDate || localDate === targetDate;
         } catch {
           return false;
         }
       });
       const targetDateComments = comments.filter((cm) => {
         try {
-          return new Date(cm.created_at).toISOString().slice(0, 10) === targetDate;
+          const comD = new Date(cm.created_at);
+          const isoDate = comD.toISOString().slice(0, 10);
+          const localDate = `${comD.getFullYear()}-${String(comD.getMonth() + 1).padStart(2, '0')}-${String(comD.getDate()).padStart(2, '0')}`;
+          return isoDate === targetDate || localDate === targetDate;
         } catch {
           return false;
         }
       });
 
-      let activityPill = null;
-      const checklistCount = targetDateActivities.filter((a) => a.action_type === 'checklist_toggled' || a.action_type === 'checklist_item_added').length;
-      const commentsCount = targetDateComments.length;
-      const movedAct = targetDateActivities.find((a) => a.action_type === 'moved_card');
+      // --- ANTI-CHEAT ENGINE ---
+      // 1. Checklist Verification:
+      // Track distinct items and their net state today.
+      // Unchecking does not grant credit. Rapid spam clicks only resolve to final state.
+      const checklistToggles = targetDateActivities.filter((a) => a.action_type === 'checklist_toggled');
+      const itemFinalState = new Map();
+      let lastChecklistActor = null;
+      for (const a of checklistToggles) {
+        let meta = a.meta_json;
+        if (typeof meta === 'string') {
+          try { meta = JSON.parse(meta); } catch {}
+        }
+        const key = meta?.item_id ? String(meta.item_id) : (meta?.item_text ? String(meta.item_text).trim().toLowerCase() : null);
+        const isChecked = meta?.is_checked === true || meta?.is_checked === 1 || String(meta?.is_checked) === 'true';
+        if (key && !itemFinalState.has(key)) {
+          itemFinalState.set(key, isChecked);
+          if (isChecked && !lastChecklistActor && a.user_name) {
+            lastChecklistActor = a.user_name;
+          }
+        }
+      }
+      const verifiedChecklistCount = Array.from(itemFinalState.values()).filter(Boolean).length;
 
-      if (checklistCount > 0 && commentsCount > 0) {
-        activityPill = `${checklistCount} checklist item(s) done • ${commentsCount} note(s) posted`;
-      } else if (checklistCount > 0) {
-        activityPill = `${checklistCount} checklist item(s) completed today`;
-      } else if (commentsCount > 0) {
-        activityPill = `${commentsCount} note/comment posted today`;
-      } else if (movedAct) {
+      // 2. Meaningful Comments Verification:
+      // Dummy spam comments like '.', 'ok', 'asdf' (< 10 non-space characters) are filtered out.
+      const meaningfulComments = targetDateComments.filter((cm) => String(cm.body || '').trim().length >= 10);
+      const latestMeaningfulComment = meaningfulComments[0];
+      const commentsCount = meaningfulComments.length;
+
+      // 3. Column Moves Verification:
+      // Expose back-and-forth shuffling and indicate exact destination.
+      const movedActs = targetDateActivities.filter((a) => a.action_type === 'moved_card');
+      const movedAct = movedActs[0];
+      let moveText = null;
+      if (movedAct) {
         let meta = movedAct.meta_json;
         if (typeof meta === 'string') {
           try { meta = JSON.parse(meta); } catch {}
         }
-        activityPill = meta?.to ? `Moved to ${meta.to} today` : 'Column moved today';
-      } else if (targetDateActivities.length > 0) {
-        activityPill = `Updated today (${lastActivityDescription})`;
+        const toCol = meta?.to || c.list_name || 'column';
+        const fromCol = meta?.from || '';
+        const actor = movedAct.user_name ? ` by ${movedAct.user_name}` : '';
+        if (movedActs.length > 1) {
+          moveText = `⚠️ Column shifted ${movedActs.length}x today (now in ${toCol})`;
+        } else if (toCol.toLowerCase().includes('done') || toCol.toLowerCase().includes('complete')) {
+          moveText = `🚀 Completed (moved to ${toCol})${actor}`;
+        } else if (fromCol && (fromCol.toLowerCase().includes('done') || fromCol.toLowerCase().includes('review')) && (toCol.toLowerCase().includes('todo') || toCol.toLowerCase().includes('progress'))) {
+          moveText = `⚠️ Moved back: ${fromCol} ➔ ${toCol}${actor}`;
+        } else {
+          moveText = `Moved to ${toCol}${actor}`;
+        }
+      }
+
+      // 4. Cosmetic Title Renames:
+      const renamedAct = targetDateActivities.find((a) => a.action_type === 'card_renamed');
+      const descAct = targetDateActivities.find((a) => a.action_type === 'card_description_updated');
+
+      let activityPill = null;
+      let hasGenuineWork = false;
+
+      if (verifiedChecklistCount > 0 && commentsCount > 0) {
+        const actor = lastChecklistActor ? ` by ${lastChecklistActor}` : '';
+        const quote = latestMeaningfulComment ? ` • 💬 "${latestMeaningfulComment.body.trim().slice(0, 30)}..."` : '';
+        activityPill = `✓ ${verifiedChecklistCount} checklist item(s) done${actor}${quote}`;
+        hasGenuineWork = true;
+      } else if (verifiedChecklistCount > 0) {
+        const actor = lastChecklistActor ? ` by ${lastChecklistActor}` : '';
+        activityPill = `✓ ${verifiedChecklistCount} checklist item(s) completed${actor}`;
+        hasGenuineWork = true;
+      } else if (commentsCount > 0) {
+        const commentAuthor = latestMeaningfulComment.user_name ? ` by ${latestMeaningfulComment.user_name}` : '';
+        const snippet = latestMeaningfulComment.body.trim().slice(0, 45);
+        activityPill = `💬 "${snippet}${latestMeaningfulComment.body.length > 45 ? '...' : ''}"${commentAuthor}`;
+        hasGenuineWork = true;
+      } else if (moveText) {
+        activityPill = moveText;
+        hasGenuineWork = true;
+      } else if (targetDateActivities.some((a) => a.action_type === 'attachment_uploaded')) {
+        const attAct = targetDateActivities.find((a) => a.action_type === 'attachment_uploaded');
+        activityPill = `📎 File attached${attAct?.user_name ? ` by ${attAct.user_name}` : ''}`;
+        hasGenuineWork = true;
+      } else if (renamedAct) {
+        activityPill = `✏️ Title renamed${renamedAct.user_name ? ` by ${renamedAct.user_name}` : ''} (No task progress)`;
+        hasGenuineWork = false;
+      } else if (descAct) {
+        activityPill = `✏️ Description edited${descAct.user_name ? ` by ${descAct.user_name}` : ''} (No task progress)`;
+        hasGenuineWork = false;
       } else if (new Date(c.created_at).toISOString().slice(0, 10) === targetDate) {
         activityPill = `Created today at ${c.created_at ? new Date(c.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : ''}`;
+        hasGenuineWork = true;
       } else {
-        activityPill = `Active today • ${lastActivityDescription}`;
+        activityPill = `Active today (${lastActivityDescription})`;
+        hasGenuineWork = false;
       }
 
       return {
@@ -3928,7 +4024,9 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         is_inactive: isInactive,
         days_inactive: daysInactive,
         hours_since_activity: Math.round(hoursSinceActivity),
-        activity_pill: activityPill
+        activity_pill: activityPill,
+        has_genuine_work: hasGenuineWork,
+        verified_checklist_count: verifiedChecklistCount
       };
     });
 

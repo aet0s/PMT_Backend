@@ -1743,8 +1743,9 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
 
         if (is_checked !== undefined) {
           await logActivity(board_id, card_id, req.user.id, 'checklist_toggled', {
+            item_id: itemId,
             item_text: updatedItem.text,
-            is_checked: is_checked
+            is_checked: Boolean(is_checked)
           }, tx);
 
           const detailRes = await tx.query(
