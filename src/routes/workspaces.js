@@ -167,7 +167,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       `SELECT w.*, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
-       LEFT JOIN roles r ON wm.role_id = r.id
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
        WHERE wm.user_id = ? AND w.is_archived = 0
        ORDER BY w.id ASC`,
       [req.user.id]
@@ -194,7 +194,7 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
       `SELECT w.*, COALESCE(r.name, wm.role, 'Team Member') as role_name, r.id as role_id
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
-       LEFT JOIN roles r ON wm.role_id = r.id
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
        WHERE w.id = ? AND wm.user_id = ?`,
       [workspaceId, req.user.id]
     );
@@ -691,6 +691,8 @@ router.get('/:id/my-permissions', requireAuth, async (req, res, next) => {
   const projectId = rawProjectId ? Number(rawProjectId) : null;
 
   try {
+    await syncCompanyOwners(req.db, req.user.id);
+
     const isMember = await req.db.query(
       'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
       [workspaceId, req.user.id]

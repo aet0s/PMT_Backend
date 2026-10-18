@@ -3,7 +3,7 @@
 // Powered by evaluate.js pure evaluation function (Deny by default, zero role-name branching).
 
 const { getTenantDb, getDevSingleDb } = require('../services/tenantPools');
-const { expandPermissionKeys } = require('../rbac/registry');
+const { expandPermissionKeys, PERMISSIONS } = require('../rbac/registry');
 const { evaluatePermission, getPermissionScope } = require('../rbac/evaluate');
 const { isOwnerRole } = require('../utils/roleRank');
 
@@ -364,8 +364,9 @@ async function resolveWorkspaceId(req) {
 
   // 4. STRICT CONSISTENCY VALIDATION:
   // Any client-supplied board_id or workspace_id in params, query, or body MUST agree with derived values.
-  const isDailyTrackerRoute = routePath.includes('/daily-tracker') || subPath.includes('/daily-tracker');
-  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (!isDailyTrackerRoute ? req.query?.workspace_id : null);
+  // For tracker/reporting endpoints where query.workspace_id acts as an optional sub-filter, do not trigger mismatch.
+  const isFilterQuery = req.path?.includes('daily-tracker') || req.originalUrl?.includes('daily-tracker') || req.path?.includes('reports') || req.originalUrl?.includes('reports');
+  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (!isFilterQuery ? req.query?.workspace_id : null);
   if (clientWs && Number(clientWs) !== Number(derivedWorkspaceId)) {
     const err = new Error(`Workspace mismatch: resource belongs to workspace ${derivedWorkspaceId}, but request supplied ${clientWs}`);
     err.status = 400;
@@ -424,9 +425,9 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
     wsRole = req._rbacWsRoleCache.get(`${userId}:${workspaceId}`);
   } else {
     const wsRows = await db.query(
-      `SELECT wm.role_id, r.name as role_name, r.rank, r.is_system, p.key as permission_key
+      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank, r.is_system, r.is_editable, p.key as permission_key
        FROM workspace_members wm
-       JOIN roles r ON wm.role_id = r.id
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
        LEFT JOIN role_permissions rp ON r.id = rp.role_id
        LEFT JOIN permissions p ON rp.permission_id = p.id
        WHERE wm.workspace_id = ? AND wm.user_id = ?`,
@@ -438,10 +439,15 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
       wsRole = {
         id: wsRows[0].role_id,
         name: wsRows[0].role_name,
-        rank: Number(wsRows[0].rank || 30),
+        rank: Number(wsRows[0].rank || (wsRows[0].role_name === 'Owner' || wsRows[0].role_name === 'Super Admin' ? 100 : 30)),
         is_system: wsRows[0].is_system,
+        is_editable: wsRows[0].is_editable,
         permissions: perms
       };
+
+      if (isOwnerRole(wsRole) || wsRole.name === 'Owner' || wsRole.name === 'Super Admin' || wsRole.rank >= 100) {
+        PERMISSIONS.filter((p) => !p.planned).forEach((p) => wsRole.permissions.add(p.key));
+      }
     }
 
     if (req) {
@@ -654,9 +660,9 @@ async function getUserPermissions(userId, workspaceId, dbInstance = null, projec
   const db = getActiveDb(dbInstance);
 
   const wsRows = await db.query(
-    `SELECT r.id as role_id, r.name as role_name, r.rank, r.is_system, r.is_editable, p.key as permission_key
+    `SELECT r.id as role_id, COALESCE(r.name, wm.role) as role_name, r.rank, r.is_system, r.is_editable, p.key as permission_key
      FROM workspace_members wm
-     JOIN roles r ON wm.role_id = r.id
+     LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
      LEFT JOIN role_permissions rp ON r.id = rp.role_id
      LEFT JOIN permissions p ON rp.permission_id = p.id
      WHERE wm.workspace_id = ? AND wm.user_id = ?`,
@@ -668,10 +674,19 @@ async function getUserPermissions(userId, workspaceId, dbInstance = null, projec
   const role = {
     id: wsRows[0].role_id,
     name: wsRows[0].role_name,
-    rank: Number(wsRows[0].rank || 30),
+    rank: Number(wsRows[0].rank || (wsRows[0].role_name === 'Owner' || wsRows[0].role_name === 'Super Admin' ? 100 : 30)),
     is_system: wsRows[0].is_system,
     is_editable: wsRows[0].is_editable
   };
+
+  const isOwner = isOwnerRole(role) || role.name === 'Owner' || role.name === 'Super Admin' || role.rank >= 100;
+  if (isOwner) {
+    const allKeys = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
+    return {
+      role,
+      permissions: allKeys
+    };
+  }
 
   const wsPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
   const effectivePerms = new Set();
@@ -756,9 +771,9 @@ async function accessibleBoardIds(userId, workspaceId, key = 'project.view', dbI
   const db = getActiveDb(dbInstance);
 
   const wsRows = await db.query(
-    `SELECT wm.role_id, r.name as role_name, r.rank, p.key as permission_key
+    `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank, r.is_system, r.is_editable, p.key as permission_key
      FROM workspace_members wm
-     JOIN roles r ON wm.role_id = r.id
+     LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
      LEFT JOIN role_permissions rp ON r.id = rp.role_id
      LEFT JOIN permissions p ON rp.permission_id = p.id
      WHERE wm.workspace_id = ? AND wm.user_id = ?`,
@@ -767,12 +782,25 @@ async function accessibleBoardIds(userId, workspaceId, key = 'project.view', dbI
 
   if (wsRows.length === 0) return [];
 
-  const wsPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
   const wsRole = {
     id: wsRows[0].role_id,
-    rank: Number(wsRows[0].rank || 30),
-    permissions: wsPerms
+    name: wsRows[0].role_name,
+    rank: Number(wsRows[0].rank || (wsRows[0].role_name === 'Owner' || wsRows[0].role_name === 'Super Admin' ? 100 : 30)),
+    is_system: wsRows[0].is_system,
+    is_editable: wsRows[0].is_editable
   };
+
+  const isOwner = isOwnerRole(wsRole) || wsRole.name === 'Owner' || wsRole.name === 'Super Admin' || wsRole.rank >= 100;
+  if (isOwner) {
+    const allBoards = await db.query(
+      'SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0',
+      [workspaceId]
+    );
+    return allBoards.map((b) => b.id);
+  }
+
+  const wsPerms = new Set(wsRows.map((r) => r.permission_key).filter(Boolean));
+  wsRole.permissions = wsPerms;
 
   // If user has project.access_all and holds the key, all non-archived boards in workspace are accessible
   if (wsPerms.has('project.access_all')) {
