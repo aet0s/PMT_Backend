@@ -119,20 +119,32 @@ router.get('/', requireAuth, requirePermission('notification.view_own'), async (
     const whereSql = whereClauses.join(' AND ');
     const dataQueryParams = [...queryParams, Number(limit) + 1];
 
-    const rows = await req.db.query(
-      `SELECT n.id, n.user_id, n.type, n.event_type, n.card_id, n.board_id, n.workspace_id,
-              n.actor_user_id, n.message, n.meta, n.priority, n.count, n.is_read, n.created_at,
-              u.name as actor_name, c.title as card_title, b.name as board_name, w.name as workspace_name
-       FROM notifications n
-       LEFT JOIN users u ON n.actor_user_id = u.id
-       LEFT JOIN cards c ON n.card_id = c.id
-       LEFT JOIN boards b ON n.board_id = b.id
-       LEFT JOIN workspaces w ON n.workspace_id = w.id
-       WHERE ${whereSql}
-       ORDER BY n.id DESC
-       LIMIT ?`,
-      dataQueryParams
-    );
+    const [countRows, rows] = await Promise.all([
+      req.db.query(
+        `SELECT COUNT(*) as total
+         FROM notifications n
+         LEFT JOIN users u ON n.actor_user_id = u.id
+         LEFT JOIN cards c ON n.card_id = c.id
+         LEFT JOIN boards b ON n.board_id = b.id
+         LEFT JOIN workspaces w ON n.workspace_id = w.id
+         WHERE ${whereSql}`,
+        queryParams
+      ),
+      req.db.query(
+        `SELECT n.id, n.user_id, n.type, n.event_type, n.card_id, n.board_id, n.workspace_id,
+                n.actor_user_id, n.message, n.meta, n.priority, n.count, n.is_read, n.created_at,
+                u.name as actor_name, c.title as card_title, b.name as board_name, w.name as workspace_name
+         FROM notifications n
+         LEFT JOIN users u ON n.actor_user_id = u.id
+         LEFT JOIN cards c ON n.card_id = c.id
+         LEFT JOIN boards b ON n.board_id = b.id
+         LEFT JOIN workspaces w ON n.workspace_id = w.id
+         WHERE ${whereSql}
+         ORDER BY n.id DESC
+         LIMIT ?`,
+        dataQueryParams
+      )
+    ]);
 
     const hasMore = rows.length > limit;
     const notifications = hasMore ? rows.slice(0, limit) : rows;
@@ -155,6 +167,7 @@ router.get('/', requireAuth, requirePermission('notification.view_own'), async (
 
     return res.json({
       notifications,
+      total_count: Number(countRows[0]?.total || 0),
       unread_count: Number(unreadTotalRes?.count || 0),
       has_more: hasMore,
       next_cursor: hasMore ? nextCursor : null
