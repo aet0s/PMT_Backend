@@ -139,7 +139,7 @@ function createPool(config = {}) {
     password: config.password !== undefined ? config.password : (process.env.MYSQL_PASSWORD || ''),
     database: config.database || process.env.MYSQL_DATABASE || 'pm_dev_single',
     waitForConnections: true,
-    connectionLimit: config.connectionLimit || 10,
+    connectionLimit: config.connectionLimit || 15,
     queueLimit: 0,
     timezone: process.env.MYSQL_TIMEZONE || 'local',
     dateStrings: false,
@@ -147,8 +147,19 @@ function createPool(config = {}) {
     bigNumberStrings: false,
     decimalNumbers: true,
     charset: 'utf8mb4',
-    namedPlaceholders: false
+    namedPlaceholders: false,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+    idleTimeout: 30000,
+    maxIdle: Math.min(10, config.connectionLimit || 15),
+    connectTimeout: 10000
   });
+
+  if (typeof pool.on === 'function') {
+    pool.on('error', (err) => {
+      console.warn(`[WARN] MySQL pool error (${config.database || 'default'}):`, err?.code || err?.message);
+    });
+  }
 
   return createPoolWrapper(pool);
 }

@@ -1,7 +1,7 @@
 // server/src/middleware/auth.js
 // Multi-tenant JWT authentication middleware attaching req.user, req.tenant, and req.db.
 const jwt = require('jsonwebtoken');
-const { getTenantDb, getDevSingleDb, getMasterDb } = require('../services/tenantPools');
+const { getTenantDb, getDevSingleDb, getMasterDb, getTenantMetadata } = require('../services/tenantPools');
 const { isTokenBlacklisted } = require('../utils/tokenBlacklist');
 
 function getJwtSecret() {
@@ -29,8 +29,30 @@ function extractToken(req) {
   return null;
 }
 
-// In-memory cache for active session status (max 5 seconds TTL)
+// In-memory cache for active session status (30 seconds TTL)
 const sessionCache = new Map();
+const SESSION_CACHE_TTL = 30000;
+
+// In-memory cache for user auth verification (user existence, 2fa requirement, deactivation)
+// TTL: 30 seconds to deduplicate multi-request bursts on page refresh / tab switch
+const userAuthCache = new Map();
+const USER_AUTH_CACHE_TTL = 30000;
+
+function invalidateUserAuthCache(tenantId = null, userId = null) {
+  if (userId) {
+    const effectiveTenant = tenantId ? String(tenantId) : (process.env.DEV_SINGLE_TENANT === '1' ? 'single' : 'unknown');
+    userAuthCache.delete(`t:${effectiveTenant}:u:${userId}`);
+  } else if (tenantId) {
+    const prefix = `t:${tenantId}:u:`;
+    for (const key of userAuthCache.keys()) {
+      if (key.startsWith(prefix)) {
+        userAuthCache.delete(key);
+      }
+    }
+  } else {
+    userAuthCache.clear();
+  }
+}
 
 async function checkSessionActive(db, tenantId, sessionId) {
   if (!sessionId) return { active: true };
@@ -39,7 +61,7 @@ async function checkSessionActive(db, tenantId, sessionId) {
   const now = Date.now();
   const cached = sessionCache.get(cacheKey);
 
-  if (cached && (now - cached.cachedAt) < 5000) {
+  if (cached && (now - cached.cachedAt) < SESSION_CACHE_TTL) {
     if (!cached.active) {
       return { active: false, code: 'SESSION_REVOKED', message: 'Session has been revoked. Please log in again.' };
     }
@@ -94,6 +116,8 @@ function invalidateSessionCache(tenantId = null, sessionId = null) {
   } else {
     sessionCache.clear();
   }
+  // When session cache is invalidated, also invalidate user auth cache for that tenant
+  invalidateUserAuthCache(tenantId);
 }
 
 const requireAuth = async (req, res, next) => {
@@ -147,11 +171,7 @@ const requireAuth = async (req, res, next) => {
     };
 
     if (tenantId) {
-      const masterDb = getMasterDb();
-      const [tenant] = await masterDb.query(
-        'SELECT id, slug, name, db_name, status FROM tenants WHERE id = ?',
-        [tenantId]
-      );
+      const tenant = await getTenantMetadata(tenantId);
 
       if (!tenant) {
         return res.status(401).json({
@@ -181,17 +201,40 @@ const requireAuth = async (req, res, next) => {
       req.db.tenantId = 1;
     }
 
-    const userRes = await req.db.query(
-      'SELECT id, name, email, must_change_password, locked_until, totp_enabled FROM users WHERE id = ?',
-      [userId]
-    );
-    if (userRes.length === 0) {
-      return res.status(401).json({
-        error: { message: 'User account no longer exists in this organization', code: 'USER_NOT_FOUND' }
-      });
+    // Deduplicate user auth verification across concurrent requests
+    const effectiveTenant = tenantId ? String(tenantId) : (process.env.DEV_SINGLE_TENANT === '1' ? 'single' : 'unknown');
+    const userAuthKey = `t:${effectiveTenant}:u:${userId}`;
+    const now = Date.now();
+    let authProfile = userAuthCache.get(userAuthKey);
+
+    if (!authProfile || (now - authProfile.cachedAt) >= USER_AUTH_CACHE_TTL) {
+      const userRes = await req.db.query(
+        'SELECT id, name, email, must_change_password, locked_until, totp_enabled FROM users WHERE id = ?',
+        [userId]
+      );
+      if (userRes.length === 0) {
+        return res.status(401).json({
+          error: { message: 'User account no longer exists in this organization', code: 'USER_NOT_FOUND' }
+        });
+      }
+
+      const dbUser = userRes[0];
+      const { checkUserRequires2Fa } = require('../services/sessionService');
+      const isUserTwoFaRequired = !dbUser.totp_enabled && (await checkUserRequires2Fa(req.db, userId, dbUser.totp_enabled));
+
+      const memberRows = await req.db.query('SELECT status FROM workspace_members WHERE user_id = ?', [userId]);
+      const isDeactivated = memberRows && memberRows.length > 0 && memberRows.every(r => r.status === 'deactivated');
+
+      authProfile = {
+        dbUser,
+        isUserTwoFaRequired,
+        isDeactivated,
+        cachedAt: now
+      };
+      userAuthCache.set(userAuthKey, authProfile);
     }
 
-    const dbUser = userRes[0];
+    const dbUser = authProfile.dbUser;
     if (dbUser.locked_until && new Date(dbUser.locked_until) > new Date()) {
       return res.status(423).json({
         error: { message: 'Account is temporarily locked due to multiple failed login attempts', code: 'ACCOUNT_LOCKED' }
@@ -222,10 +265,7 @@ const requireAuth = async (req, res, next) => {
     }
 
     // Item 6: require_2fa dynamic enforcement evaluated per request from workspace settings + user totp state (not frozen in token)
-    const { checkUserRequires2Fa } = require('../services/sessionService');
-    const isUserTwoFaRequired = !dbUser.totp_enabled && (await checkUserRequires2Fa(req.db, userId, dbUser.totp_enabled));
-
-    if (isUserTwoFaRequired) {
+    if (authProfile.isUserTwoFaRequired) {
       const fullUrl = req.originalUrl || req.url || '';
       const pathname = fullUrl.split('?')[0].split('#')[0];
 
@@ -249,8 +289,7 @@ const requireAuth = async (req, res, next) => {
     }
 
     // Check if user is deactivated across all workspaces in tenant
-    const memberRows = await req.db.query('SELECT status FROM workspace_members WHERE user_id = ?', [userId]);
-    if (memberRows && memberRows.length > 0 && memberRows.every(r => r.status === 'deactivated')) {
+    if (authProfile.isDeactivated) {
       return res.status(403).json({
         error: {
           message: 'Your account has been deactivated. Please contact your workspace administrator.',
@@ -313,5 +352,6 @@ module.exports = {
   extractToken,
   resolveOptionalTenant,
   checkSessionActive,
-  invalidateSessionCache
+  invalidateSessionCache,
+  invalidateUserAuthCache
 };

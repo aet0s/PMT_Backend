@@ -4,7 +4,7 @@ const mysql = require('mysql2/promise');
 const { createPoolWrapper } = require('../db/mysql');
 require('dotenv').config();
 
-const TENANT_POOL_LIMIT = Number(process.env.TENANT_POOL_LIMIT || 5);
+const TENANT_POOL_LIMIT = Math.max(15, Number(process.env.TENANT_POOL_LIMIT || 15));
 const MAX_OPEN_TENANT_POOLS = Number(process.env.MAX_OPEN_TENANT_POOLS || 50);
 const POOL_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -13,6 +13,10 @@ let devSingleWrapper = null;
 
 // Map: tenantId -> { wrapper, rawPool, lastAccessed: number, dbName: string }
 const tenantPoolCache = new Map();
+
+// In-memory tenant metadata cache (5 minutes TTL) to eliminate master DB queries on every request
+const tenantMetadataCache = new Map();
+const TENANT_METADATA_TTL_MS = 5 * 60 * 1000;
 
 function getBaseMysqlConfig(database) {
   return {
@@ -25,8 +29,21 @@ function getBaseMysqlConfig(database) {
     connectionLimit: TENANT_POOL_LIMIT,
     queueLimit: 0,
     timezone: process.env.MYSQL_TIMEZONE || 'local',
-    charset: 'utf8mb4'
+    charset: 'utf8mb4',
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+    idleTimeout: 30000,
+    maxIdle: Math.min(10, TENANT_POOL_LIMIT),
+    connectTimeout: 10000
   };
+}
+
+function attachPoolErrorHandler(pool, label) {
+  if (pool && typeof pool.on === 'function') {
+    pool.on('error', (err) => {
+      console.warn(`[WARN] MySQL pool error (${label}):`, err?.code || err?.message);
+    });
+  }
 }
 
 function getMasterDb() {
@@ -34,8 +51,9 @@ function getMasterDb() {
     const masterDbName = process.env.MYSQL_MASTER_DATABASE || 'pm_master';
     const pool = mysql.createPool({
       ...getBaseMysqlConfig(masterDbName),
-      connectionLimit: Number(process.env.MYSQL_POOL_LIMIT || 10)
+      connectionLimit: Math.max(15, Number(process.env.MYSQL_POOL_LIMIT || 15))
     });
+    attachPoolErrorHandler(pool, 'masterDb');
     masterDbWrapper = createPoolWrapper(pool);
   }
   return masterDbWrapper;
@@ -46,11 +64,40 @@ function getDevSingleDb() {
     const dbName = process.env.MYSQL_DATABASE || 'pm_dev_single';
     const pool = mysql.createPool({
       ...getBaseMysqlConfig(dbName),
-      connectionLimit: Number(process.env.MYSQL_POOL_LIMIT || 10)
+      connectionLimit: Math.max(15, Number(process.env.MYSQL_POOL_LIMIT || 15))
     });
+    attachPoolErrorHandler(pool, 'devSingleDb');
     devSingleWrapper = createPoolWrapper(pool);
   }
   return devSingleWrapper;
+}
+
+async function getTenantMetadata(tenantId) {
+  if (!tenantId) return null;
+  const tid = Number(tenantId);
+  const now = Date.now();
+  const cached = tenantMetadataCache.get(tid);
+  if (cached && (now - cached.cachedAt < TENANT_METADATA_TTL_MS)) {
+    return cached.tenant;
+  }
+
+  const masterDb = getMasterDb();
+  const [tenant] = await masterDb.query(
+    'SELECT id, slug, name, db_name, status FROM tenants WHERE id = ?',
+    [tid]
+  );
+  if (tenant) {
+    tenantMetadataCache.set(tid, { tenant, cachedAt: now });
+  }
+  return tenant || null;
+}
+
+function invalidateTenantMetadata(tenantId = null) {
+  if (tenantId) {
+    tenantMetadataCache.delete(Number(tenantId));
+  } else {
+    tenantMetadataCache.clear();
+  }
 }
 
 async function evictOldestPoolIfNeeded() {
@@ -93,6 +140,7 @@ function getTenantDbByName(dbName) {
   }
 
   const rawPool = mysql.createPool(getBaseMysqlConfig(dbName));
+  attachPoolErrorHandler(rawPool, `db:${dbName}`);
   const wrapper = createPoolWrapper(rawPool);
   return wrapper;
 }
@@ -110,20 +158,17 @@ async function getTenantDb(tenantId) {
     return cached.wrapper;
   }
 
-  // Query master DB for tenant database name
-  const masterDb = getMasterDb();
-  const [tenant] = await masterDb.query(
-    "SELECT id, slug, db_name, status FROM tenants WHERE id = ? AND status IN ('active', 'provisioning')",
-    [tid]
-  );
+  // Retrieve tenant metadata from in-memory cache / master DB
+  const tenant = await getTenantMetadata(tid);
 
-  if (!tenant) {
+  if (!tenant || (tenant.status !== 'active' && tenant.status !== 'provisioning')) {
     throw new Error(`Tenant not found or inactive (ID: ${tenantId})`);
   }
 
   await evictOldestPoolIfNeeded();
 
   const rawPool = mysql.createPool(getBaseMysqlConfig(tenant.db_name));
+  attachPoolErrorHandler(rawPool, `tenant:${tid}`);
   const wrapper = createPoolWrapper(rawPool);
   wrapper.tenantId = tid;
 
@@ -190,6 +235,8 @@ module.exports = {
   getTenantDbBySlug,
   getTenantDbByName,
   getDevSingleDb,
+  getTenantMetadata,
+  invalidateTenantMetadata,
   evictTenantPool,
   closeAllTenantPools,
   closeAllPools: closeAllTenantPools,
