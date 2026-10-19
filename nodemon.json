@@ -1,0 +1,20 @@
+{
+  "watch": [
+    "src/index.js",
+    "src/routes",
+    "src/services",
+    "src/middleware",
+    "src/rbac",
+    "src/cron",
+    "src/utils"
+  ],
+  "ignore": [
+    "src/scripts/**",
+    "src/scripts/permtest/**",
+    "src/db/migrations/**",
+    "snapshots/**",
+    "uploads/**",
+    "*.log"
+  ],
+  "ext": "js,json"
+}

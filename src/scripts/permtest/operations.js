@@ -1003,6 +1003,77 @@ const PROBES = {
       await ctx.ownerClient.post(`/api/boards/${delBId}/archive`, {});
       return client.delete(`/api/boards/${delBId}`);
     }
+  },
+  'daily_tracker.view': {
+    module: 'daily_tracker',
+    scope: 'company',
+    method: 'GET',
+    path: '/api/workspaces/:wId/daily-tracker',
+    execute: (client, ctx, boardId) => client.get(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/daily-tracker`)
+  },
+  'daily_tracker.view_people': {
+    module: 'daily_tracker',
+    scope: 'company',
+    method: 'GET',
+    path: '/api/workspaces/:wId/daily-tracker/people',
+    execute: (client, ctx, boardId) => client.get(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/daily-tracker/people`)
+  },
+  'task.focus': {
+    module: 'task',
+    scope: 'project',
+    method: 'POST',
+    path: '/api/cards/:id/focus',
+    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/focus`, {})
+  },
+  'task.mark_deep_work': {
+    module: 'task',
+    scope: 'project',
+    method: 'POST',
+    path: '/api/cards/:id/focus/deep-work',
+    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/focus/deep-work`, { deep_work: 1 })
+  },
+  'checkin.create': {
+    module: 'checkin',
+    scope: 'project',
+    method: 'POST',
+    path: '/api/cards/:id/checkins',
+    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/checkins`, {
+      did: 'Investigated indexing and verified all query plans across tables.',
+      next_step: 'Add schema migration and test'
+    })
+  },
+  'checkin.view': {
+    module: 'checkin',
+    scope: 'project',
+    method: 'GET',
+    path: '/api/cards/:id/checkins',
+    execute: (client, ctx, boardId) => client.get(`/api/cards/${getContextEntities(ctx, boardId).cardId}/checkins`)
+  },
+  'checkin.review': {
+    module: 'checkin',
+    scope: 'project',
+    method: 'POST',
+    path: '/api/checkins/:id/review',
+    execute: (client, ctx, boardId) => client.post('/api/checkins/1/review', { action: 'ack', note: 'Acknowledged' })
+  },
+  'leave.request': {
+    module: 'leave',
+    scope: 'company',
+    method: 'POST',
+    path: '/api/workspaces/:wId/leave-days',
+    execute: (client, ctx, boardId) => client.post(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/leave-days`, {
+      date: '2026-12-31',
+      reason: 'Personal time off'
+    })
+  },
+  'leave.approve': {
+    module: 'leave',
+    scope: 'company',
+    method: 'PATCH',
+    path: '/api/workspaces/:wId/leave-days/:id',
+    execute: (client, ctx, boardId) => client.patch(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/leave-days/1`, {
+      action: 'approve'
+    })
   }
 };
 

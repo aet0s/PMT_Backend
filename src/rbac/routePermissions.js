@@ -59,6 +59,8 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id',                                         { permission: 'workspace.view',             scope: 'company' }],
   ['POST /api/workspaces',                                            { permission: 'workspace.create',           scope: 'company' }],
   ['PATCH /api/workspaces/:id',                                       { permission: 'workspace.edit',             scope: 'company', note: 'fine-grained: workspace.edit, workspace.archive' }],
+  ['POST /api/workspaces/:id/icon',                                   { permission: 'workspace.edit',             scope: 'company' }],
+  ['DELETE /api/workspaces/:id/icon',                                 { permission: 'workspace.edit',             scope: 'company' }],
   ['POST /api/workspaces/:id/auto-archive',                           { permission: 'task.archive',                scope: 'company', note: 'auto-archive completed cards' }],
   ['DELETE /api/workspaces/:id',                                      { permission: 'workspace.delete',           scope: 'company' }],
   // my-permissions is self-evaluation — no workspace RBAC key; auth only
@@ -90,6 +92,11 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id/audit/export',                            { permission: 'audit.export',               scope: 'company' }],
   ['GET /api/workspaces/:id/search',                                  { permission: 'search.use',                 scope: 'company' }],
   ['GET /api/workspaces/:id/daily-tracker',                           { permission: 'daily_tracker.view',         scope: 'company' }],
+  ['GET /api/workspaces/:id/daily-tracker/people',                    { permission: 'daily_tracker.view_people',  scope: 'company' }],
+  ['GET /api/workspaces/:id/leave-days',                              { permission: 'leave.request',              scope: 'company' }],
+  ['POST /api/workspaces/:id/leave-days',                             { permission: 'leave.request',              scope: 'company' }],
+  ['PATCH /api/workspaces/:id/leave-days/:leaveId',                   { permission: 'leave.approve',              scope: 'company' }],
+  ['DELETE /api/workspaces/:id/leave-days/:leaveId',                  { permission: 'leave.request',              scope: 'company', note: 'fine-grained: leave.request (own) or leave.approve' }],
 
   // ─── Roles ────────────────────────────────────────────────────────────────
   ['PATCH /api/roles/:id',   { permission: 'role.edit',   scope: 'company', note: 'enforced inline in handler' }],
@@ -131,6 +138,16 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/members',           { permission: 'task.assign',           scope: 'project' }],
   ['POST /api/cards/:id/assigners',         { permission: 'task.edit',             scope: 'project' }],
   ['POST /api/cards/:id/copy',              { permission: 'task.duplicate',        scope: 'project' }],
+
+  // ─── Card: Focus & Check-ins ───────────────────────────────────────────────
+  ['POST /api/cards/:id/focus',                     { permission: 'task.focus',            scope: 'project' }],
+  ['DELETE /api/cards/:id/focus',                   { permission: 'task.focus',            scope: 'project' }],
+  ['POST /api/cards/:id/focus/deep-work',           { permission: 'task.mark_deep_work',   scope: 'project' }],
+  ['GET /api/cards/:id/checkins',                   { permission: 'checkin.view',          scope: 'project' }],
+  ['POST /api/cards/:id/checkins',                  { permission: 'checkin.create',        scope: 'project' }],
+  ['PATCH /api/cards/:id/checkins/:checkinId',      { permission: 'checkin.create',        scope: 'project' }],
+  ['POST /api/checkins/:id/review',                 { permission: 'checkin.review',        scope: 'project' }],
+  ['POST /api/checkin-reviews/:id/answer',          { permission: 'checkin.create',        scope: 'project' }],
 
   // ─── Card: Attachments & Comments ────────────────────────────────────────
   ['GET /api/cards/:id/attachments',        { permission: 'attachment.view',       scope: 'project' }],

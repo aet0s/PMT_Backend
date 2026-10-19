@@ -88,6 +88,8 @@ const PERMISSIONS = [
   { key: 'task.duplicate', module: 'task', label: 'Duplicate Tasks', description: 'Clone card with checklist and labels', scope: 'project', dangerous: false },
   { key: 'task.archive', module: 'task', label: 'Archive Tasks', description: 'Archive cards without deleting', scope: 'project', dangerous: false },
   { key: 'task.restore', module: 'task', label: 'Restore Tasks', description: 'Restore archived cards', scope: 'project', dangerous: false },
+  { key: 'task.focus', module: 'task', label: 'Set Task Focus', description: 'Set active focus on assigned task for daily tracking', scope: 'project', dangerous: false },
+  { key: 'task.mark_deep_work', module: 'task', label: 'Mark Deep Work', description: 'Designate tasks as deep work with customized check-in cadences', scope: 'project', dangerous: false },
 
   // --- Subtask ---
   { key: 'subtask.create', module: 'subtask', label: 'Create Subtasks', description: 'Add subtasks to cards', scope: 'project', dangerous: false, planned: true },
@@ -112,6 +114,11 @@ const PERMISSIONS = [
   { key: 'attachment.delete_own', module: 'attachment', label: 'Delete Own Attachments', description: 'Delete files uploaded by self', scope: 'project', dangerous: false },
   { key: 'attachment.delete_any', module: 'attachment', label: 'Delete Any Attachment', description: 'Delete any attached files', scope: 'project', dangerous: true },
   { key: 'attachment.version', module: 'attachment', label: 'Manage Versions', description: 'Upload and restore attachment versions', scope: 'project', dangerous: false, planned: true },
+
+  // --- Check-in ---
+  { key: 'checkin.create', module: 'checkin', label: 'Submit Daily Check-in', description: 'Submit daily progress check-in on focused tasks', scope: 'project', dangerous: false },
+  { key: 'checkin.view', module: 'checkin', label: 'View Check-ins', description: 'View member check-ins and evidence on boards', scope: 'project', dangerous: false },
+  { key: 'checkin.review', module: 'checkin', label: 'Review Check-ins', description: 'Acknowledge, question, or request evidence on member check-ins', scope: 'project', dangerous: false },
 
   // --- File ---
   { key: 'file.view', module: 'file', label: 'Download Files', description: 'Download authorized tenant files and attachments', scope: 'project', dangerous: false },
@@ -176,6 +183,11 @@ const PERMISSIONS = [
 
   // --- Daily Tracker ---
   { key: 'daily_tracker.view', module: 'daily_tracker', label: 'View Daily Tracker', description: 'View and track daily added cards across projects', scope: 'company', dangerous: false },
+  { key: 'daily_tracker.view_people', module: 'daily_tracker', label: 'View People Tracker', description: 'View member daily working states, evidence, and review actions', scope: 'company', dangerous: false },
+
+  // --- Leave ---
+  { key: 'leave.request', module: 'leave', label: 'Request Leave', description: 'Request days off and view leave status', scope: 'company', dangerous: false },
+  { key: 'leave.approve', module: 'leave', label: 'Approve Leave', description: 'Approve or reject leave requests for team members', scope: 'company', dangerous: false },
 
   // --- Dashboard ---
   { key: 'dashboard.view_project', module: 'dashboard', label: 'View Project Dashboard', description: 'View project KPIs and task status overview', scope: 'project', dangerous: false, planned: true },
@@ -260,11 +272,12 @@ const SYSTEM_ROLES = {
       'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
       'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
       'list.create', 'list.edit', 'list.reorder', 'list.delete',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete', 'task.delete_own', 'task.focus', 'task.mark_deep_work',
       'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.bulk_delete', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
       'attachment.view', 'attachment.upload', 'attachment.delete_own', 'attachment.delete_any', 'attachment.version', 'file.view',
+      'checkin.create', 'checkin.view', 'checkin.review', 'leave.request', 'leave.approve',
       'label.view', 'label.create', 'label.edit', 'label.delete', 'label.delete_own',
       'custom_field.view', 'custom_field.create', 'custom_field.edit', 'custom_field.delete',
       'milestone.view', 'milestone.create', 'milestone.edit', 'milestone.delete',
@@ -273,7 +286,7 @@ const SYSTEM_ROLES = {
       'time.view_own', 'time.log', 'time.edit_own', 'time.view_all', 'time.approve_timesheet',
       'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.import', 'import_export.export',
-      'archive.view', 'archive.restore', 'activity.view', 'daily_tracker.view',
+      'archive.view', 'archive.restore', 'activity.view', 'daily_tracker.view', 'daily_tracker.view_people',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
@@ -287,11 +300,12 @@ const SYSTEM_ROLES = {
     permissions: [
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view', 'list.create', 'list.edit', 'list.reorder',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own', 'task.focus', 'task.mark_deep_work',
       'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
       'attachment.view', 'attachment.upload', 'attachment.delete_own', 'attachment.delete_any', 'file.view',
+      'checkin.create', 'checkin.view', 'leave.request', 'leave.approve',
       'label.view', 'label.create', 'label.edit', 'label.delete_own',
       'custom_field.view', 'custom_field.create', 'custom_field.edit', 'milestone.view', 'milestone.create', 'milestone.edit',
       'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
@@ -313,11 +327,12 @@ const SYSTEM_ROLES = {
     permissions: [
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own', 'task.focus',
       'task.watch', 'task.set_priority', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',
       'attachment.view', 'attachment.upload', 'attachment.delete_own', 'file.view',
+      'checkin.create', 'leave.request',
       'label.view', 'label.create', 'label.delete_own',
       'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
       'time.view_own', 'time.log', 'time.edit_own',
@@ -422,6 +437,21 @@ const PREREQUISITE_PERMISSIONS = {
   'task.archive': ['task.view', 'project.view'],
   'task.restore': ['task.view', 'project.view'],
   'task.view': ['project.view'],
+  'task.focus': ['task.view', 'project.view'],
+  'task.mark_deep_work': ['task.edit', 'task.view', 'project.view'],
+
+  // Check-in operations
+  'checkin.create': ['task.focus', 'task.view', 'project.view'],
+  'checkin.view': ['task.view', 'project.view'],
+  'checkin.review': ['checkin.view', 'task.view', 'project.view'],
+
+  // Daily Tracker operations
+  'daily_tracker.view': ['workspace.view'],
+  'daily_tracker.view_people': ['daily_tracker.view'],
+
+  // Leave operations
+  'leave.request': ['workspace.view'],
+  'leave.approve': ['leave.request'],
 
   // Checklist operations
   'checklist.create': ['task.view', 'project.view'],

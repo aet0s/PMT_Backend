@@ -133,6 +133,7 @@ class PermtestClient {
         break;
       } catch (err) {
         error = err;
+        console.error('[PERMTEST CLIENT FETCH ERROR]:', err.code, err.message, err.cause);
         if (attempts >= maxAttempts) break;
         await new Promise((r) => setTimeout(r, 500));
       }

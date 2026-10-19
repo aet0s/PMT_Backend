@@ -10,6 +10,7 @@ const { broadcastBoardEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
 const { processOutbox } = require('../services/notificationOutbox');
+const crypto = require('crypto');
 const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, getActiveDb } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
@@ -40,7 +41,10 @@ const updateCardSchema = z.object({
   start_date: z.string().nullable().optional(),
   due_date: z.string().nullable().optional(),
   is_complete: z.boolean().optional(),
-  is_archived: z.boolean().optional()
+  is_archived: z.boolean().optional(),
+  completion_note: z.string().nullable().optional(),
+  completion_evidence_url: z.string().nullable().optional(),
+  completion_attachment_id: z.number().nullable().optional()
 });
 
 function sanitizeDescription(html) {
@@ -122,6 +126,20 @@ async function getFullCard(cardId, dbInstance = null) {
       [cardId]
     );
     card.attachments = attRes;
+
+    try {
+      const focusRes = await db.query(
+        'SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1',
+        [cardId]
+      );
+      card.active_focus = focusRes.length > 0 ? focusRes[0] : null;
+      card.is_focus = Boolean(card.active_focus);
+      card.is_deep_work = Boolean(card.active_focus?.deep_work);
+    } catch {
+      card.active_focus = null;
+      card.is_focus = false;
+      card.is_deep_work = false;
+    }
 
     try {
       const boardRes = await db.query(
@@ -313,9 +331,60 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     if (is_complete !== undefined) {
       updates.push('is_complete = ?');
       values.push(is_complete ? 1 : 0);
-      updates.push('completed_at = ?');
-      values.push(is_complete ? new Date() : null);
     }
+
+    let targetList = null;
+    if (list_id !== undefined) {
+      const tlRes = await req.db.query('SELECT * FROM lists WHERE id = ?', [list_id]);
+      targetList = tlRes[0] || null;
+    }
+
+    const isCompleting = (is_complete === true) || (targetList && targetList.is_done_list === 1);
+    if (isCompleting) {
+      // Check if deep work card: requires outcome note and evidence link/file
+      const deepWorkRows = await req.db.query(
+        'SELECT id FROM card_focus WHERE card_id = ? AND deep_work = 1 LIMIT 1',
+        [cardId]
+      );
+      if (deepWorkRows.length > 0) {
+        const outcomeNote = req.body.completion_note || oldCard.completion_note;
+        const evidenceUrl = req.body.completion_evidence_url || oldCard.completion_evidence_url;
+        const attachmentId = req.body.completion_attachment_id || oldCard.completion_attachment_id;
+        if (!outcomeNote || !String(outcomeNote).trim() || (!evidenceUrl && !attachmentId)) {
+          return res.status(400).json({
+            error: {
+              message: 'Completing a deep-work card requires an outcome note and at least one evidence link or file',
+              code: 'DEEP_WORK_COMPLETION_EVIDENCE_REQUIRED'
+            }
+          });
+        }
+      }
+      if (!oldCard.completed_at) {
+        updates.push('completed_at = NOW()');
+        updates.push('completed_by = ?');
+        values.push(req.user.id);
+      }
+    }
+
+    if (req.body.completion_note !== undefined) {
+      updates.push('completion_note = ?');
+      values.push(req.body.completion_note ? sanitizePlain(req.body.completion_note) : null);
+    }
+    if (req.body.completion_evidence_url !== undefined) {
+      updates.push('completion_evidence_url = ?');
+      values.push(req.body.completion_evidence_url ? String(req.body.completion_evidence_url).trim() : null);
+    }
+    if (req.body.completion_attachment_id !== undefined) {
+      updates.push('completion_attachment_id = ?');
+      values.push(req.body.completion_attachment_id ? Number(req.body.completion_attachment_id) : null);
+    }
+
+    if (list_id !== undefined && list_id !== oldCard.list_id) {
+      if (!oldCard.first_moved_or_assigned_at) {
+        updates.push('first_moved_or_assigned_at = NOW()');
+      }
+    }
+
     if (is_archived !== undefined) {
       updates.push('is_archived = ?');
       values.push(is_archived ? 1 : 0);
@@ -723,6 +792,10 @@ router.post(
       }
     } else {
       await req.db.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
+      await req.db.execute(
+        'UPDATE cards SET first_moved_or_assigned_at = COALESCE(first_moved_or_assigned_at, NOW()) WHERE id = ?',
+        [cardId]
+      );
       action = 'added';
       if (boardId) {
         await logActivity(boardId, cardId, req.user.id, 'member_added', { member_name: targetUserName }, req.db);
@@ -1041,11 +1114,19 @@ router.post('/:id/attachments', requireAuth, requirePermission('attachment.uploa
     let attachment;
     if (req.file) {
       // File upload
+      const checksum = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+      const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+      if (dup) {
+        return res.status(409).json({
+          error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+        });
+      }
+
       const saved = await localStorage.save(req.file, cardId, req.tenant ? req.tenant.id : 1);
       const attExec = await req.db.execute(
-        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes]
+        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes, checksum]
       );
       const [row] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
       attachment = row;
@@ -1056,11 +1137,19 @@ router.post('/:id/attachments', requireAuth, requirePermission('attachment.uploa
       if (!targetUrl) {
         return res.status(400).json({ error: { message: 'No file or link URL provided', code: 'BAD_REQUEST' } });
       }
+      const checksum = crypto.createHash('sha256').update(targetUrl).digest('hex');
+      const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+      if (dup) {
+        return res.status(409).json({
+          error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+        });
+      }
+
       const fileName = display_name?.trim() || targetUrl;
       const attExec = await req.db.execute(
-        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-         VALUES (?, ?, ?, ?, 'link', 0)`,
-        [cardId, req.user.id, fileName, targetUrl]
+        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+         VALUES (?, ?, ?, ?, 'link', 0, ?)`,
+        [cardId, req.user.id, fileName, targetUrl, checksum]
       );
       const [row] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
       attachment = row;
@@ -1118,11 +1207,19 @@ router.post('/:id/attachments/file', requireAuth, requirePermission('attachment.
       return res.status(400).json({ error: { message: 'No file uploaded', code: 'BAD_REQUEST' } });
     }
 
+    const checksum = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+    if (dup) {
+      return res.status(409).json({
+        error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+      });
+    }
+
     const saved = await localStorage.save(req.file, cardId, req.tenant ? req.tenant.id : 1);
     const attExec = await req.db.execute(
-      `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes]
+      `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes, checksum]
     );
     const [attachment] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
 
@@ -1169,11 +1266,18 @@ router.post('/:id/attachments/link', requireAuth, requirePermission('attachment.
     const boardId = cardRes[0].board_id;
 
     const fileName = display_name?.trim() || link_url.trim();
+    const checksum = crypto.createHash('sha256').update(link_url.trim()).digest('hex');
+    const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+    if (dup) {
+      return res.status(409).json({
+        error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+      });
+    }
 
     const attExec = await req.db.execute(
-      `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-       VALUES (?, ?, ?, ?, 'link', 0)`,
-      [cardId, req.user.id, fileName, link_url.trim()]
+      `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+       VALUES (?, ?, ?, ?, 'link', 0, ?)`,
+      [cardId, req.user.id, fileName, link_url.trim(), checksum]
     );
     const [attachment] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
 
@@ -1434,7 +1538,7 @@ router.patch(
     const workspaceId = com.workspace_id;
 
     const cleanBody = sanitizeDescription(body.trim());
-    await req.db.execute('UPDATE comments SET body = ? WHERE id = ?', [cleanBody, commentId]);
+    await req.db.execute('UPDATE comments SET body = ?, original_length = COALESCE(original_length, CHAR_LENGTH(body)) WHERE id = ?', [cleanBody, commentId]);
 
     await logActivity(boardId, cardId, req.user.id, 'edited_comment', {
       comment_id: commentId
@@ -1625,8 +1729,8 @@ router.post('/checklist-items', requireAuth, requirePermission('checklist.edit')
 
   try {
     const itemExec = await req.db.execute(
-      'INSERT INTO checklist_items (checklist_id, text) VALUES (?, ?)',
-      [checklist_id, sanitizePlain(text)]
+      'INSERT INTO checklist_items (checklist_id, text, created_by) VALUES (?, ?, ?)',
+      [checklist_id, sanitizePlain(text), req.user.id]
     );
     const [item] = await req.db.query('SELECT * FROM checklist_items WHERE id = ?', [itemExec.insertId]);
 
@@ -1668,6 +1772,12 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
   const clientMutationId = req.headers['x-client-mutation-id'] || req.body?.clientMutationId || null;
 
   try {
+    const [existingItem] = await req.db.query('SELECT * FROM checklist_items WHERE id = ?', [itemId]);
+    if (!existingItem) {
+      return res.status(404).json({ error: { message: 'Checklist item not found', code: 'NOT_FOUND' } });
+    }
+    const isRealToggle = is_checked !== undefined && Boolean(existingItem.is_checked) !== Boolean(is_checked);
+
     const updates = [];
     const values = [];
 
@@ -1678,6 +1788,10 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
     if (is_checked !== undefined) {
       updates.push('is_checked = ?');
       values.push(is_checked ? 1 : 0);
+      if (is_checked && !existingItem.is_checked) {
+        updates.push('ticked_at = NOW()', 'ticked_by = ?', 'lifetime_tick_count = lifetime_tick_count + 1');
+        values.push(req.user.id);
+      }
     }
     if (position !== undefined) {
       updates.push('position = ?');
@@ -1741,7 +1855,7 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
           }
         }
 
-        if (is_checked !== undefined) {
+        if (isRealToggle) {
           await logActivity(board_id, card_id, req.user.id, 'checklist_toggled', {
             item_id: itemId,
             item_text: updatedItem.text,
@@ -1862,6 +1976,371 @@ router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.
     }
 
     return res.json({ message: 'Checklist item deleted' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================================================================
+// FOCUS + CHECK-IN MODEL ENDPOINTS
+// ================================================================
+
+// POST /api/cards/:id/focus
+router.post('/:id/focus', requireAuth, requirePermission('task.focus'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const { check_in_every_days, estimate_days } = req.body;
+
+  try {
+    const cardRes = await req.db.query(
+      `SELECT c.*, l.board_id, b.workspace_id 
+       FROM cards c 
+       JOIN lists l ON c.list_id = l.id 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE c.id = ?`,
+      [cardId]
+    );
+    if (cardRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+    }
+
+    // Must be assigned to card
+    const [isMember] = await req.db.query(
+      'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ?',
+      [cardId, req.user.id]
+    );
+    if (!isMember) {
+      return res.status(403).json({
+        error: { message: 'You can only focus on cards assigned to you', code: 'FORBIDDEN' }
+      });
+    }
+
+    // Max 2 active focus cards
+    const [activeCnt] = await req.db.query(
+      'SELECT COUNT(*) as count FROM card_focus WHERE user_id = ? AND ended_at IS NULL AND card_id != ?',
+      [req.user.id, cardId]
+    );
+    if (Number(activeCnt?.count || 0) >= 2) {
+      return res.status(400).json({
+        error: { message: 'A member may have at most 2 active focus cards', code: 'FOCUS_LIMIT_EXCEEDED' }
+      });
+    }
+
+    const [existingFocus] = await req.db.query(
+      'SELECT * FROM card_focus WHERE card_id = ? AND user_id = ? AND ended_at IS NULL',
+      [cardId, req.user.id]
+    );
+    if (existingFocus) {
+      return res.json({ focus: existingFocus });
+    }
+
+    const checkInEvery = Math.max(1, parseInt(check_in_every_days, 10) || 1);
+    const estDays = estimate_days ? parseInt(estimate_days, 10) : null;
+
+    const ins = await req.db.execute(
+      `INSERT INTO card_focus (card_id, user_id, started_at, check_in_every_days, estimate_days)
+       VALUES (?, ?, NOW(), ?, ?)`,
+      [cardId, req.user.id, checkInEvery, estDays]
+    );
+
+    const [focus] = await req.db.query('SELECT * FROM card_focus WHERE id = ?', [ins.insertId]);
+    return res.status(201).json({ focus });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/cards/:id/focus
+router.delete('/:id/focus', requireAuth, requirePermission('task.focus'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+
+  try {
+    await req.db.execute(
+      'UPDATE card_focus SET ended_at = NOW() WHERE card_id = ? AND user_id = ? AND ended_at IS NULL',
+      [cardId, req.user.id]
+    );
+    return res.json({ success: true, message: 'Focus ended' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/cards/:id/focus/deep-work
+router.post('/:id/focus/deep-work', requireAuth, requirePermission('task.mark_deep_work'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const isDeepWork = req.body.deep_work !== false ? 1 : 0;
+  const checkInEvery = req.body.check_in_every_days ? parseInt(req.body.check_in_every_days, 10) : null;
+  const estDays = req.body.estimate_days ? parseInt(req.body.estimate_days, 10) : null;
+
+  try {
+    const activeFocus = await req.db.query(
+      'SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL',
+      [cardId]
+    );
+
+    if (activeFocus.length > 0) {
+      await req.db.execute(
+        `UPDATE card_focus
+         SET deep_work = ?, deep_work_set_by = ?,
+             check_in_every_days = COALESCE(?, check_in_every_days),
+             estimate_days = COALESCE(?, estimate_days)
+         WHERE card_id = ? AND ended_at IS NULL`,
+        [isDeepWork, req.user.id, checkInEvery, estDays, cardId]
+      );
+    } else {
+      const [firstMember] = await req.db.query('SELECT user_id FROM card_members WHERE card_id = ? LIMIT 1', [cardId]);
+      const targetUserId = req.body.user_id || firstMember?.user_id || req.user.id;
+      await req.db.execute(
+        `INSERT INTO card_focus (card_id, user_id, started_at, deep_work, deep_work_set_by, check_in_every_days, estimate_days)
+         VALUES (?, ?, NOW(), ?, ?, ?, ?)`,
+        [cardId, targetUserId, isDeepWork, req.user.id, checkInEvery || 2, estDays]
+      );
+    }
+
+    const [updated] = await req.db.query('SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1', [cardId]);
+    return res.json({ success: true, focus: updated || null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cards/:id/checkins
+router.get('/:id/checkins', requireAuth, requirePermission('checkin.view'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+
+  try {
+    const checkins = await req.db.query(
+      `SELECT ci.*, u.name as user_name, u.avatar_url
+       FROM check_ins ci
+       JOIN users u ON ci.user_id = u.id
+       WHERE ci.card_id = ?
+       ORDER BY ci.work_date DESC, ci.id DESC`,
+      [cardId]
+    );
+
+    for (const ci of checkins) {
+      const reviews = await req.db.query(
+        `SELECT r.*, u.name as reviewer_name, u.avatar_url as reviewer_avatar
+         FROM check_in_reviews r
+         JOIN users u ON r.reviewer_id = u.id
+         WHERE r.check_in_id = ?
+         ORDER BY r.created_at ASC`,
+        [ci.id]
+      );
+      ci.reviews = reviews;
+    }
+
+    return res.json({ checkins });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/cards/:id/checkins
+router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const { did, next_step, blocker, status, progress_pct, evidence_url, attachment_id } = req.body;
+
+  try {
+    // 1. Must be assigned to card
+    const [isMember] = await req.db.query(
+      'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ?',
+      [cardId, req.user.id]
+    );
+    if (!isMember) {
+      return res.status(403).json({
+        error: { message: 'You can only submit check-ins on cards assigned to you', code: 'FORBIDDEN' }
+      });
+    }
+
+    // 2. Server time only (no back-dating)
+    const todayServer = new Date().toISOString().slice(0, 10);
+    if (req.body.work_date && String(req.body.work_date).trim() !== todayServer) {
+      return res.status(400).json({
+        error: { message: 'Check-ins cannot be back-dated. Server date must be used.', code: 'CHECKIN_BACKDATING_PROHIBITED' }
+      });
+    }
+    const workDate = todayServer;
+
+    // 3. Validation: did >= 40 chars & >= 8 words
+    const didText = String(did || '').trim();
+    const didWords = didText.split(/\s+/).filter(Boolean);
+    if (didText.length < 40 || didWords.length < 8) {
+      return res.status(400).json({
+        error: { message: 'Check-in did must be at least 40 characters and at least 8 words', code: 'CHECKIN_DID_TOO_SHORT' }
+      });
+    }
+
+    // 4. Validation: next_step >= 10 chars
+    const nextStepText = String(next_step || '').trim();
+    if (nextStepText.length < 10) {
+      return res.status(400).json({
+        error: { message: 'Check-in next_step must be at least 10 characters', code: 'CHECKIN_NEXT_STEP_TOO_SHORT' }
+      });
+    }
+
+    // 5. Progress drop requires blocker note
+    const progress = Math.min(100, Math.max(0, parseInt(progress_pct, 10) || 0));
+    const [prevCheckin] = await req.db.query(
+      'SELECT progress_pct FROM check_ins WHERE card_id = ? AND user_id = ? ORDER BY work_date DESC, id DESC LIMIT 1',
+      [cardId, req.user.id]
+    );
+    const blockerText = blocker ? String(blocker).trim() : null;
+    if (prevCheckin && progress < prevCheckin.progress_pct && !blockerText) {
+      return res.status(400).json({
+        error: { message: 'Progress cannot drop without a blocker note', code: 'BLOCKER_REQUIRED_FOR_PROGRESS_DROP' }
+      });
+    }
+
+    // 6. Token similarity >= 70% with last 3 check-ins flagged repeat
+    const pastCheckins = await req.db.query(
+      'SELECT did, next_step FROM check_ins WHERE card_id = ? AND user_id = ? ORDER BY work_date DESC, id DESC LIMIT 3',
+      [cardId, req.user.id]
+    );
+    function tokenize(str) {
+      return new Set(String(str || '').toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length >= 2));
+    }
+    const curTokens = tokenize(`${didText} ${nextStepText}`);
+    let isRepeat = false;
+    for (const past of pastCheckins) {
+      const pastTokens = tokenize(`${past.did} ${past.next_step}`);
+      let intersection = 0;
+      for (const t of curTokens) {
+        if (pastTokens.has(t)) intersection++;
+      }
+      const union = new Set([...curTokens, ...pastTokens]).size;
+      if (union > 0 && (intersection / union) >= 0.70) {
+        isRepeat = true;
+        break;
+      }
+    }
+
+    // 7. Jumping from < 30% to 100% in one day without evidence flagged
+    const prevPct = prevCheckin ? prevCheckin.progress_pct : 0;
+    let isUnverifiedJump = false;
+    if (prevPct < 30 && progress === 100 && !evidence_url && !attachment_id) {
+      isUnverifiedJump = true;
+    }
+
+    // 8. Hash original text
+    const originalTextHash = crypto.createHash('sha256').update(`${didText}|${nextStepText}|${blockerText || ''}`).digest('hex');
+
+    // 9. Prevent duplicate today (or update if needed)
+    const [existingToday] = await req.db.query(
+      'SELECT id FROM check_ins WHERE card_id = ? AND user_id = ? AND work_date = ?',
+      [cardId, req.user.id, workDate]
+    );
+    if (existingToday) {
+      return res.status(400).json({
+        error: { message: 'A check-in for this card has already been submitted today. Please edit within 15 minutes if needed.', code: 'CHECKIN_ALREADY_EXISTS_TODAY' }
+      });
+    }
+
+    const ins = await req.db.execute(
+      `INSERT INTO check_ins (card_id, user_id, work_date, did, next_step, blocker, status, progress_pct, evidence_url, attachment_id, original_text_hash, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [cardId, req.user.id, workDate, didText, nextStepText, blockerText, status || 'on_track', progress, evidence_url || null, attachment_id || null, originalTextHash]
+    );
+
+    const [created] = await req.db.query('SELECT * FROM check_ins WHERE id = ?', [ins.insertId]);
+    return res.status(201).json({
+      checkin: {
+        ...created,
+        flags: [
+          ...(isRepeat ? ['repeat'] : []),
+          ...(isUnverifiedJump ? ['unverified_jump'] : [])
+        ]
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/cards/:id/checkins/:checkinId
+router.patch('/:id/checkins/:checkinId', requireAuth, requirePermission('checkin.create'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const checkinId = Number(req.params.checkinId);
+  const { did, next_step, blocker, status, progress_pct, evidence_url, attachment_id } = req.body;
+
+  try {
+    const [ci] = await req.db.query('SELECT * FROM check_ins WHERE id = ? AND card_id = ?', [checkinId, cardId]);
+    if (!ci) {
+      return res.status(404).json({ error: { message: 'Check-in not found', code: 'NOT_FOUND' } });
+    }
+    if (Number(ci.user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: { message: 'Only author can edit check-in', code: 'FORBIDDEN' } });
+    }
+
+    const minutesSinceCreated = (Date.now() - new Date(ci.created_at).getTime()) / (1000 * 60);
+    if (minutesSinceCreated > 15) {
+      return res.status(400).json({
+        error: { message: 'Check-ins can only be edited within 15 minutes of creation', code: 'EDIT_WINDOW_EXPIRED' }
+      });
+    }
+
+    const updates = ['edited_at = NOW()'];
+    const values = [];
+
+    // Keep original text on edit (Bug 4 fix)
+    if (ci.original_did === null) {
+      updates.push('original_did = ?', 'original_next_step = ?');
+      values.push(ci.did, ci.next_step);
+    }
+
+    if (did !== undefined) {
+      const didText = String(did).trim();
+      const didWords = didText.split(/\s+/).filter(Boolean);
+      if (didText.length < 40 || didWords.length < 8) {
+        return res.status(400).json({
+          error: { message: 'Check-in did must be at least 40 characters and at least 8 words', code: 'CHECKIN_DID_TOO_SHORT' }
+        });
+      }
+      updates.push('did = ?');
+      values.push(didText);
+    }
+    if (next_step !== undefined) {
+      const nextStepText = String(next_step).trim();
+      if (nextStepText.length < 10) {
+        return res.status(400).json({
+          error: { message: 'Check-in next_step must be at least 10 characters', code: 'CHECKIN_NEXT_STEP_TOO_SHORT' }
+        });
+      }
+      updates.push('next_step = ?');
+      values.push(nextStepText);
+    }
+    if (blocker !== undefined) {
+      updates.push('blocker = ?');
+      values.push(blocker ? String(blocker).trim() : null);
+    }
+    if (status !== undefined) {
+      updates.push('status = ?');
+      values.push(status);
+    }
+    if (progress_pct !== undefined) {
+      const progress = Math.min(100, Math.max(0, parseInt(progress_pct, 10) || 0));
+      const blockerText = blocker !== undefined ? (blocker ? String(blocker).trim() : null) : ci.blocker;
+      if (progress < ci.progress_pct && !blockerText) {
+        return res.status(400).json({
+          error: { message: 'Progress cannot drop without a blocker note', code: 'BLOCKER_REQUIRED_FOR_PROGRESS_DROP' }
+        });
+      }
+      updates.push('progress_pct = ?');
+      values.push(progress);
+    }
+    if (evidence_url !== undefined) {
+      updates.push('evidence_url = ?');
+      values.push(evidence_url ? String(evidence_url).trim() : null);
+    }
+    if (attachment_id !== undefined) {
+      updates.push('attachment_id = ?');
+      values.push(attachment_id ? Number(attachment_id) : null);
+    }
+
+    values.push(checkinId);
+    await req.db.execute(`UPDATE check_ins SET ${updates.join(', ')} WHERE id = ?`, values);
+
+    const [updated] = await req.db.query('SELECT * FROM check_ins WHERE id = ?', [checkinId]);
+    return res.json({ checkin: updated });
   } catch (err) {
     next(err);
   }

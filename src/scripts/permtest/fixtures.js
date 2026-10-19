@@ -56,11 +56,13 @@ class PermtestFixture {
     });
 
     await new Promise((r) => setTimeout(r, 250));
+    console.log('CALLING LOGIN ON URL:', this.ownerClient.apiBaseUrl, this.ownerEmail, this.slug);
     let ownerLoginRes = await this.ownerClient.post('/api/auth/login', {
       email: this.ownerEmail,
       password: this.ownerPassword,
       tenant_slug: this.slug
     });
+    console.log('OWNER LOGIN RES STATUS:', ownerLoginRes.status, 'RAW:', ownerLoginRes.rawText);
 
     let retryCount = 0;
     while ((ownerLoginRes.status !== 200 || !this.ownerClient.token) && retryCount < 6) {

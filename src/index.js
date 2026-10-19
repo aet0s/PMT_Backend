@@ -5,7 +5,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 // Safety check: Refuse to boot if DISABLE_RATE_LIMIT is set in production
 if (process.env.NODE_ENV === 'production' && process.env.DISABLE_RATE_LIMIT) {
@@ -36,6 +36,7 @@ const permissionsRouter = require('./routes/permissions');
 const rolesRouter = require('./routes/roles');
 const filesRouter = require('./routes/files');
 const attachmentsRouter = require('./routes/attachments');
+const checkinsRouter = require('./routes/checkins');
 const upload = require('./middleware/upload');
 const localStorage = require('./storage');
 const { requireAuth } = require('./middleware/auth');
@@ -172,6 +173,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/permissions', permissionsRouter);
 app.use('/api/roles', rolesRouter);
 app.use('/api/files', filesRouter);
+app.use('/api', checkinsRouter);
 
 // POST /api/upload - Standalone file upload endpoint
 app.post('/api/upload', requireAuth, upload.single('file'), async (req, res, next) => {
@@ -347,7 +349,7 @@ async function start() {
   const { startCleanupWorker } = require('./utils/fileCleanupQueue');
   startCleanupWorker();
 
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
 }

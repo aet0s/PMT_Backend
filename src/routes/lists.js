@@ -15,7 +15,8 @@ const createListSchema = z.object({
   name: z.string().min(1, 'List name is required').transform((v) => sanitizePlain(v)),
   position: z.number().optional(),
   wip_limit_enabled: z.boolean().optional(),
-  wip_limit: z.number().nullable().optional()
+  wip_limit: z.number().nullable().optional(),
+  is_done_list: z.boolean().optional()
 });
 
 const updateListSchema = z.object({
@@ -23,12 +24,13 @@ const updateListSchema = z.object({
   position: z.number().optional(),
   is_archived: z.boolean().optional(),
   wip_limit_enabled: z.boolean().optional(),
-  wip_limit: z.number().nullable().optional()
+  wip_limit: z.number().nullable().optional(),
+  is_done_list: z.boolean().optional()
 });
 
 // POST /api/lists
 router.post('/', requireAuth, requirePermission('list.create'), validate(createListSchema), async (req, res, next) => {
-  let { board_id, name, position, wip_limit_enabled, wip_limit } = req.body;
+  let { board_id, name, position, wip_limit_enabled, wip_limit, is_done_list } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -41,13 +43,15 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
       position = maxPos ? Number(maxPos) + 1000.0 : 1000.0;
     }
 
-    const isDone = /^(done|completed|finished|closed|released|shipped|archive)/i.test(name.trim());
-    const finalWipEnabled = wip_limit_enabled !== undefined ? (wip_limit_enabled ? 1 : 0) : (isDone ? 0 : 1);
+    const calculatedIsDone = is_done_list !== undefined
+      ? (is_done_list ? 1 : 0)
+      : (/^(done|completed|finished|closed|released|shipped|archive)/i.test(name.trim()) && !/not\s+done/i.test(name.trim()) ? 1 : 0);
+    const finalWipEnabled = wip_limit_enabled !== undefined ? (wip_limit_enabled ? 1 : 0) : (calculatedIsDone ? 0 : 1);
     const finalWipLimit = wip_limit !== undefined ? (wip_limit === null ? null : Number(wip_limit)) : null;
 
     const listExec = await req.db.execute(
-      'INSERT INTO lists (board_id, name, position, wip_limit_enabled, wip_limit) VALUES (?, ?, ?, ?, ?)',
-      [board_id, name, position, finalWipEnabled, finalWipLimit]
+      'INSERT INTO lists (board_id, name, position, wip_limit_enabled, wip_limit, is_done_list) VALUES (?, ?, ?, ?, ?, ?)',
+      [board_id, name, position, finalWipEnabled, finalWipLimit, calculatedIsDone]
     );
 
     const [createdList] = await req.db.query('SELECT * FROM lists WHERE id = ?', [listExec.insertId]);
@@ -79,8 +83,8 @@ router.patch(
   '/:id',
   requireAuth,
   requirePermissionForBody((req) => {
-    const { name, position, is_archived, wip_limit_enabled, wip_limit } = req.body;
-    const isEdit = name !== undefined || is_archived !== undefined || wip_limit_enabled !== undefined || wip_limit !== undefined;
+    const { name, position, is_archived, wip_limit_enabled, wip_limit, is_done_list } = req.body;
+    const isEdit = name !== undefined || is_archived !== undefined || wip_limit_enabled !== undefined || wip_limit !== undefined || is_done_list !== undefined;
     const isReorderOnly = position !== undefined && !isEdit;
     if (isReorderOnly) {
       return { any: ['list.reorder', 'list.edit'] };
@@ -90,7 +94,7 @@ router.patch(
   validate(updateListSchema),
   async (req, res, next) => {
   const listId = Number(req.params.id);
-  const { name, position, is_archived, wip_limit_enabled, wip_limit } = req.body;
+  const { name, position, is_archived, wip_limit_enabled, wip_limit, is_done_list } = req.body;
   const originId = req.headers['x-origin-id'];
 
   try {
@@ -128,6 +132,10 @@ router.patch(
     if (wip_limit !== undefined) {
       updates.push('wip_limit = ?');
       values.push(wip_limit === null ? null : Number(wip_limit));
+    }
+    if (is_done_list !== undefined) {
+      updates.push('is_done_list = ?');
+      values.push(is_done_list ? 1 : 0);
     }
 
     if (updates.length === 0) {

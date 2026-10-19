@@ -421,6 +421,58 @@ const ROUTE_NOTIFICATION_MAP = {
   'POST /api/dev/reset-rate-limit': {
     noNotify: true,
     reason: 'Test-only development environment rate limit reset helper'
+  },
+
+  // --- Workspaces (Icon & Leave Days) ---
+  'POST /api/workspaces/:id/icon': {
+    noNotify: true,
+    reason: 'Workspace icon upload is a visual preference; not notifiable'
+  },
+  'DELETE /api/workspaces/:id/icon': {
+    noNotify: true,
+    reason: 'Workspace icon removal is a visual preference; not notifiable'
+  },
+  'POST /api/workspaces/:id/leave-days': {
+    noNotify: true,
+    reason: 'Leave day request/creation is tracked administratively in Daily Tracker and audit log'
+  },
+  'PATCH /api/workspaces/:id/leave-days/:leaveId': {
+    noNotify: true,
+    reason: 'Leave day approval/rejection is tracked administratively in Daily Tracker and audit log'
+  },
+  'DELETE /api/workspaces/:id/leave-days/:leaveId': {
+    noNotify: true,
+    reason: 'Leave day cancellation is tracked administratively in Daily Tracker and audit log'
+  },
+
+  // --- Daily Tracker Focus & Check-ins ---
+  'POST /api/cards/:id/focus': {
+    noNotify: true,
+    reason: 'Personal focus selection is productivity state; not a noise event'
+  },
+  'DELETE /api/cards/:id/focus': {
+    noNotify: true,
+    reason: 'Ending personal focus is productivity state; not a noise event'
+  },
+  'POST /api/cards/:id/focus/deep-work': {
+    noNotify: true,
+    reason: 'Designating deep-work card is productivity metadata; not a noise event'
+  },
+  'POST /api/cards/:id/checkins': {
+    noNotify: true,
+    reason: 'Check-in creation is recorded in Daily Tracker; not a noise event'
+  },
+  'PATCH /api/cards/:id/checkins/:checkinId': {
+    noNotify: true,
+    reason: 'Check-in 15-minute edit window update; not a noise event'
+  },
+  'POST /api/checkins/:id/review': {
+    noNotify: true,
+    reason: 'Check-in review questions/acknowledgments are handled in Daily Tracker review feed'
+  },
+  'POST /api/checkin-reviews/:id/answer': {
+    noNotify: true,
+    reason: 'Check-in review answer is recorded in checkin thread'
   }
 };
 

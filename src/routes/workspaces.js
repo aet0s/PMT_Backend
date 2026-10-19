@@ -3730,7 +3730,72 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
   }
 });
 
-// GET /api/workspaces/:id/daily-tracker - Server-side paginated & filtered daily task tracking
+// Helper: compute UTC [startUtc, endUtc) bounds for a date string in a specific IANA timezone
+function getUtcRangeForDate(dateStr, timeZone = 'Asia/Kolkata') {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const approxUtc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: 'numeric', second: 'numeric',
+    hour12: false
+  });
+  const formatParts = (dt) => {
+    const parts = formatter.formatToParts(dt);
+    const map = {};
+    parts.forEach(p => map[p.type] = p.value);
+    return {
+      year: Number(map.year),
+      month: Number(map.month),
+      day: Number(map.day),
+      hour: Number(map.hour) === 24 ? 0 : Number(map.hour),
+      minute: Number(map.minute),
+      second: Number(map.second)
+    };
+  };
+  let guess = approxUtc.getTime();
+  for (let i = 0; i < 3; i++) {
+    const cur = formatParts(new Date(guess));
+    const curDateAsUtc = Date.UTC(cur.year, cur.month - 1, cur.day, cur.hour, cur.minute, cur.second);
+    const targetDateAsUtc = Date.UTC(y, m - 1, d, 0, 0, 0);
+    const diff = targetDateAsUtc - curDateAsUtc;
+    guess += diff;
+    if (diff === 0) break;
+  }
+  const startUtc = new Date(guess);
+  const endUtc = new Date(guess + 24 * 60 * 60 * 1000);
+  return { startUtc, endUtc };
+}
+
+// Helper: compute working days between two dates, excluding non-working days and holidays (Bug A & 5 fix)
+function getWorkingDaysBetween(startDate, endDate, workingDays = [1, 2, 3, 4, 5], holidays = []) {
+  if (!startDate || !endDate) return 1;
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 1;
+  if (start > end) return 1;
+
+  const cur = new Date(start);
+  cur.setUTCHours(0, 0, 0, 0);
+  const target = new Date(end);
+  target.setUTCHours(23, 59, 59, 999);
+
+  let count = 0;
+  const holidaysSet = new Set(Array.isArray(holidays) ? holidays : []);
+
+  while (cur <= target) {
+    const jsDay = cur.getUTCDay(); // 0=Sun..6=Sat
+    const isoDay = jsDay === 0 ? 7 : jsDay; // 1=Mon..7=Sun
+    const dateStr = cur.toISOString().slice(0, 10);
+    if (workingDays.includes(isoDay) && !holidaysSet.has(dateStr)) {
+      count++;
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return Math.max(1, count);
+}
+
+// GET /api/workspaces/:id/daily-tracker - Server-side paginated & filtered daily task tracking (v2)
 router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.view'), async (req, res, next) => {
   const routeWsId = Number(req.params.id);
 
@@ -3753,7 +3818,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       ? String(req.query.date).trim()
       : new Date().toISOString().slice(0, 10);
 
-    // 2. Mode & Pagination: exactly 20 cards per page default
+    // 2. Mode & Pagination: 20 cards per page default
     const mode = req.query.mode ? String(req.query.mode).trim().toLowerCase() : 'created'; // 'created' | 'active' | 'in_progress'
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20));
@@ -3767,54 +3832,112 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const search = (req.query.search || '').trim().toLowerCase();
     const sort = req.query.sort ? String(req.query.sort).trim().toLowerCase() : 'newest';
 
-    // Workspaces user can access
+    // Workspaces user can access where user holds daily_tracker.view (Bug A fix)
     const userWorkspaces = await req.db.query(
-      `SELECT w.id, w.name
+      `SELECT w.id, w.name, w.settings
        FROM workspaces w
        JOIN workspace_members wm ON w.id = wm.workspace_id
        WHERE wm.user_id = ? AND w.is_archived = 0
        ORDER BY w.name ASC`,
       [req.user.id]
     );
-    const accessibleWsIds = userWorkspaces.map((w) => w.id);
-    if (accessibleWsIds.length === 0) {
+
+    const allowedWorkspaces = [];
+    for (const ws of userWorkspaces) {
+      const canView = await userHasPermission(req.user.id, ws.id, 'daily_tracker.view', req.db);
+      if (canView) {
+        allowedWorkspaces.push(ws);
+      }
+    }
+    const allowedWsIds = allowedWorkspaces.map((w) => w.id);
+
+    if (allowedWsIds.length === 0) {
+      return res.status(403).json({
+        error: { message: 'Permission denied: daily_tracker.view required', code: 'FORBIDDEN' }
+      });
+    }
+
+    let activeWsIds = [];
+    if (filterWsId) {
+      if (!allowedWsIds.includes(filterWsId)) {
+        return res.status(403).json({
+          error: { message: `Permission denied: daily_tracker.view required for workspace ${filterWsId}`, code: 'FORBIDDEN' }
+        });
+      }
+      activeWsIds = [filterWsId];
+    } else {
+      // workspace_id=all: strictly workspaces where user holds daily_tracker.view
+      activeWsIds = allowedWsIds;
+    }
+
+    // Compute accessible boards across all active workspaces (Bug A fix)
+    let allAllowedBoardIds = [];
+    for (const wsId of activeWsIds) {
+      const bIds = await accessibleBoardIds(req.user.id, wsId, 'project.view', req.db);
+      allAllowedBoardIds = allAllowedBoardIds.concat(bIds);
+    }
+    allAllowedBoardIds = Array.from(new Set(allAllowedBoardIds));
+
+    // A PM or user on no boards sees zero cards, zero boards and zero labels (Bug A fix)
+    if (allAllowedBoardIds.length === 0) {
       return res.json({
         cards: [],
         pagination: { page, limit, total: 0, totalPages: 0 },
         summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
-        filterOptions: { workspaces: [], labels: [], boards: [] }
+        filterOptions: { workspaces: allowedWorkspaces, labels: [], boards: [] }
       });
     }
 
-    // Filter by target workspace or all user workspaces
-    const activeWsIds = filterWsId ? (accessibleWsIds.includes(filterWsId) ? [filterWsId] : []) : accessibleWsIds;
-    if (activeWsIds.length === 0) {
-      return res.json({
-        cards: [],
-        pagination: { page, limit, total: 0, totalPages: 0 },
-        summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
-        filterOptions: { workspaces: userWorkspaces, labels: [], boards: [] }
-      });
-    }
+    // Read workspace settings for timezone (Bug G fix)
+    const currentWs = userWorkspaces.find((w) => w.id === routeWsId) || userWorkspaces[0];
+    let wsSettings = {};
+    try {
+      wsSettings = typeof currentWs?.settings === 'string' ? JSON.parse(currentWs.settings) : (currentWs?.settings || {});
+    } catch {}
+    const timezone = wsSettings?.timezone || 'Asia/Kolkata';
+    const { startUtc, endUtc } = getUtcRangeForDate(targetDate, timezone);
 
-    // Boards user can view in these workspaces
-    const allowedBoardIds = await accessibleBoardIds(req.user.id, routeWsId, 'daily_tracker.view', req.db);
     const whereConditions = [
       'b.workspace_id IN (?)',
+      'b.id IN (?)',
       'b.is_archived = 0',
       'l.is_archived = 0',
       'c.is_archived = 0'
     ];
-    const queryParams = [activeWsIds];
+    const queryParams = [activeWsIds, allAllowedBoardIds];
+
+    if (boardId) {
+      if (!allAllowedBoardIds.includes(boardId)) {
+        return res.json({
+          cards: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+          summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
+          filterOptions: { workspaces: allowedWorkspaces, labels: [], boards: [] }
+        });
+      }
+      whereConditions.push('b.id = ?');
+      queryParams.push(boardId);
+    }
+
+    if (labelId) {
+      whereConditions.push('EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = ?)');
+      queryParams.push(labelId);
+    }
+
+    if (search) {
+      whereConditions.push('(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.description, "")) LIKE ? OR CAST(c.id AS CHAR) = ?)');
+      const wild = `%${search}%`;
+      queryParams.push(wild, wild, search);
+    }
 
     if (mode === 'active') {
       whereConditions.push(`(
-        DATE(c.created_at) = ?
+        (c.created_at >= ? AND c.created_at < ?)
         OR EXISTS (
           SELECT 1 FROM activity_log a
           WHERE a.card_id = c.id
-            AND DATE(a.created_at) = ?
-            AND a.action_type IN ('checklist_toggled', 'moved_card', 'attachment_uploaded', 'marked_complete')
+            AND a.created_at >= ? AND a.created_at < ?
+            AND a.action_type IN ('checklist_toggled', 'moved_card', 'attachment_uploaded', 'attachment_added', 'marked_complete')
             AND (
               a.action_type != 'checklist_toggled'
               OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, '$.is_checked')) IN ('true', '1')
@@ -3825,59 +3948,38 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         OR EXISTS (
           SELECT 1 FROM comments cm
           WHERE cm.card_id = c.id
-            AND DATE(cm.created_at) = ?
-            AND LENGTH(TRIM(cm.body)) >= 10
+            AND cm.created_at >= ? AND cm.created_at < ?
+            AND LENGTH(TRIM(cm.body)) >= 20
         )
         OR EXISTS (
           SELECT 1 FROM attachments att
           WHERE att.card_id = c.id
-            AND DATE(att.created_at) = ?
+            AND att.created_at >= ? AND att.created_at < ?
+        )
+        OR EXISTS (
+          SELECT 1 FROM check_ins ci
+          WHERE ci.card_id = c.id
+            AND ci.work_date = ?
         )
       )`);
-      queryParams.push(targetDate, targetDate, targetDate, targetDate);
+      queryParams.push(startUtc, endUtc, startUtc, endUtc, startUtc, endUtc, startUtc, endUtc, targetDate);
     } else if (mode === 'in_progress') {
-      whereConditions.push(`(
-        c.is_complete = 0
-        AND LOWER(l.name) NOT LIKE '%done%'
-        AND LOWER(l.name) NOT LIKE '%completed%'
-      )`);
+      // Bug D fix: use lists.is_done_list = 0
+      whereConditions.push('(c.is_complete = 0 AND l.is_done_list = 0)');
     } else {
-      // Default: 'created'
-      whereConditions.push('DATE(c.created_at) = ?');
-      queryParams.push(targetDate);
-    }
-
-    if (allowedBoardIds && allowedBoardIds.length > 0) {
-      whereConditions.push('b.id IN (?)');
-      queryParams.push(allowedBoardIds);
-    }
-
-    if (boardId) {
-      whereConditions.push('b.id = ?');
-      queryParams.push(boardId);
-    }
-
-    if (labelId) {
-      whereConditions.push(`EXISTS (
-        SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = ?
-      )`);
-      queryParams.push(labelId);
-    }
-
-    if (search) {
-      whereConditions.push('(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.description, "")) LIKE ? OR CAST(c.id AS CHAR) = ?)');
-      const wild = `%${search}%`;
-      queryParams.push(wild, wild, search);
+      // Bug G fix: range predicates instead of DATE(c.created_at) = ?
+      whereConditions.push('(c.created_at >= ? AND c.created_at < ?)');
+      queryParams.push(startUtc, endUtc);
     }
 
     const whereSql = whereConditions.join(' AND ');
 
-    // 1. Aggregate summary for that date across the filtered set
+    // Bug D fix: use l.is_done_list = 1 for completed
     const summarySql = `
       SELECT
         COUNT(DISTINCT c.id) as total,
-        SUM(CASE WHEN c.is_complete = 1 OR LOWER(l.name) LIKE '%done%' OR LOWER(l.name) LIKE '%completed%' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN c.is_complete = 0 AND LOWER(l.name) NOT LIKE '%done%' AND LOWER(l.name) NOT LIKE '%completed%' THEN 1 ELSE 0 END) as in_progress
+        SUM(CASE WHEN c.is_complete = 1 OR l.is_done_list = 1 THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN c.is_complete = 0 AND l.is_done_list = 0 THEN 1 ELSE 0 END) as in_progress
       FROM cards c
       JOIN lists l ON c.list_id = l.id
       JOIN boards b ON l.board_id = b.id
@@ -3891,7 +3993,6 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const completion_rate = total > 0 ? Math.round((completed / total) * 100) : 0;
     const totalPages = Math.ceil(total / limit) || 1;
 
-    // Sorting
     let orderSql = 'c.created_at DESC, c.id DESC';
     if (sort === 'oldest') {
       orderSql = 'c.created_at ASC, c.id ASC';
@@ -3901,7 +4002,6 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       orderSql = 'c.title DESC, c.id DESC';
     }
 
-    // 2. Paginated cards query
     const selectSql = `
       SELECT
         c.id,
@@ -3911,10 +4011,20 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         c.position,
         c.due_date,
         c.start_date,
+        c.first_moved_or_assigned_at,
+        c.completed_at,
+        c.completed_by,
+        c.completion_note,
+        c.completion_evidence_url,
+        c.completion_attachment_id,
         c.is_complete,
         c.is_archived,
         c.created_at,
+        c.created_by,
+        u_creator.name as created_by_name,
         l.name as list_name,
+        l.position as list_position,
+        l.is_done_list,
         l.board_id,
         b.name as board_name,
         b.workspace_id,
@@ -3923,6 +4033,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       JOIN lists l ON c.list_id = l.id
       JOIN boards b ON l.board_id = b.id
       JOIN workspaces w ON b.workspace_id = w.id
+      LEFT JOIN users u_creator ON c.created_by = u_creator.id
       WHERE ${whereSql}
       ORDER BY ${orderSql}
       LIMIT ? OFFSET ?
@@ -3935,9 +4046,13 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const cardLabelsMap = {};
     const cardActivitiesMap = {};
     const cardCommentsMap = {};
+    const cardAttachmentsMap = {};
+    const cardChecklistsMap = {};
+    const cardFocusMap = {};
+    const cardCheckinsMap = {};
 
     if (cardIds.length > 0) {
-      // Fetch Card Assignees (Members)
+      // 1. Members
       const cmRes = await req.db.query(
         `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url
          FROM card_members cm
@@ -3951,7 +4066,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
       });
 
-      // Fetch Card Assigners
+      // 2. Assigners
       const caRes = await req.db.query(
         `SELECT ca.card_id, u.id, u.name, u.email, u.avatar_url
          FROM card_assigners ca
@@ -3965,7 +4080,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardAssignersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
       });
 
-      // Fetch Card Labels
+      // 3. Labels
       const clRes = await req.db.query(
         `SELECT cl.card_id, l.id, l.name, l.color
          FROM card_labels cl
@@ -3978,32 +4093,95 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardLabelsMap[row.card_id].push({ id: row.id, name: row.name, color: row.color });
       });
 
-      // Fetch recent Activity Logs for cards
+      // 4. Performance Range Query (Bug K): fetch target range activity AND latest event
       const actRes = await req.db.query(
-        `SELECT a.card_id, a.action_type, a.meta_json, a.created_at, u.name as user_name
+        `SELECT a.id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at, u.name as user_name
          FROM activity_log a
          LEFT JOIN users u ON a.user_id = u.id
          WHERE a.card_id IN (?)
+           AND (
+             (a.created_at >= ? AND a.created_at < ?)
+             OR a.id IN (SELECT MAX(id) FROM activity_log WHERE card_id IN (?) GROUP BY card_id)
+           )
          ORDER BY a.created_at DESC`,
-        [cardIds]
+        [cardIds, startUtc, endUtc, cardIds]
       );
       actRes.forEach((row) => {
         if (!cardActivitiesMap[row.card_id]) cardActivitiesMap[row.card_id] = [];
         cardActivitiesMap[row.card_id].push(row);
       });
 
-      // Fetch recent Comments for cards
+      // 5. Comments (Bug K & I): target range + latest
       const commRes = await req.db.query(
-        `SELECT co.card_id, co.body, co.created_at, u.name as user_name
+        `SELECT co.id, co.card_id, co.user_id, co.body, co.created_at, u.name as user_name
          FROM comments co
          LEFT JOIN users u ON co.user_id = u.id
          WHERE co.card_id IN (?)
+           AND (
+             (co.created_at >= ? AND co.created_at < ?)
+             OR co.id IN (SELECT MAX(id) FROM comments WHERE card_id IN (?) GROUP BY card_id)
+           )
          ORDER BY co.created_at DESC`,
-        [cardIds]
+        [cardIds, startUtc, endUtc, cardIds]
       );
       commRes.forEach((row) => {
         if (!cardCommentsMap[row.card_id]) cardCommentsMap[row.card_id] = [];
         cardCommentsMap[row.card_id].push(row);
+      });
+
+      // 6. Attachments (Bug C): recognize added & uploaded
+      const attRes = await req.db.query(
+        `SELECT att.id, att.card_id, att.file_name, att.file_size_bytes, att.created_at, u.name as user_name
+         FROM attachments att
+         LEFT JOIN users u ON att.uploaded_by_user_id = u.id
+         WHERE att.card_id IN (?)
+         ORDER BY att.created_at DESC`,
+        [cardIds]
+      );
+      attRes.forEach((row) => {
+        if (!cardAttachmentsMap[row.card_id]) cardAttachmentsMap[row.card_id] = [];
+        cardAttachmentsMap[row.card_id].push(row);
+      });
+
+      // 7. Checklists & items with created_by and created_at (Bug B & J)
+      const chkRes = await req.db.query(
+        `SELECT ci.id, ci.checklist_id, ci.text, ci.is_checked, ci.created_at, ci.created_by, ch.card_id
+         FROM checklist_items ci
+         JOIN checklists ch ON ci.checklist_id = ch.id
+         WHERE ch.card_id IN (?)
+         ORDER BY ci.position ASC, ci.id ASC`,
+        [cardIds]
+      );
+      chkRes.forEach((row) => {
+        if (!cardChecklistsMap[row.card_id]) cardChecklistsMap[row.card_id] = [];
+        cardChecklistsMap[row.card_id].push(row);
+      });
+
+      // 8. Card Focus
+      const focRes = await req.db.query(
+        `SELECT cf.*, u.name as user_name
+         FROM card_focus cf
+         JOIN users u ON cf.user_id = u.id
+         WHERE cf.card_id IN (?) AND cf.ended_at IS NULL`,
+        [cardIds]
+      );
+      focRes.forEach((row) => {
+        if (!cardFocusMap[row.card_id]) cardFocusMap[row.card_id] = [];
+        cardFocusMap[row.card_id].push(row);
+      });
+
+      // 9. Check-ins for targetDate
+      const ciRes = await req.db.query(
+        `SELECT ci.*, u.name as user_name
+         FROM check_ins ci
+         JOIN users u ON ci.user_id = u.id
+         WHERE ci.card_id IN (?) AND ci.work_date = ?
+         ORDER BY ci.id DESC`,
+        [cardIds, targetDate]
+      );
+      ciRes.forEach((row) => {
+        if (!cardCheckinsMap[row.card_id]) cardCheckinsMap[row.card_id] = [];
+        cardCheckinsMap[row.card_id].push(row);
       });
     }
 
@@ -4012,11 +4190,17 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const cards = cardsRes.map((c) => {
       const activities = cardActivitiesMap[c.id] || [];
       const comments = cardCommentsMap[c.id] || [];
+      const attachments = cardAttachmentsMap[c.id] || [];
+      const checklistItems = cardChecklistsMap[c.id] || [];
+      const focusList = cardFocusMap[c.id] || [];
+      const checkinsToday = cardCheckinsMap[c.id] || [];
 
-      // Find latest activity timestamp across activity_log, comments, and card created_at
+      const flags = [];
+
+      // Latest activity calculation
       let latestActivityAt = new Date(c.created_at);
       let latestActivityEvent = 'created';
-      let latestActor = null;
+      let latestActor = c.created_by_name || null;
       let latestMeta = null;
 
       if (activities.length > 0) {
@@ -4041,171 +4225,258 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         }
       }
 
-      // Format human-readable last activity
-      const timeStr = latestActivityAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-      const isActToday = latestActivityAt.toDateString() === now.toDateString();
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isActYesterday = latestActivityAt.toDateString() === yesterday.toDateString();
-
-      let lastActivityDisplayTime = `Today at ${timeStr}`;
-      if (!isActToday) {
-        if (isActYesterday) {
-          lastActivityDisplayTime = `Yesterday at ${timeStr}`;
-        } else {
-          lastActivityDisplayTime = `${latestActivityAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${timeStr}`;
-        }
-      }
-
-      // Friendly text for last activity
-      let lastActivityDescription = 'Created';
-      if (latestActivityEvent === 'added_comment') {
-        lastActivityDescription = latestActor ? `Comment by ${latestActor}` : 'New comment';
-      } else if (latestActivityEvent === 'moved_card') {
-        let meta = latestMeta;
-        if (typeof meta === 'string') {
-          try { meta = JSON.parse(meta); } catch {}
-        }
-        lastActivityDescription = meta?.to ? `Moved to ${meta.to}` : 'Moved column';
-      } else if (latestActivityEvent === 'checklist_toggled') {
-        lastActivityDescription = 'Checklist updated';
-      } else if (latestActivityEvent === 'checklist_item_added') {
-        lastActivityDescription = 'Checklist item added';
-      } else if (latestActivityEvent === 'marked_complete') {
-        lastActivityDescription = 'Marked complete';
-      } else if (latestActivityEvent === 'marked_incomplete') {
-        lastActivityDescription = 'Reopened';
-      } else if (latestActivityEvent === 'attachment_uploaded') {
-        lastActivityDescription = 'Attachment added';
-      } else if (latestActivityEvent === 'card_renamed') {
-        lastActivityDescription = 'Renamed';
-      } else if (latestActivityEvent !== 'created') {
-        lastActivityDescription = 'Updated';
-      }
-
-      const hoursSinceActivity = Math.max(0, (now.getTime() - latestActivityAt.getTime()) / (1000 * 60 * 60));
-      const isInactive = hoursSinceActivity >= 48;
-      const daysInactive = Math.max(2, Math.floor(hoursSinceActivity / 24));
-
-      // Calculate days in progress
-      const startDate = c.start_date ? new Date(c.start_date) : new Date(c.created_at);
-      const diffMs = Math.max(0, now.getTime() - startDate.getTime());
-      const daysInProgress = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
-
-      // Synthesize Activity Pill for "Active Today" (activity on targetDate)
+      // Bug G: Filter activities in range [startUtc, endUtc)
       const targetDateActivities = activities.filter((a) => {
-        try {
-          const actD = new Date(a.created_at);
-          const isoDate = actD.toISOString().slice(0, 10);
-          const localDate = `${actD.getFullYear()}-${String(actD.getMonth() + 1).padStart(2, '0')}-${String(actD.getDate()).padStart(2, '0')}`;
-          return isoDate === targetDate || localDate === targetDate;
-        } catch {
-          return false;
-        }
+        const d = new Date(a.created_at);
+        return d >= startUtc && d < endUtc;
       });
+
       const targetDateComments = comments.filter((cm) => {
-        try {
-          const comD = new Date(cm.created_at);
-          const isoDate = comD.toISOString().slice(0, 10);
-          const localDate = `${comD.getFullYear()}-${String(comD.getMonth() + 1).padStart(2, '0')}-${String(comD.getDate()).padStart(2, '0')}`;
-          return isoDate === targetDate || localDate === targetDate;
-        } catch {
-          return false;
-        }
+        const d = new Date(cm.created_at);
+        return d >= startUtc && d < endUtc;
       });
+
+      const targetDateAttachments = attachments.filter((att) => {
+        const d = new Date(att.created_at);
+        return d >= startUtc && d < endUtc;
+      });
+
+      // Working days calculation using workspace working_days and holidays settings (Bug 5 fix)
+      const currentWs = allowedWorkspaces.find((w) => w.id === routeWsId) || allowedWorkspaces[0];
+      let wsSettingsObj = {};
+      try {
+        wsSettingsObj = typeof currentWs?.settings === 'string' ? JSON.parse(currentWs.settings) : (currentWs?.settings || {});
+      } catch {}
+      const wsWorkingDays = wsSettingsObj?.working_days || [1, 2, 3, 4, 5];
+      const wsHolidays = wsSettingsObj?.holidays || [];
+
+      const startDate = c.first_moved_or_assigned_at ? new Date(c.first_moved_or_assigned_at) : new Date(c.created_at);
+      const daysInProgress = getWorkingDaysBetween(startDate, targetDate, wsWorkingDays, wsHolidays);
+
+      // Inactivity & idle warning in working days
+      const workingDaysSinceActivity = getWorkingDaysBetween(latestActivityAt, targetDate, wsWorkingDays, wsHolidays);
+      if (workingDaysSinceActivity >= 3) {
+        if (!flags.includes('inactivity')) flags.push('inactivity');
+      } else if (workingDaysSinceActivity >= 2) {
+        if (!flags.includes('idle_warning')) flags.push('idle_warning');
+      }
+      if (daysInProgress >= 14) {
+        if (!flags.includes('long_running')) flags.push('long_running');
+      }
 
       // --- ANTI-CHEAT ENGINE ---
-      // 1. Checklist Verification:
-      // Track distinct items and their net state today.
-      // Unchecking does not grant credit. Rapid spam clicks only resolve to final state.
+
+      // 1. Checklist anti-cheat (Bug B & 5):
+      // Min text 5 chars; untick earns 0; rapid tick within 2m flagged; per-person credit once per item lifetime
       const checklistToggles = targetDateActivities.filter((a) => a.action_type === 'checklist_toggled');
       const itemFinalState = new Map();
       let lastChecklistActor = null;
+      let creditedChecklistCount = 0;
+
+      // Bulk ticking check: 8 or more ticks in 60 seconds
+      const userTickTimes = checklistToggles
+        .filter(a => a.user_id)
+        .map(a => new Date(a.created_at).getTime())
+        .sort((a, b) => a - b);
+      let isBulkTicking = false;
+      for (let i = 0; i <= userTickTimes.length - 8; i++) {
+        if (userTickTimes[i + 7] - userTickTimes[i] <= 60 * 1000) {
+          isBulkTicking = true;
+          break;
+        }
+      }
+      if (isBulkTicking) {
+        if (!flags.includes('bulk_ticking')) flags.push('bulk_ticking');
+      }
+
       for (const a of checklistToggles) {
         let meta = a.meta_json;
         if (typeof meta === 'string') {
           try { meta = JSON.parse(meta); } catch {}
         }
-        const key = meta?.item_id ? String(meta.item_id) : (meta?.item_text ? String(meta.item_text).trim().toLowerCase() : null);
+        const itemId = meta?.item_id ? Number(meta.item_id) : null;
+        const itemText = meta?.item_text ? String(meta.item_text).trim() : '';
         const isChecked = meta?.is_checked === true || meta?.is_checked === 1 || String(meta?.is_checked) === 'true';
-        if (key && !itemFinalState.has(key)) {
+
+        // Min 5 chars rule
+        if (itemText.length > 0 && itemText.length < 5) {
+          continue;
+        }
+
+        const chkItem = checklistItems.find((ci) => ci.id === itemId);
+
+        // created_and_ticked: own item ticked within 2 minutes of creation
+        if (chkItem && chkItem.created_by && a.user_id && Number(chkItem.created_by) === Number(a.user_id)) {
+          const createTime = new Date(chkItem.created_at).getTime();
+          const toggleTime = new Date(a.created_at).getTime();
+          if (Math.abs(toggleTime - createTime) <= 2 * 60 * 1000) {
+            if (!flags.includes('created_and_ticked')) flags.push('created_and_ticked');
+            if (!flags.includes('rapid_checklist_tick')) flags.push('rapid_checklist_tick');
+            continue; // Not credited
+          }
+        }
+
+        // Lifetime credit once per item per lifetime
+        if (chkItem && chkItem.lifetime_tick_count > 1) {
+          continue; // Lifetime credit already used, 0 credit
+        }
+
+        const key = itemId ? `id_${itemId}` : `text_${itemText.toLowerCase()}`;
+        if (!itemFinalState.has(key)) {
           itemFinalState.set(key, isChecked);
-          if (isChecked && !lastChecklistActor && a.user_name) {
-            lastChecklistActor = a.user_name;
+          if (isChecked && !isBulkTicking) {
+            creditedChecklistCount++;
+            if (!lastChecklistActor && a.user_name) {
+              lastChecklistActor = a.user_name;
+            }
           }
         }
       }
-      const verifiedChecklistCount = Array.from(itemFinalState.values()).filter(Boolean).length;
 
-      // 2. Meaningful Comments Verification:
-      // Dummy spam comments like '.', 'ok', 'asdf' (< 10 non-space characters) are filtered out.
-      const meaningfulComments = targetDateComments.filter((cm) => String(cm.body || '').trim().length >= 10);
-      const latestMeaningfulComment = meaningfulComments[0];
-      const commentsCount = meaningfulComments.length;
+      // 2. Meaningful Comments (Bug I & 5):
+      // >= 20 chars AND >= 4 real words, no repeat within 7 days, max 3 credited per day, flag edited
+      let creditedCommentsCount = 0;
+      let latestCreditedComment = null;
+      const seenCommentHashes = new Set();
 
-      // 3. Column Moves Verification:
-      // Expose back-and-forth shuffling and indicate exact destination.
+      for (const cm of targetDateComments) {
+        const bodyText = String(cm.body || '').trim();
+        const words = bodyText.split(/\s+/).filter((w) => w.length > 0);
+
+        if (bodyText.length < 20 || words.length < 4) {
+          continue;
+        }
+
+        const norm = bodyText.toLowerCase().replace(/[^\w]/g, '');
+        if (seenCommentHashes.has(norm)) {
+          if (!flags.includes('repeat_comment')) flags.push('repeat_comment');
+          continue;
+        }
+        seenCommentHashes.add(norm);
+
+        // Flag edited comment (keep original_length)
+        const isEdited = cm.original_length !== null || activities.some((a) => a.action_type === 'edited_comment' && (
+          (a.meta_json && typeof a.meta_json === 'object' && Number(a.meta_json.comment_id) === Number(cm.id)) ||
+          (typeof a.meta_json === 'string' && a.meta_json.includes(String(cm.id)))
+        ));
+        if (isEdited) {
+          if (!flags.includes('edited_comment')) flags.push('edited_comment');
+        }
+
+        if (creditedCommentsCount < 3) {
+          creditedCommentsCount++;
+          if (!latestCreditedComment) latestCreditedComment = cm;
+        }
+      }
+
+      // 3. Column Moves (Bug E & 5):
+      // Forward move credited once per stage per card using list position; backward moves never credited and flagged
       const movedActs = targetDateActivities.filter((a) => a.action_type === 'moved_card');
       const movedAct = movedActs[0];
       let moveText = null;
+      let hasForwardMove = false;
+
       if (movedAct) {
         let meta = movedAct.meta_json;
         if (typeof meta === 'string') {
           try { meta = JSON.parse(meta); } catch {}
         }
         const toCol = meta?.to || c.list_name || 'column';
-        const fromCol = meta?.from || '';
         const actor = movedAct.user_name ? ` by ${movedAct.user_name}` : '';
-        if (movedActs.length > 1) {
-          moveText = `⚠️ Column shifted ${movedActs.length}x today (now in ${toCol})`;
-        } else if (toCol.toLowerCase().includes('done') || toCol.toLowerCase().includes('complete')) {
-          moveText = `🚀 Completed (moved to ${toCol})${actor}`;
-        } else if (fromCol && (fromCol.toLowerCase().includes('done') || fromCol.toLowerCase().includes('review')) && (toCol.toLowerCase().includes('todo') || toCol.toLowerCase().includes('progress'))) {
-          moveText = `⚠️ Moved back: ${fromCol} ➔ ${toCol}${actor}`;
+        const fromPos = meta?.from_position ?? null;
+        const toPos = meta?.to_position ?? (c.list_position || 0);
+
+        if (fromPos !== null && toPos < fromPos) {
+          // Backward moves are never credited and are flagged
+          if (!flags.includes('backward_move')) flags.push('backward_move');
+          moveText = `⚠️ Backward move to ${toCol}${actor}`;
+          hasForwardMove = false;
+        } else if (movedActs.length >= 3) {
+          if (!flags.includes('ping_pong')) flags.push('ping_pong');
+          moveText = `⚠️ Column ping-pong (${movedActs.length} moves in ${toCol})`;
+        } else if (c.is_done_list === 1 || c.is_complete === 1) {
+          moveText = `🚀 Completed (${toCol})${actor}`;
+          hasForwardMove = true;
         } else {
           moveText = `Moved to ${toCol}${actor}`;
+          hasForwardMove = true;
         }
       }
 
-      // 4. Cosmetic Title Renames:
-      const renamedAct = targetDateActivities.find((a) => a.action_type === 'card_renamed');
-      const descAct = targetDateActivities.find((a) => a.action_type === 'card_description_updated');
+      // 4. Instant complete and completed with open checklist flags (Bug 5)
+      if (c.is_complete === 1 || c.is_done_list === 1) {
+        const compTime = c.completed_at ? new Date(c.completed_at).getTime() : latestActivityAt.getTime();
+        const createTime = new Date(c.created_at).getTime();
+        if (compTime - createTime <= 10 * 60 * 1000) {
+          if (!flags.includes('instant_complete')) flags.push('instant_complete');
+        }
+        const hasOpenItems = checklistItems.some(ci => !ci.is_checked);
+        if (hasOpenItems) {
+          if (!flags.includes('completed_with_open_checklist')) flags.push('completed_with_open_checklist');
+        }
+      }
 
+      // 5. Attachments: link counts 0.5, file counts 1.0 (Bug 8)
+      let attScore = 0;
+      targetDateAttachments.forEach((att) => {
+        attScore += att.file_type === 'link' ? 0.5 : 1.0;
+      });
+      const hasAttachment = attScore > 0 || targetDateActivities.some(
+        (a) => a.action_type === 'attachment_uploaded' || a.action_type === 'attachment_added'
+      );
+      const attActor = targetDateAttachments[0]?.user_name || null;
+
+      // 5. Card Intake & Empty/Copy Flags (Bug J):
+      const isCreatedToday = new Date(c.created_at) >= startUtc && new Date(c.created_at) < endUtc;
+      if (isCreatedToday) {
+        if (c.title.toLowerCase().startsWith('copy of') || c.title.toLowerCase().includes('(copy)')) {
+          if (!flags.includes('copy_card')) flags.push('copy_card');
+        }
+        const hasDesc = c.description && String(c.description).replace(/<[^>]+>/g, '').trim().length > 0;
+        if (!hasDesc && checklistItems.length === 0) {
+          if (!flags.includes('empty_card')) flags.push('empty_card');
+        }
+      }
+
+      // 6. Focus & Check-in Today (New Feature)
+      const activeDeepFocus = focusList.find((f) => f.deep_work === 1);
+      const todayCheckin = checkinsToday[0] || null;
+
+      // Activity Pill & Genuine Work Evaluation
       let activityPill = null;
       let hasGenuineWork = false;
 
-      if (verifiedChecklistCount > 0 && commentsCount > 0) {
+      if (todayCheckin) {
+        const flagSuffix = todayCheckin.flags ? ` [${todayCheckin.flags}]` : '';
+        activityPill = `🎯 Check-in (${todayCheckin.progress_pct}% - ${todayCheckin.status}) by ${todayCheckin.user_name}${flagSuffix}`;
+        hasGenuineWork = true;
+      } else if (creditedChecklistCount > 0 && creditedCommentsCount > 0) {
         const actor = lastChecklistActor ? ` by ${lastChecklistActor}` : '';
-        const quote = latestMeaningfulComment ? ` • 💬 "${latestMeaningfulComment.body.trim().slice(0, 30)}..."` : '';
-        activityPill = `✓ ${verifiedChecklistCount} checklist item(s) done${actor}${quote}`;
+        const snippet = latestCreditedComment ? ` • 💬 "${latestCreditedComment.body.trim().slice(0, 30)}..."` : '';
+        activityPill = `✓ ${creditedChecklistCount} checklist item(s) done${actor}${snippet}`;
         hasGenuineWork = true;
-      } else if (verifiedChecklistCount > 0) {
+      } else if (creditedChecklistCount > 0) {
         const actor = lastChecklistActor ? ` by ${lastChecklistActor}` : '';
-        activityPill = `✓ ${verifiedChecklistCount} checklist item(s) completed${actor}`;
+        activityPill = `✓ ${creditedChecklistCount} checklist item(s) completed${actor}`;
         hasGenuineWork = true;
-      } else if (commentsCount > 0) {
-        const commentAuthor = latestMeaningfulComment.user_name ? ` by ${latestMeaningfulComment.user_name}` : '';
-        const snippet = latestMeaningfulComment.body.trim().slice(0, 45);
-        activityPill = `💬 "${snippet}${latestMeaningfulComment.body.length > 45 ? '...' : ''}"${commentAuthor}`;
+      } else if (creditedCommentsCount > 0) {
+        const author = latestCreditedComment?.user_name ? ` by ${latestCreditedComment.user_name}` : '';
+        const snippet = latestCreditedComment.body.trim().slice(0, 45);
+        activityPill = `💬 "${snippet}${latestCreditedComment.body.length > 45 ? '...' : ''}"${author}`;
         hasGenuineWork = true;
-      } else if (moveText) {
+      } else if (moveText && hasForwardMove) {
         activityPill = moveText;
         hasGenuineWork = true;
-      } else if (targetDateActivities.some((a) => a.action_type === 'attachment_uploaded')) {
-        const attAct = targetDateActivities.find((a) => a.action_type === 'attachment_uploaded');
-        activityPill = `📎 File attached${attAct?.user_name ? ` by ${attAct.user_name}` : ''}`;
+      } else if (hasAttachment) {
+        activityPill = `📎 File attached${attActor ? ` by ${attActor}` : ''}`;
         hasGenuineWork = true;
-      } else if (renamedAct) {
-        activityPill = `✏️ Title renamed${renamedAct.user_name ? ` by ${renamedAct.user_name}` : ''} (No task progress)`;
+      } else if (isCreatedToday) {
+        // Bug J fix: Card creation is NEVER genuine work; show as Intake by <user>
+        const creatorName = c.created_by_name || 'Someone';
+        activityPill = `Intake by ${creatorName}`;
         hasGenuineWork = false;
-      } else if (descAct) {
-        activityPill = `✏️ Description edited${descAct.user_name ? ` by ${descAct.user_name}` : ''} (No task progress)`;
-        hasGenuineWork = false;
-      } else if (new Date(c.created_at).toISOString().slice(0, 10) === targetDate) {
-        activityPill = `Created today at ${c.created_at ? new Date(c.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : ''}`;
-        hasGenuineWork = true;
       } else {
-        activityPill = `Active today (${lastActivityDescription})`;
+        activityPill = 'Active today';
         hasGenuineWork = false;
       }
 
@@ -4222,33 +4493,32 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         labels: cardLabelsMap[c.id] || [],
         days_in_progress: daysInProgress,
         last_activity_at: latestActivityAt.toISOString(),
-        last_activity_time: lastActivityDisplayTime,
-        last_activity_text: `${lastActivityDescription} (${lastActivityDisplayTime})`,
-        is_inactive: isInactive,
-        days_inactive: daysInactive,
-        hours_since_activity: Math.round(hoursSinceActivity),
         activity_pill: activityPill,
         has_genuine_work: hasGenuineWork,
-        verified_checklist_count: verifiedChecklistCount
+        flags: Array.from(new Set(flags)),
+        verified_checklist_count: creditedChecklistCount,
+        comments_count: creditedCommentsCount,
+        has_focus: focusList.length > 0,
+        is_deep_work: Boolean(activeDeepFocus),
+        checkin_today: todayCheckin
       };
     });
 
-    // Filter options: labels in these workspaces/boards
+    // Filter options restricted to allowed boards only (Bug A fix)
     const labels = await req.db.query(
       `SELECT DISTINCT l.id, l.name, l.color
        FROM labels l
-       JOIN boards b ON l.board_id = b.id
-       WHERE b.workspace_id IN (?) AND b.is_archived = 0
+       WHERE l.board_id IN (?)
        ORDER BY l.name ASC`,
-      [activeWsIds]
+      [allAllowedBoardIds]
     );
 
     const boards = await req.db.query(
       `SELECT id, name, workspace_id
        FROM boards
-       WHERE workspace_id IN (?) AND is_archived = 0
+       WHERE id IN (?) AND is_archived = 0
        ORDER BY name ASC`,
-      [activeWsIds]
+      [allAllowedBoardIds]
     );
 
     return res.json({
@@ -4268,11 +4538,547 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         mode
       },
       filterOptions: {
-        workspaces: userWorkspaces,
+        workspaces: allowedWorkspaces,
         labels,
         boards
       }
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/daily-tracker/people - People view with Focus + Check-in states
+router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+
+  try {
+    const isMember = await req.db.query(
+      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+      [routeWsId, req.user.id]
+    );
+    if (isMember.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
+    }
+
+    const hasViewPeople = await userHasPermission(req.user.id, routeWsId, 'daily_tracker.view_people', req.db);
+
+    const targetDate = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date).trim())
+      ? String(req.query.date).trim()
+      : new Date().toISOString().slice(0, 10);
+
+    const [wsRow] = await req.db.query('SELECT settings FROM workspaces WHERE id = ?', [routeWsId]);
+    let wsSettings = {};
+    try {
+      wsSettings = typeof wsRow?.settings === 'string' ? JSON.parse(wsRow.settings) : (wsRow?.settings || {});
+    } catch {}
+    const timezone = wsSettings?.timezone || 'Asia/Kolkata';
+    const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5]; // 1=Mon, 7=Sun
+    const { startUtc, endUtc } = getUtcRangeForDate(targetDate, timezone);
+
+    // Compute whether targetDate is a working day
+    const [y, m, d] = targetDate.split('-').map(Number);
+    const targetDtObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const jsDay = targetDtObj.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    const isWorkingDay = workingDays.includes(isoDay);
+
+    // Check cutoff time (default 18:00 workspace timezone)
+    const now = new Date();
+    const timeFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric', minute: 'numeric', hour12: false
+    });
+    const parts = timeFmt.formatToParts(now);
+    const curHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+    const curMin = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+    const isPastCutoff = curHour > 18 || (curHour === 18 && curMin >= 0);
+
+    // Query members
+    let members = [];
+    if (hasViewPeople) {
+      members = await req.db.query(
+        `SELECT u.id, u.name, u.email, u.avatar_url, r.name as role_name
+         FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         JOIN roles r ON wm.role_id = r.id
+         WHERE wm.workspace_id = ?
+         ORDER BY u.name ASC`,
+        [routeWsId]
+      );
+    } else {
+      // Regular members see only themselves
+      members = await req.db.query(
+        `SELECT u.id, u.name, u.email, u.avatar_url, r.name as role_name
+         FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         JOIN roles r ON wm.role_id = r.id
+         WHERE wm.workspace_id = ? AND u.id = ?`,
+        [routeWsId, req.user.id]
+      );
+    }
+
+    if (members.length === 0) {
+      return res.json({ date: targetDate, timezone, people: [] });
+    }
+
+    const memberIds = members.map((m) => m.id);
+
+    // 1. Leave days (only approved leave suppresses flags; Bug 6 fix)
+    const leaveRows = await req.db.query(
+      "SELECT user_id, reason FROM leave_days WHERE date = ? AND user_id IN (?) AND status = 'approved'",
+      [targetDate, memberIds]
+    );
+    const leaveMap = {};
+    leaveRows.forEach((r) => { leaveMap[r.user_id] = r; });
+
+    // Pending requests & last 30 days leave (Bug 6 fix)
+    const pendingLeaveRows = await req.db.query(
+      `SELECT ld.id, ld.user_id, ld.date, ld.reason, ld.status, ld.created_at, u.name as user_name
+       FROM leave_days ld
+       JOIN users u ON ld.user_id = u.id
+       WHERE ld.user_id IN (?) AND ld.status = 'pending'
+       ORDER BY ld.date ASC`,
+      [memberIds]
+    );
+
+    const leave30Rows = await req.db.query(
+      `SELECT user_id, COUNT(*) as cnt
+       FROM leave_days
+       WHERE user_id IN (?) AND status = 'approved' AND date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+       GROUP BY user_id`,
+      [memberIds]
+    );
+    const leave30Map = {};
+    leave30Rows.forEach((r) => { leave30Map[r.user_id] = Number(r.cnt); });
+
+    // 2. Active Focus cards
+    const focusRows = await req.db.query(
+      `SELECT cf.*, c.title as card_title, l.board_id
+       FROM card_focus cf
+       JOIN cards c ON cf.card_id = c.id
+       JOIN lists l ON c.list_id = l.id
+       WHERE cf.user_id IN (?) AND cf.ended_at IS NULL`,
+      [memberIds]
+    );
+    const focusMap = {};
+    focusRows.forEach((f) => {
+      if (!focusMap[f.user_id]) focusMap[f.user_id] = [];
+      focusMap[f.user_id].push(f);
+    });
+
+    // 3. Check-ins for targetDate
+    const checkinRows = await req.db.query(
+      `SELECT ci.*, c.title as card_title
+       FROM check_ins ci
+       JOIN cards c ON ci.card_id = c.id
+       WHERE ci.user_id IN (?) AND ci.work_date = ?`,
+      [memberIds, targetDate]
+    );
+    const checkinMap = {};
+    const checkinIds = checkinRows.map((ci) => ci.id);
+    checkinRows.forEach((ci) => {
+      if (!checkinMap[ci.user_id]) checkinMap[ci.user_id] = [];
+      checkinMap[ci.user_id].push(ci);
+    });
+
+    // Reviews for these check-ins
+    const reviewMap = {};
+    if (checkinIds.length > 0) {
+      const revRows = await req.db.query(
+        `SELECT r.*, u.name as reviewer_name
+         FROM check_in_reviews r
+         JOIN users u ON r.reviewer_id = u.id
+         WHERE r.check_in_id IN (?)
+         ORDER BY r.created_at ASC`,
+        [checkinIds]
+      );
+      revRows.forEach((r) => {
+        if (!reviewMap[r.check_in_id]) reviewMap[r.check_in_id] = [];
+        reviewMap[r.check_in_id].push(r);
+      });
+    }
+
+    // 4. Activity events on targetDate
+    const actRows = await req.db.query(
+      `SELECT a.user_id, a.card_id, a.action_type, a.meta_json, a.created_at
+       FROM activity_log a
+       WHERE a.user_id IN (?) AND a.created_at >= ? AND a.created_at < ?`,
+      [memberIds, startUtc, endUtc]
+    );
+    const actMap = {};
+    actRows.forEach((a) => {
+      if (!actMap[a.user_id]) actMap[a.user_id] = [];
+      actMap[a.user_id].push(a);
+    });
+
+    // 5. Comments on targetDate
+    const commRows = await req.db.query(
+      `SELECT co.user_id, co.card_id, co.body, co.created_at
+       FROM comments co
+       WHERE co.user_id IN (?) AND co.created_at >= ? AND co.created_at < ?`,
+      [memberIds, startUtc, endUtc]
+    );
+    const commMap = {};
+    commRows.forEach((c) => {
+      if (!commMap[c.user_id]) commMap[c.user_id] = [];
+      commMap[c.user_id].push(c);
+    });
+
+    const people = members.map((m) => {
+      const userLeave = leaveMap[m.id];
+      const userFocus = focusMap[m.id] || [];
+      const userCheckins = checkinMap[m.id] || [];
+      const userActs = actMap[m.id] || [];
+      const userComms = commMap[m.id] || [];
+
+      const flags = [];
+      const checkedItems = [];
+      const commentSnippets = [];
+      const files = [];
+      const checkinTexts = [];
+      const unansweredReviews = [];
+
+      for (const a of userActs) {
+        if (a.action_type === 'checklist_toggled') {
+          let meta = a.meta_json;
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch {} }
+          if (meta?.item_text && (meta.is_checked === true || meta.is_checked === 1 || String(meta.is_checked) === 'true')) {
+            checkedItems.push(meta.item_text);
+          }
+        } else if (a.action_type === 'attachment_uploaded' || a.action_type === 'attachment_added') {
+          let meta = a.meta_json;
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch {} }
+          files.push({ name: meta?.file_name || 'File', url: meta?.file_url || null });
+        }
+      }
+
+      for (const cm of userComms) {
+        if (cm.body && cm.body.trim().length >= 20) {
+          commentSnippets.push(cm.body.trim().slice(0, 60));
+        }
+      }
+
+      for (const ci of userCheckins) {
+        checkinTexts.push({
+          id: ci.id,
+          card_title: ci.card_title,
+          did: ci.did,
+          next_step: ci.next_step,
+          blocker: ci.blocker,
+          status: ci.status,
+          progress_pct: ci.progress_pct,
+          evidence_url: ci.evidence_url
+        });
+        const revs = reviewMap[ci.id] || [];
+        for (const r of revs) {
+          if (!r.answered_at && (r.action === 'question' || r.action === 'request_evidence')) {
+            unansweredReviews.push({
+              id: r.id,
+              action: r.action,
+              note: r.note,
+              reviewer_name: r.reviewer_name
+            });
+            flags.push(`unanswered_${r.action}`);
+          }
+        }
+      }
+
+      // Determine State
+      let state = 'Idle';
+      let stateSeverity = 'normal'; // 'normal' | 'amber' | 'red' | 'green'
+
+      if (userLeave) {
+        state = 'On leave';
+      } else if (userFocus.length > 0) {
+        const hasBlockedCheckin = userCheckins.some((ci) => ci.status === 'blocked' || (ci.blocker && ci.blocker.trim()));
+        if (hasBlockedCheckin) {
+          state = 'Blocked';
+          stateSeverity = 'red';
+        } else if (userCheckins.length > 0) {
+          state = 'Focused-check-in-done';
+          stateSeverity = 'green';
+        } else {
+          // Check-in missing
+          if (!isWorkingDay) {
+            state = 'Idle';
+          } else {
+            state = 'Focused-check-in-missing';
+            stateSeverity = isPastCutoff ? 'red' : 'amber';
+            flags.push('missing_checkin');
+          }
+        }
+
+        // Deep work review check
+        for (const f of userFocus) {
+          if (f.deep_work === 1) {
+            const daysSinceStarted = Math.max(1, Math.floor((now.getTime() - new Date(f.started_at).getTime()) / (1000 * 60 * 60 * 24)));
+            if (f.estimate_days && daysSinceStarted > f.estimate_days) {
+              state = 'Needs review';
+              stateSeverity = 'amber';
+              flags.push('over_estimate');
+            } else if (daysSinceStarted > f.check_in_every_days && userCheckins.length === 0 && checkedItems.length === 0) {
+              state = 'Needs review';
+              stateSeverity = 'amber';
+              flags.push('deep_work_stalled');
+            }
+          }
+        }
+      } else {
+        const hasCreditedWork = checkedItems.length > 0 || commentSnippets.length > 0 || files.length > 0;
+        if (hasCreditedWork) {
+          state = 'Active';
+          stateSeverity = 'green';
+        } else {
+          state = 'Idle';
+          stateSeverity = 'normal';
+        }
+      }
+
+      return {
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        avatar_url: m.avatar_url,
+        role: m.role_name,
+        state,
+        state_severity: stateSeverity,
+        has_focus: userFocus.length > 0,
+        focus_cards: userFocus.map((f) => ({
+          card_id: f.card_id,
+          card_title: f.card_title,
+          deep_work: f.deep_work === 1,
+          started_at: f.started_at,
+          estimate_days: f.estimate_days
+        })),
+        evidence: {
+          checked_items: checkedItems,
+          comments: commentSnippets,
+          files,
+          check_ins: checkinTexts,
+          unanswered_reviews: unansweredReviews
+        },
+        leave_days_last_30_days: leave30Map[m.id] || 0,
+        flags: Array.from(new Set(flags))
+      };
+    });
+
+    // Priority sorting: what needs attention first
+    const statePriority = {
+      'Blocked': 1,
+      'Focused-check-in-missing': 2,
+      'Needs review': 3,
+      'Idle': 4,
+      'Focused-check-in-done': 5,
+      'Active': 6,
+      'On leave': 7
+    };
+    people.sort((a, b) => {
+      const pA = statePriority[a.state] || 99;
+      const pB = statePriority[b.state] || 99;
+      if (pA !== pB) return pA - pB;
+      return a.name.localeCompare(b.name);
+    });
+
+    return res.json({
+      date: targetDate,
+      timezone,
+      is_working_day: isWorkingDay,
+      cutoff_passed: isPastCutoff,
+      pending_requests: pendingLeaveRows,
+      people
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/leave-days
+router.get('/:id/leave-days', requireAuth, requirePermission('leave.request'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+
+  try {
+    const canApprove = await userHasPermission(req.user.id, routeWsId, 'leave.approve', req.db);
+    let whereClause = 'wm.workspace_id = ?';
+    const params = [routeWsId];
+
+    if (!canApprove) {
+      whereClause += ' AND ld.user_id = ?';
+      params.push(req.user.id);
+    }
+
+    const leaveRows = await req.db.query(
+      `SELECT ld.*, u.name as user_name, u.email as user_email
+       FROM leave_days ld
+       JOIN users u ON ld.user_id = u.id
+       JOIN workspace_members wm ON u.id = wm.user_id
+       WHERE ${whereClause}
+       ORDER BY ld.date DESC`,
+      params
+    );
+
+    const pendingRequests = leaveRows.filter(r => r.status === 'pending');
+
+    return res.json({
+      leave_days: leaveRows,
+      pending_requests: pendingRequests
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/workspaces/:id/leave-days
+router.post('/:id/leave-days', requireAuth, requirePermission('leave.request'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+  const { date, reason, user_id } = req.body;
+
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date).trim())) {
+    return res.status(400).json({ error: { message: 'Valid date (YYYY-MM-DD) is required', code: 'BAD_REQUEST' } });
+  }
+
+  try {
+    const canApprove = await userHasPermission(req.user.id, routeWsId, 'leave.approve', req.db);
+    let targetUserId = req.user.id;
+    if (user_id && Number(user_id) !== Number(req.user.id)) {
+      if (!canApprove) {
+        return res.status(403).json({ error: { message: 'Only approvers can request leave on behalf of other members', code: 'FORBIDDEN' } });
+      }
+      targetUserId = Number(user_id);
+    }
+
+    // Auto-approve if requester holds leave.approve; otherwise pending
+    const status = canApprove ? 'approved' : 'pending';
+    const approvedBy = canApprove ? req.user.id : null;
+    const approvedAt = canApprove ? new Date() : null;
+
+    const ins = await req.db.execute(
+      `INSERT INTO leave_days (user_id, date, reason, status, requested_by, approved_by, approved_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE reason = VALUES(reason), status = VALUES(status), approved_by = VALUES(approved_by), approved_at = VALUES(approved_at)`,
+      [targetUserId, date, reason ? sanitizePlain(reason) : null, status, req.user.id, approvedBy, approvedAt]
+    );
+
+    const [row] = await req.db.query('SELECT * FROM leave_days WHERE user_id = ? AND date = ?', [targetUserId, date]);
+
+    // Audit log (Bug 6 requirement: every create, approve, delete is audit-logged)
+    await req.db.execute(
+      `INSERT INTO auth_audit_log (user_id, email, event_type, ip_address, user_agent, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        req.user.id,
+        req.user.email,
+        'leave_day_requested',
+        req.ip || '127.0.0.1',
+        req.headers['user-agent'] || 'api',
+        JSON.stringify({ date, targetUserId, status, reason: reason ? sanitizePlain(reason) : null })
+      ]
+    );
+
+    return res.status(201).json({ leave_day: row });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/workspaces/:id/leave-days/:leaveId
+router.patch('/:id/leave-days/:leaveId', requireAuth, requirePermission('leave.approve'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+  const leaveId = Number(req.params.leaveId);
+  const { action, reason } = req.body; // action: 'approve' | 'reject'
+
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: { message: "Action must be 'approve' or 'reject'", code: 'BAD_REQUEST' } });
+  }
+
+  try {
+    const [leave] = await req.db.query('SELECT * FROM leave_days WHERE id = ?', [leaveId]);
+    if (!leave) {
+      return res.status(404).json({ error: { message: 'Leave request not found', code: 'NOT_FOUND' } });
+    }
+
+    // Team Lead check: only approve for members of own boards
+    const hasAccessAll = await userHasPermission(req.user.id, routeWsId, 'project.access_all', req.db);
+    if (!hasAccessAll) {
+      const [sharedBoard] = await req.db.query(
+        `SELECT 1 FROM board_members bm1
+         JOIN board_members bm2 ON bm1.board_id = bm2.board_id
+         JOIN boards b ON bm1.board_id = b.id
+         WHERE b.workspace_id = ? AND bm1.user_id = ? AND bm2.user_id = ? LIMIT 1`,
+        [routeWsId, req.user.id, leave.user_id]
+      );
+      if (!sharedBoard) {
+        return res.status(403).json({
+          error: { message: 'Team Lead can only approve leave for members of their own boards', code: 'FORBIDDEN' }
+        });
+      }
+    }
+
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const rejReason = action === 'reject' && reason ? sanitizePlain(reason) : null;
+
+    await req.db.execute(
+      `UPDATE leave_days SET status = ?, approved_by = ?, approved_at = NOW(), rejection_reason = ? WHERE id = ?`,
+      [newStatus, req.user.id, rejReason, leaveId]
+    );
+
+    const [updated] = await req.db.query('SELECT * FROM leave_days WHERE id = ?', [leaveId]);
+
+    // Audit log (Bug 6 requirement: every create, approve, delete is audit-logged)
+    await req.db.execute(
+      `INSERT INTO auth_audit_log (user_id, email, event_type, ip_address, user_agent, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        req.user.id,
+        req.user.email,
+        `leave_day_${newStatus}`,
+        req.ip || '127.0.0.1',
+        req.headers['user-agent'] || 'api',
+        JSON.stringify({ leaveId, date: leave.date, targetUserId: leave.user_id, status: newStatus })
+      ]
+    );
+
+    return res.json({ leave_day: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/workspaces/:id/leave-days/:leaveId
+router.delete('/:id/leave-days/:leaveId', requireAuth, requirePermission('leave.request'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+  const leaveId = Number(req.params.leaveId);
+
+  try {
+    const [leave] = await req.db.query('SELECT * FROM leave_days WHERE id = ?', [leaveId]);
+    if (!leave) {
+      return res.status(404).json({ error: { message: 'Leave request not found', code: 'NOT_FOUND' } });
+    }
+
+    const canApprove = await userHasPermission(req.user.id, routeWsId, 'leave.approve', req.db);
+    const isOwnerOfRequest = Number(leave.user_id) === Number(req.user.id) || Number(leave.requested_by) === Number(req.user.id);
+
+    if (!canApprove && !isOwnerOfRequest) {
+      return res.status(403).json({ error: { message: 'Only author or approver can delete leave request', code: 'FORBIDDEN' } });
+    }
+
+    await req.db.execute('DELETE FROM leave_days WHERE id = ?', [leaveId]);
+
+    // Audit log (Bug 6 requirement: every create, approve, delete is audit-logged)
+    await req.db.execute(
+      `INSERT INTO auth_audit_log (user_id, email, event_type, ip_address, user_agent, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        req.user.id,
+        req.user.email,
+        'leave_day_deleted',
+        req.ip || '127.0.0.1',
+        req.headers['user-agent'] || 'api',
+        JSON.stringify({ leaveId, date: leave.date, targetUserId: leave.user_id })
+      ]
+    );
+
+    return res.json({ success: true, message: 'Leave request deleted' });
   } catch (err) {
     next(err);
   }

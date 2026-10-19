@@ -231,6 +231,47 @@ async function resolveWorkspaceId(req) {
     } else if (routePath.includes('/workspaces')) {
       derivedWorkspaceId = paramId;
       resourceMatched = true;
+    } else if (routePath.includes('/checkin-reviews') || subPath.includes('/checkin-reviews')) {
+      const res = await db.query(
+        `SELECT r.id, ci.card_id, l.board_id, b.workspace_id
+         FROM check_in_reviews r
+         JOIN check_ins ci ON r.check_in_id = ci.id
+         JOIN cards c ON ci.card_id = c.id
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE r.id = ?`,
+        [paramId]
+      );
+      if (res[0]) {
+        derivedProjectId = res[0].board_id;
+        derivedWorkspaceId = res[0].workspace_id;
+        resourceMatched = true;
+      } else {
+        const err = new Error('Check-in review not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+    } else if (routePath.includes('/checkins') || subPath.includes('/checkins')) {
+      const res = await db.query(
+        `SELECT ci.id, ci.card_id, l.board_id, b.workspace_id
+         FROM check_ins ci
+         JOIN cards c ON ci.card_id = c.id
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE ci.id = ?`,
+        [paramId]
+      );
+      if (res[0]) {
+        derivedProjectId = res[0].board_id;
+        derivedWorkspaceId = res[0].workspace_id;
+        resourceMatched = true;
+      } else {
+        const err = new Error('Check-in not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
     }
   }
 
@@ -870,7 +911,17 @@ function requirePermission(permissionConfig, options = {}) {
         if (Array.isArray(activeConfig.all)) {
           let allSatisfied = true;
           for (const k of activeConfig.all) {
-            const ok = await userHasPermission(req.user.id, workspaceId, k, req.db, req.projectId || null, req);
+            let ok = false;
+            if (typeof k === 'object' && k !== null && Array.isArray(k.any)) {
+              for (const subK of k.any) {
+                if (await userHasPermission(req.user.id, workspaceId, subK, req.db, req.projectId || null, req)) {
+                  ok = true;
+                  break;
+                }
+              }
+            } else {
+              ok = await userHasPermission(req.user.id, workspaceId, k, req.db, req.projectId || null, req);
+            }
             if (!ok) { allSatisfied = false; break; }
           }
           hasPerm = allSatisfied;

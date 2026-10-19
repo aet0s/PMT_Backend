@@ -184,6 +184,7 @@ function runContractCheck() {
   console.log('\n================================================================');
   console.log('API CONTRACT CHECK PASSED: 100% OF CLIENT CALLS VALIDATED!');
   console.log('================================================================');
+  process.exit(0);
 }
 
 if (require.main === module) {

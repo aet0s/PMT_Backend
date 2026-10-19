@@ -498,6 +498,18 @@ const NOTIFICATION_EVENTS = {
     deepLink: '/b/{boardId}?card={cardId}',
     notifiable: true
   },
+  'checkin.due': {
+    category: 'Cards',
+    recipients: 'targetUser',
+    requiredPermission: 'task.view',
+    template: 'Daily check-in is due for your focused card "{cardTitle}"',
+    metaFields: ['cardTitle', 'cardId', 'boardName'],
+    coalescingPolicy: 'immediate',
+    deepLink: '/b/{boardId}?card={cardId}',
+    notifiable: true,
+    personal: true,
+    noSound: true
+  },
 
   // ==========================================
   // --- WORKSPACE & SECURITY (12 events, 3 notifiable) ---

@@ -6,6 +6,7 @@ const localStorage = require('../storage');
 const { broadcastBoardEvent } = require('../socket');
 const { notify } = require('../services/notify');
 const { requirePermission, userHasPermission, getActiveDb } = require('../middleware/permissions');
+const crypto = require('crypto');
 
 const router = express.Router();
 
@@ -214,11 +215,19 @@ router.post('/', requireAuth, upload.single('file'), async (req, res, next) => {
 
     let attachment;
     if (req.file) {
+      const checksum = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+      const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+      if (dup) {
+        return res.status(409).json({
+          error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+        });
+      }
+
       const saved = await localStorage.save(req.file, cardId, req.tenant ? req.tenant.id : 1);
       const attExec = await req.db.execute(
-        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes]
+        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes, checksum]
       );
       const [row] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
       attachment = row;
@@ -228,11 +237,20 @@ router.post('/', requireAuth, upload.single('file'), async (req, res, next) => {
       if (!targetUrl) {
         return res.status(400).json({ error: { message: 'No file or link URL provided', code: 'BAD_REQUEST' } });
       }
+
+      const checksum = crypto.createHash('sha256').update(targetUrl).digest('hex');
+      const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+      if (dup) {
+        return res.status(409).json({
+          error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+        });
+      }
+
       const fileName = display_name?.trim() || targetUrl;
       const attExec = await req.db.execute(
-        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes)
-         VALUES (?, ?, ?, ?, 'link', 0)`,
-        [cardId, req.user.id, fileName, targetUrl]
+        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+         VALUES (?, ?, ?, ?, 'link', 0, ?)`,
+        [cardId, req.user.id, fileName, targetUrl, checksum]
       );
       const [row] = await req.db.query('SELECT * FROM attachments WHERE id = ?', [attExec.insertId]);
       attachment = row;
