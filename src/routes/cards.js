@@ -2084,6 +2084,7 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
 
     // 3b. Blocked checkbox requires a note
     const isBlocked = status === 'blocked' || req.body.is_blocked === true;
+    const dbStatus = isBlocked ? 'blocked' : (status === 'need_help' ? 'need_help' : 'on_track');
     const blockerText = blocker ? String(blocker).trim() : null;
     if (isBlocked && (!blockerText || blockerText.length === 0)) {
       return res.status(400).json({
@@ -2162,7 +2163,7 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
     const ins = await req.db.execute(
       `INSERT INTO check_ins (card_id, user_id, work_date, did, next_step, blocker, status, progress_pct, evidence_url, attachment_id, original_text_hash, flags, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [cardId, req.user.id, workDate, didText, nextStepText, blockerText, status || 'on_track', progress, evidence_url || null, attachment_id || null, originalTextHash, JSON.stringify(checkinFlags)]
+      [cardId, req.user.id, workDate, didText, nextStepText, blockerText, dbStatus, progress, evidence_url || null, attachment_id || null, originalTextHash, JSON.stringify(checkinFlags)]
     );
 
     const [created] = await req.db.query('SELECT * FROM check_ins WHERE id = ?', [ins.insertId]);
@@ -2238,9 +2239,11 @@ router.patch('/:id/checkins/:checkinId', requireAuth, requirePermission('checkin
       updates.push('blocker = ?');
       values.push(blocker ? String(blocker).trim() : null);
     }
-    if (status !== undefined) {
+    if (status !== undefined || req.body.is_blocked !== undefined) {
+      const isBlocked = status === 'blocked' || req.body.is_blocked === true;
+      const dbStatus = isBlocked ? 'blocked' : (status === 'need_help' ? 'need_help' : 'on_track');
       updates.push('status = ?');
-      values.push(status);
+      values.push(dbStatus);
     }
     if (progress_pct !== undefined) {
       const progress = Math.min(100, Math.max(0, parseInt(progress_pct, 10) || 0));
