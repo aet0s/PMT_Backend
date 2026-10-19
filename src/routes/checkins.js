@@ -15,11 +15,17 @@ router.post(
     const checkinId = Number(req.params.id);
     const { action, note } = req.body;
 
-    if (!['ack', 'question', 'request_evidence'].includes(action)) {
+    const validActions = ['seen', 'ask_proof', 'ack', 'request_evidence', 'question'];
+    if (!validActions.includes(action)) {
       return res.status(400).json({
-        error: { message: "Invalid action. Must be 'ack', 'question', or 'request_evidence'", code: 'BAD_REQUEST' }
+        error: { message: "Invalid action. Must be 'seen' or 'ask_proof'", code: 'BAD_REQUEST' }
       });
     }
+
+    // Map UI actions to DB enum values
+    let dbAction = action;
+    if (action === 'seen') dbAction = 'ack';
+    if (action === 'ask_proof') dbAction = 'request_evidence';
 
     try {
       const [checkin] = await req.db.query(
@@ -40,7 +46,7 @@ router.post(
       const result = await req.db.execute(
         `INSERT INTO check_in_reviews (check_in_id, reviewer_id, action, note, created_at)
          VALUES (?, ?, ?, ?, NOW())`,
-        [checkinId, req.user.id, action, cleanNote]
+        [checkinId, req.user.id, dbAction, cleanNote]
       );
 
       const [review] = await req.db.query(
@@ -51,22 +57,7 @@ router.post(
         [result.insertId]
       );
 
-      // Notify check-in author
-      await notify({
-        db: req.db,
-        tenantId: req.tenant?.id,
-        boardId: checkin.board_id,
-        cardId: checkin.card_id,
-        eventType: 'checkin.reviewed',
-        actorId: req.user.id,
-        targetUserId: checkin.user_id,
-        data: {
-          action,
-          note: cleanNote,
-          cardTitle: checkin.card_title,
-          reviewerName: req.user.name
-        }
-      });
+
 
       return res.status(201).json({ review });
     } catch (err) {

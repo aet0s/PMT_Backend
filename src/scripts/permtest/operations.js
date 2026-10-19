@@ -1018,20 +1018,6 @@ const PROBES = {
     path: '/api/workspaces/:wId/daily-tracker/people',
     execute: (client, ctx, boardId) => client.get(`/api/workspaces/${getContextEntities(ctx, boardId).wsId}/daily-tracker/people`)
   },
-  'task.focus': {
-    module: 'task',
-    scope: 'project',
-    method: 'POST',
-    path: '/api/cards/:id/focus',
-    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/focus`, {})
-  },
-  'task.mark_deep_work': {
-    module: 'task',
-    scope: 'project',
-    method: 'POST',
-    path: '/api/cards/:id/focus/deep-work',
-    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/focus/deep-work`, { deep_work: 1 })
-  },
   'checkin.create': {
     module: 'checkin',
     scope: 'project',

@@ -389,13 +389,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 159 || prodSingleResult.count !== 159) {
-    console.error(`[AUDIT FAILED] Expected exactly 159 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 157 || prodSingleResult.count !== 157) {
+    console.error(`[AUDIT FAILED] Expected exactly 157 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 160 || testSingleResult.count !== 160) {
-    console.error(`[AUDIT FAILED] Expected exactly 160 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 158 || testSingleResult.count !== 158) {
+    console.error(`[AUDIT FAILED] Expected exactly 158 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -414,16 +414,16 @@ function runAudit() {
   }
   console.log(`✓ Direction 3 passed: 100% of route-declared permissions are valid registry keys.`);
 
-  // 4. Direction 4: Validate that all 83 non-planned registry permissions are enforced or covered
+  // 4. Direction 4: Validate that all 81 non-planned registry permissions are enforced or covered
   const nonPlannedPermissions = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
   const plannedPermissions = PERMISSIONS.filter((p) => p.planned).map((p) => p.key);
 
-  if (PERMISSIONS.length !== 153) {
-    console.error(`[AUDIT FAILED] Expected exactly 153 registry permissions, found ${PERMISSIONS.length}`);
+  if (PERMISSIONS.length !== 151) {
+    console.error(`[AUDIT FAILED] Expected exactly 151 registry permissions, found ${PERMISSIONS.length}`);
     process.exit(1);
   }
-  if (nonPlannedPermissions.length !== 83 || plannedPermissions.length !== 70) {
-    console.error(`[AUDIT FAILED] Expected 83 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+  if (nonPlannedPermissions.length !== 81 || plannedPermissions.length !== 70) {
+    console.error(`[AUDIT FAILED] Expected 81 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
     process.exit(1);
   }
 

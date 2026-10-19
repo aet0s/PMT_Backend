@@ -24,6 +24,33 @@ function formatSqlDateTime(dateVal) {
   return d.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+function calculateWorkingDaysOpen(startDate, endDate = new Date(), workingDays = [1, 2, 3, 4, 5], holidays = []) {
+  if (!startDate) return 0;
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) return 0;
+
+  const holidaysSet = new Set(Array.isArray(holidays) ? holidays : []);
+  let count = 0;
+  const cur = new Date(start);
+  cur.setUTCHours(0, 0, 0, 0);
+  cur.setUTCDate(cur.getUTCDate() + 1);
+
+  const target = new Date(end);
+  target.setUTCHours(0, 0, 0, 0);
+
+  while (cur <= target) {
+    const jsDay = cur.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    const dateStr = cur.toISOString().slice(0, 10);
+    if (workingDays.includes(isoDay) && !holidaysSet.has(dateStr)) {
+      count++;
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
 const createCardSchema = z.object({
   list_id: z.number(),
   title: z.string().min(1, 'Card title is required').transform((v) => sanitizePlain(v)),
@@ -127,19 +154,9 @@ async function getFullCard(cardId, dbInstance = null) {
     );
     card.attachments = attRes;
 
-    try {
-      const focusRes = await db.query(
-        'SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1',
-        [cardId]
-      );
-      card.active_focus = focusRes.length > 0 ? focusRes[0] : null;
-      card.is_focus = Boolean(card.active_focus);
-      card.is_deep_work = Boolean(card.active_focus?.deep_work);
-    } catch {
-      card.active_focus = null;
-      card.is_focus = false;
-      card.is_deep_work = false;
-    }
+    card.active_focus = null;
+    card.is_focus = false;
+    card.is_deep_work = false;
 
     try {
       const boardRes = await db.query(
@@ -339,26 +356,38 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       targetList = tlRes[0] || null;
     }
 
-    const isCompleting = (is_complete === true) || (targetList && targetList.is_done_list === 1);
+    const isCompleting = Boolean(is_complete) || Boolean(targetList && targetList.is_done_list);
     if (isCompleting) {
-      // Check if deep work card: requires outcome note and evidence link/file
-      const deepWorkRows = await req.db.query(
-        'SELECT id FROM card_focus WHERE card_id = ? AND deep_work = 1 LIMIT 1',
-        [cardId]
-      );
-      if (deepWorkRows.length > 0) {
-        const outcomeNote = req.body.completion_note || oldCard.completion_note;
-        const evidenceUrl = req.body.completion_evidence_url || oldCard.completion_evidence_url;
-        const attachmentId = req.body.completion_attachment_id || oldCard.completion_attachment_id;
-        if (!outcomeNote || !String(outcomeNote).trim() || (!evidenceUrl && !attachmentId)) {
-          return res.status(400).json({
-            error: {
-              message: 'Completing a deep-work card requires an outcome note and at least one evidence link or file',
-              code: 'DEEP_WORK_COMPLETION_EVIDENCE_REQUIRED'
-            }
-          });
+      // Requirement 4: a card that was open more than 2 working days asks for a one-line result (min 20 characters, optional link) when moved to a done list. Cards open 2 days or less need nothing.
+      try {
+        const [boardRow] = await req.db.query(
+          'SELECT b.workspace_id, w.settings FROM boards b JOIN workspaces w ON b.workspace_id = w.id WHERE b.id = ?',
+          [oldCard.board_id]
+        );
+        let wsSettings = {};
+        try {
+          wsSettings = typeof boardRow?.settings === 'string' ? JSON.parse(boardRow.settings) : (boardRow?.settings || {});
+        } catch {}
+        const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5];
+        const holidays = wsSettings?.holidays || [];
+        const startDate = oldCard.first_moved_or_assigned_at || oldCard.created_at;
+        const openWorkingDays = calculateWorkingDaysOpen(startDate, new Date(), workingDays, holidays);
+
+        if (openWorkingDays > 2) {
+          const outcomeNote = req.body.completion_note || oldCard.completion_note;
+          if (!outcomeNote || String(outcomeNote).trim().length < 20) {
+            return res.status(400).json({
+              error: {
+                message: 'A one-line result of at least 20 characters is required when completing a task open for more than 2 working days',
+                code: 'ONE_LINE_RESULT_REQUIRED'
+              }
+            });
+          }
         }
+      } catch (err) {
+        // Fallback if settings query fails
       }
+
       if (!oldCard.completed_at) {
         updates.push('completed_at = NOW()');
         updates.push('completed_by = ?');
@@ -1982,126 +2011,9 @@ router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.
 });
 
 // ================================================================
-// FOCUS + CHECK-IN MODEL ENDPOINTS
 // ================================================================
-
-// POST /api/cards/:id/focus
-router.post('/:id/focus', requireAuth, requirePermission('task.focus'), async (req, res, next) => {
-  const cardId = Number(req.params.id);
-  const { check_in_every_days, estimate_days } = req.body;
-
-  try {
-    const cardRes = await req.db.query(
-      `SELECT c.*, l.board_id, b.workspace_id 
-       FROM cards c 
-       JOIN lists l ON c.list_id = l.id 
-       JOIN boards b ON l.board_id = b.id 
-       WHERE c.id = ?`,
-      [cardId]
-    );
-    if (cardRes.length === 0) {
-      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
-    }
-
-    // Must be assigned to card
-    const [isMember] = await req.db.query(
-      'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ?',
-      [cardId, req.user.id]
-    );
-    if (!isMember) {
-      return res.status(403).json({
-        error: { message: 'You can only focus on cards assigned to you', code: 'FORBIDDEN' }
-      });
-    }
-
-    // Max 2 active focus cards
-    const [activeCnt] = await req.db.query(
-      'SELECT COUNT(*) as count FROM card_focus WHERE user_id = ? AND ended_at IS NULL AND card_id != ?',
-      [req.user.id, cardId]
-    );
-    if (Number(activeCnt?.count || 0) >= 2) {
-      return res.status(400).json({
-        error: { message: 'A member may have at most 2 active focus cards', code: 'FOCUS_LIMIT_EXCEEDED' }
-      });
-    }
-
-    const [existingFocus] = await req.db.query(
-      'SELECT * FROM card_focus WHERE card_id = ? AND user_id = ? AND ended_at IS NULL',
-      [cardId, req.user.id]
-    );
-    if (existingFocus) {
-      return res.json({ focus: existingFocus });
-    }
-
-    const checkInEvery = Math.max(1, parseInt(check_in_every_days, 10) || 1);
-    const estDays = estimate_days ? parseInt(estimate_days, 10) : null;
-
-    const ins = await req.db.execute(
-      `INSERT INTO card_focus (card_id, user_id, started_at, check_in_every_days, estimate_days)
-       VALUES (?, ?, NOW(), ?, ?)`,
-      [cardId, req.user.id, checkInEvery, estDays]
-    );
-
-    const [focus] = await req.db.query('SELECT * FROM card_focus WHERE id = ?', [ins.insertId]);
-    return res.status(201).json({ focus });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// DELETE /api/cards/:id/focus
-router.delete('/:id/focus', requireAuth, requirePermission('task.focus'), async (req, res, next) => {
-  const cardId = Number(req.params.id);
-
-  try {
-    await req.db.execute(
-      'UPDATE card_focus SET ended_at = NOW() WHERE card_id = ? AND user_id = ? AND ended_at IS NULL',
-      [cardId, req.user.id]
-    );
-    return res.json({ success: true, message: 'Focus ended' });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/cards/:id/focus/deep-work
-router.post('/:id/focus/deep-work', requireAuth, requirePermission('task.mark_deep_work'), async (req, res, next) => {
-  const cardId = Number(req.params.id);
-  const isDeepWork = req.body.deep_work !== false ? 1 : 0;
-  const checkInEvery = req.body.check_in_every_days ? parseInt(req.body.check_in_every_days, 10) : null;
-  const estDays = req.body.estimate_days ? parseInt(req.body.estimate_days, 10) : null;
-
-  try {
-    const activeFocus = await req.db.query(
-      'SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL',
-      [cardId]
-    );
-
-    if (activeFocus.length > 0) {
-      await req.db.execute(
-        `UPDATE card_focus
-         SET deep_work = ?, deep_work_set_by = ?,
-             check_in_every_days = COALESCE(?, check_in_every_days),
-             estimate_days = COALESCE(?, estimate_days)
-         WHERE card_id = ? AND ended_at IS NULL`,
-        [isDeepWork, req.user.id, checkInEvery, estDays, cardId]
-      );
-    } else {
-      const [firstMember] = await req.db.query('SELECT user_id FROM card_members WHERE card_id = ? LIMIT 1', [cardId]);
-      const targetUserId = req.body.user_id || firstMember?.user_id || req.user.id;
-      await req.db.execute(
-        `INSERT INTO card_focus (card_id, user_id, started_at, deep_work, deep_work_set_by, check_in_every_days, estimate_days)
-         VALUES (?, ?, NOW(), ?, ?, ?, ?)`,
-        [cardId, targetUserId, isDeepWork, req.user.id, checkInEvery || 2, estDays]
-      );
-    }
-
-    const [updated] = await req.db.query('SELECT * FROM card_focus WHERE card_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1', [cardId]);
-    return res.json({ success: true, focus: updated || null });
-  } catch (err) {
-    next(err);
-  }
-});
+// CHECK-IN MODEL ENDPOINTS
+// ================================================================
 
 // GET /api/cards/:id/checkins
 router.get('/:id/checkins', requireAuth, requirePermission('checkin.view'), async (req, res, next) => {
@@ -2161,12 +2073,21 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
     }
     const workDate = todayServer;
 
-    // 3. Validation: did >= 40 chars & >= 8 words
+    // 3. Validation: did >= 30 chars & >= 6 words
     const didText = String(did || '').trim();
     const didWords = didText.split(/\s+/).filter(Boolean);
-    if (didText.length < 40 || didWords.length < 8) {
+    if (didText.length < 30 || didWords.length < 6) {
       return res.status(400).json({
-        error: { message: 'Check-in did must be at least 40 characters and at least 8 words', code: 'CHECKIN_DID_TOO_SHORT' }
+        error: { message: 'Check-in did must be at least 30 characters and at least 6 words', code: 'CHECKIN_DID_TOO_SHORT' }
+      });
+    }
+
+    // 3b. Blocked checkbox requires a note
+    const isBlocked = status === 'blocked' || req.body.is_blocked === true;
+    const blockerText = blocker ? String(blocker).trim() : null;
+    if (isBlocked && (!blockerText || blockerText.length === 0)) {
+      return res.status(400).json({
+        error: { message: 'A note is required when marking a check-in as blocked', code: 'BLOCKER_NOTE_REQUIRED' }
       });
     }
 
@@ -2184,7 +2105,6 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
       'SELECT progress_pct FROM check_ins WHERE card_id = ? AND user_id = ? ORDER BY work_date DESC, id DESC LIMIT 1',
       [cardId, req.user.id]
     );
-    const blockerText = blocker ? String(blocker).trim() : null;
     if (prevCheckin && progress < prevCheckin.progress_pct && !blockerText) {
       return res.status(400).json({
         error: { message: 'Progress cannot drop without a blocker note', code: 'BLOCKER_REQUIRED_FOR_PROGRESS_DROP' }
@@ -2235,16 +2155,22 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
       });
     }
 
+    const checkinFlags = [
+      ...(isRepeat ? ['repeat'] : []),
+      ...(isUnverifiedJump ? ['unverified_jump'] : [])
+    ];
     const ins = await req.db.execute(
-      `INSERT INTO check_ins (card_id, user_id, work_date, did, next_step, blocker, status, progress_pct, evidence_url, attachment_id, original_text_hash, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [cardId, req.user.id, workDate, didText, nextStepText, blockerText, status || 'on_track', progress, evidence_url || null, attachment_id || null, originalTextHash]
+      `INSERT INTO check_ins (card_id, user_id, work_date, did, next_step, blocker, status, progress_pct, evidence_url, attachment_id, original_text_hash, flags, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [cardId, req.user.id, workDate, didText, nextStepText, blockerText, status || 'on_track', progress, evidence_url || null, attachment_id || null, originalTextHash, JSON.stringify(checkinFlags)]
     );
 
     const [created] = await req.db.query('SELECT * FROM check_ins WHERE id = ?', [ins.insertId]);
     return res.status(201).json({
       checkin: {
         ...created,
+        is_repeat: isRepeat,
+        flag_repeat: isRepeat ? 1 : 0,
         flags: [
           ...(isRepeat ? ['repeat'] : []),
           ...(isUnverifiedJump ? ['unverified_jump'] : [])
@@ -2290,9 +2216,9 @@ router.patch('/:id/checkins/:checkinId', requireAuth, requirePermission('checkin
     if (did !== undefined) {
       const didText = String(did).trim();
       const didWords = didText.split(/\s+/).filter(Boolean);
-      if (didText.length < 40 || didWords.length < 8) {
+      if (didText.length < 30 || didWords.length < 6) {
         return res.status(400).json({
-          error: { message: 'Check-in did must be at least 40 characters and at least 8 words', code: 'CHECKIN_DID_TOO_SHORT' }
+          error: { message: 'Check-in did must be at least 30 characters and at least 6 words', code: 'CHECKIN_DID_TOO_SHORT' }
         });
       }
       updates.push('did = ?');

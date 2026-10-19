@@ -3767,6 +3767,57 @@ function getUtcRangeForDate(dateStr, timeZone = 'Asia/Kolkata') {
   return { startUtc, endUtc };
 }
 
+function calculateWorkingDaysOpen(startDate, endDate = new Date(), workingDays = [1, 2, 3, 4, 5], holidays = []) {
+  if (!startDate) return 0;
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) return 0;
+
+  const holidaysSet = new Set(Array.isArray(holidays) ? holidays : []);
+  let count = 0;
+  const cur = new Date(start);
+  cur.setUTCHours(0, 0, 0, 0);
+  cur.setUTCDate(cur.getUTCDate() + 1);
+
+  const target = new Date(end);
+  target.setUTCHours(0, 0, 0, 0);
+
+  while (cur <= target) {
+    const jsDay = cur.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    const dateStr = cur.toISOString().slice(0, 10);
+    if (workingDays.includes(isoDay) && !holidaysSet.has(dateStr)) {
+      count++;
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
+function getWorkingDaysUntilDue(dueDate, fromDate = new Date(), workingDays = [1, 2, 3, 4, 5], holidays = []) {
+  if (!dueDate) return 0;
+  const target = new Date(dueDate);
+  const cur = new Date(fromDate);
+  if (isNaN(target.getTime()) || isNaN(cur.getTime()) || target <= cur) return 0;
+
+  cur.setUTCHours(0, 0, 0, 0);
+  cur.setUTCDate(cur.getUTCDate() + 1);
+  target.setUTCHours(0, 0, 0, 0);
+
+  const holidaysSet = new Set(Array.isArray(holidays) ? holidays : []);
+  let count = 0;
+  while (cur <= target) {
+    const jsDay = cur.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    const dateStr = cur.toISOString().slice(0, 10);
+    if (workingDays.includes(isoDay) && !holidaysSet.has(dateStr)) {
+      count++;
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
 // Helper: compute working days between two dates, excluding non-working days and holidays (Bug A & 5 fix)
 function getWorkingDaysBetween(startDate, endDate, workingDays = [1, 2, 3, 4, 5], holidays = []) {
   if (!startDate || !endDate) return 1;
@@ -4157,18 +4208,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardChecklistsMap[row.card_id].push(row);
       });
 
-      // 8. Card Focus
-      const focRes = await req.db.query(
-        `SELECT cf.*, u.name as user_name
-         FROM card_focus cf
-         JOIN users u ON cf.user_id = u.id
-         WHERE cf.card_id IN (?) AND cf.ended_at IS NULL`,
-        [cardIds]
-      );
-      focRes.forEach((row) => {
-        if (!cardFocusMap[row.card_id]) cardFocusMap[row.card_id] = [];
-        cardFocusMap[row.card_id].push(row);
-      });
+      // 8. Card Focus (removed in v3)
 
       // 9. Check-ins for targetDate
       const ciRes = await req.db.query(
@@ -4438,8 +4478,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         }
       }
 
-      // 6. Focus & Check-in Today (New Feature)
-      const activeDeepFocus = focusList.find((f) => f.deep_work === 1);
+      // 6. Check-in Today (v3 SIMPLIFY: focus & deep work removed)
       const todayCheckin = checkinsToday[0] || null;
 
       // Activity Pill & Genuine Work Evaluation
@@ -4498,8 +4537,8 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         flags: Array.from(new Set(flags)),
         verified_checklist_count: creditedChecklistCount,
         comments_count: creditedCommentsCount,
-        has_focus: focusList.length > 0,
-        is_deep_work: Boolean(activeDeepFocus),
+        has_focus: false,
+        is_deep_work: false,
         checkin_today: todayCheckin
       };
     });
@@ -4549,7 +4588,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
 });
 
 // GET /api/workspaces/:id/daily-tracker/people - People view with Focus + Check-in states
-router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
+router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tracker.view_people'), async (req, res, next) => {
   const routeWsId = Number(req.params.id);
 
   try {
@@ -4574,6 +4613,8 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
     } catch {}
     const timezone = wsSettings?.timezone || 'Asia/Kolkata';
     const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5]; // 1=Mon, 7=Sun
+    const holidays = wsSettings?.holidays || [];
+    const cutoffStr = wsSettings?.cutoff_time || '17:00';
     const { startUtc, endUtc } = getUtcRangeForDate(targetDate, timezone);
 
     // Compute whether targetDate is a working day
@@ -4581,9 +4622,9 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
     const targetDtObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
     const jsDay = targetDtObj.getUTCDay();
     const isoDay = jsDay === 0 ? 7 : jsDay;
-    const isWorkingDay = workingDays.includes(isoDay);
+    const isWorkingDay = workingDays.includes(isoDay) && !holidays.includes(targetDate);
 
-    // Check cutoff time (default 18:00 workspace timezone)
+    // Check cutoff time (default 17:00 workspace timezone)
     const now = new Date();
     const timeFmt = new Intl.DateTimeFormat('en-US', {
       timeZone: timezone,
@@ -4592,7 +4633,13 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
     const parts = timeFmt.formatToParts(now);
     const curHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
     const curMin = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
-    const isPastCutoff = curHour > 18 || (curHour === 18 && curMin >= 0);
+    const [cutH, cutM] = cutoffStr.split(':').map(Number);
+    const isPastCutoff = curHour > cutH || (curHour === cutH && curMin >= cutM);
+
+    const tzFmt = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayStr = tzFmt.format(now);
+    const isToday = targetDate === todayStr;
+    const isPastDate = targetDate < todayStr;
 
     // Query members
     let members = [];
@@ -4624,7 +4671,7 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
 
     const memberIds = members.map((m) => m.id);
 
-    // 1. Leave days (only approved leave suppresses flags; Bug 6 fix)
+    // 1. Leave days (only approved leave suppresses flags)
     const leaveRows = await req.db.query(
       "SELECT user_id, reason FROM leave_days WHERE date = ? AND user_id IN (?) AND status = 'approved'",
       [targetDate, memberIds]
@@ -4632,7 +4679,7 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
     const leaveMap = {};
     leaveRows.forEach((r) => { leaveMap[r.user_id] = r; });
 
-    // Pending requests & last 30 days leave (Bug 6 fix)
+    // Pending requests & last 30 days leave
     const pendingLeaveRows = await req.db.query(
       `SELECT ld.id, ld.user_id, ld.date, ld.reason, ld.status, ld.created_at, u.name as user_name
        FROM leave_days ld
@@ -4652,19 +4699,42 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
     const leave30Map = {};
     leave30Rows.forEach((r) => { leave30Map[r.user_id] = Number(r.cnt); });
 
-    // 2. Active Focus cards
-    const focusRows = await req.db.query(
-      `SELECT cf.*, c.title as card_title, l.board_id
-       FROM card_focus cf
-       JOIN cards c ON cf.card_id = c.id
+    // 2. Open cards assigned to members
+    const openCardRows = await req.db.query(
+      `SELECT c.id, c.title, c.created_at, c.first_moved_or_assigned_at, c.due_date, c.list_id,
+              l.board_id, l.is_done_list, cm.user_id
+       FROM cards c
+       JOIN card_members cm ON c.id = cm.card_id
        JOIN lists l ON c.list_id = l.id
-       WHERE cf.user_id IN (?) AND cf.ended_at IS NULL`,
-      [memberIds]
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ?
+         AND cm.user_id IN (?)
+         AND (l.is_done_list = 0 OR l.is_done_list IS NULL)
+       ORDER BY COALESCE(c.first_moved_or_assigned_at, c.created_at) ASC, c.id ASC`,
+      [routeWsId, memberIds]
     );
-    const focusMap = {};
-    focusRows.forEach((f) => {
-      if (!focusMap[f.user_id]) focusMap[f.user_id] = [];
-      focusMap[f.user_id].push(f);
+    const openCardsMap = {};
+    openCardRows.forEach((c) => {
+      if (!openCardsMap[c.user_id]) openCardsMap[c.user_id] = [];
+      openCardsMap[c.user_id].push(c);
+    });
+
+    // Completed cards on targetDate
+    const completedCardRows = await req.db.query(
+      `SELECT c.id, c.title, c.completed_at, c.completed_by, c.first_moved_or_assigned_at, c.created_at,
+              c.completion_note, c.completion_evidence_url
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ?
+         AND c.completed_by IN (?)
+         AND c.completed_at >= ? AND c.completed_at < ?`,
+      [routeWsId, memberIds, startUtc, endUtc]
+    );
+    const completedCardsMap = {};
+    completedCardRows.forEach((c) => {
+      if (!completedCardsMap[c.completed_by]) completedCardsMap[c.completed_by] = [];
+      completedCardsMap[c.completed_by].push(c);
     });
 
     // 3. Check-ins for targetDate
@@ -4727,17 +4797,18 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
 
     const people = members.map((m) => {
       const userLeave = leaveMap[m.id];
-      const userFocus = focusMap[m.id] || [];
+      const userOpenCards = openCardsMap[m.id] || [];
+      const userCompletedCards = completedCardsMap[m.id] || [];
       const userCheckins = checkinMap[m.id] || [];
       const userActs = actMap[m.id] || [];
       const userComms = commMap[m.id] || [];
 
-      const flags = [];
       const checkedItems = [];
       const commentSnippets = [];
       const files = [];
       const checkinTexts = [];
       const unansweredReviews = [];
+      const internalFlags = [];
 
       for (const a of userActs) {
         if (a.action_type === 'checklist_toggled') {
@@ -4750,6 +4821,8 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
           let meta = a.meta_json;
           if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch {} }
           files.push({ name: meta?.file_name || 'File', url: meta?.file_url || null });
+        } else if (['ping_pong', 'bulk_ticking', 'created_and_ticked', 'completed_with_open_checklist'].includes(a.action_type)) {
+          internalFlags.push(a.action_type);
         }
       }
 
@@ -4772,67 +4845,108 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
         });
         const revs = reviewMap[ci.id] || [];
         for (const r of revs) {
-          if (!r.answered_at && (r.action === 'question' || r.action === 'request_evidence')) {
+          const isProofOrQuestion = r.action === 'ask_proof' || r.action === 'request_evidence' || r.action === 'question';
+          if (!r.answered_at && isProofOrQuestion) {
+            const daysSinceReview = calculateWorkingDaysOpen(r.created_at, now, workingDays, holidays);
+            const isUnanswered = daysSinceReview >= 1;
             unansweredReviews.push({
               id: r.id,
               action: r.action,
               note: r.note,
-              reviewer_name: r.reviewer_name
+              reviewer_name: r.reviewer_name,
+              created_at: r.created_at,
+              is_unanswered: isUnanswered
             });
-            flags.push(`unanswered_${r.action}`);
+            if (isUnanswered) {
+              internalFlags.push(`unanswered_${r.action}`);
+            }
           }
         }
       }
 
-      // Determine State
-      let state = 'Idle';
+      // Check cards needing update today
+      const cardsNeedingUpdate = [];
+      for (const card of userOpenCards) {
+        const startRef = card.first_moved_or_assigned_at || card.created_at;
+        const daysOpen = calculateWorkingDaysOpen(startRef, targetDate, workingDays, holidays);
+        const daysUntilDue = card.due_date ? getWorkingDaysUntilDue(card.due_date, targetDate, workingDays, holidays) : 0;
+        if (isWorkingDay && (daysOpen >= 1 || daysUntilDue >= 2)) {
+          cardsNeedingUpdate.push(card);
+        }
+      }
+
+      const hasCreditedWork = checkedItems.length > 0 || commentSnippets.length > 0 || files.length > 0 || userCompletedCards.length > 0;
+
+      // Exactly five states:
+      // 1. Blocked
+      // 2. No update today
+      // 3. Updated today
+      // 4. No open tasks
+      // 5. On leave
+      let state = 'No open tasks';
       let stateSeverity = 'normal'; // 'normal' | 'amber' | 'red' | 'green'
 
       if (userLeave) {
         state = 'On leave';
-      } else if (userFocus.length > 0) {
-        const hasBlockedCheckin = userCheckins.some((ci) => ci.status === 'blocked' || (ci.blocker && ci.blocker.trim()));
+        stateSeverity = 'normal';
+      } else {
+        const hasBlockedCheckin = userCheckins.some(
+          (ci) => ci.status === 'blocked' || (ci.blocker && ci.blocker.trim())
+        );
         if (hasBlockedCheckin) {
           state = 'Blocked';
           stateSeverity = 'red';
-        } else if (userCheckins.length > 0) {
-          state = 'Focused-check-in-done';
+        } else if (userCheckins.length > 0 || hasCreditedWork) {
+          state = 'Updated today';
           stateSeverity = 'green';
-        } else {
-          // Check-in missing
-          if (!isWorkingDay) {
-            state = 'Idle';
+        } else if (cardsNeedingUpdate.length > 0) {
+          if (isPastDate || (isToday && isPastCutoff)) {
+            state = 'No update today';
+            stateSeverity = 'amber';
+            internalFlags.push('missing_update');
           } else {
-            state = 'Focused-check-in-missing';
-            stateSeverity = isPastCutoff ? 'red' : 'amber';
-            flags.push('missing_checkin');
+            state = 'No open tasks';
+            stateSeverity = 'normal';
           }
-        }
-
-        // Deep work review check
-        for (const f of userFocus) {
-          if (f.deep_work === 1) {
-            const daysSinceStarted = Math.max(1, Math.floor((now.getTime() - new Date(f.started_at).getTime()) / (1000 * 60 * 60 * 24)));
-            if (f.estimate_days && daysSinceStarted > f.estimate_days) {
-              state = 'Needs review';
-              stateSeverity = 'amber';
-              flags.push('over_estimate');
-            } else if (daysSinceStarted > f.check_in_every_days && userCheckins.length === 0 && checkedItems.length === 0) {
-              state = 'Needs review';
-              stateSeverity = 'amber';
-              flags.push('deep_work_stalled');
-            }
-          }
-        }
-      } else {
-        const hasCreditedWork = checkedItems.length > 0 || commentSnippets.length > 0 || files.length > 0;
-        if (hasCreditedWork) {
-          state = 'Active';
-          stateSeverity = 'green';
         } else {
-          state = 'Idle';
+          state = 'No open tasks';
           stateSeverity = 'normal';
         }
+      }
+
+      // Exactly three visible warnings:
+      // 1. "Same update repeated"
+      // 2. "Marked done within minutes"
+      // 3. "Update too short or empty"
+      const visibleWarnings = [];
+
+      const hasRepeated = userCheckins.some((ci) => {
+        let fl = ci.flags;
+        if (typeof fl === 'string') { try { fl = JSON.parse(fl); } catch {} }
+        const hasFlagRepeat = Array.isArray(fl) && (fl.includes('repeat') || fl.includes('same_update_repeated'));
+        return ci.flag_repeat === 1 || ci.flag_repeat === true || hasFlagRepeat || (ci.flag_reason && /repeat|similarity/i.test(ci.flag_reason));
+      });
+      if (hasRepeated) {
+        visibleWarnings.push('Same update repeated');
+      }
+
+      const hasRapidDone = userCompletedCards.some((c) => {
+        const startRef = new Date(c.first_moved_or_assigned_at || c.created_at).getTime();
+        const endRef = new Date(c.completed_at).getTime();
+        const diffMinutes = (endRef - startRef) / (1000 * 60);
+        return diffMinutes >= 0 && diffMinutes <= 3;
+      }) || userActs.some(a => a.action_type === 'rapid_complete');
+      if (hasRapidDone) {
+        visibleWarnings.push('Marked done within minutes');
+      }
+
+      const hasTooShort = userCheckins.some((ci) => {
+        const did = (ci.did || '').trim();
+        const wordCount = did.split(/\s+/).filter(Boolean).length;
+        return did.length < 30 || wordCount < 6 || (ci.flag_reason && /short|empty/i.test(ci.flag_reason));
+      });
+      if (hasTooShort) {
+        visibleWarnings.push('Update too short or empty');
       }
 
       return {
@@ -4843,35 +4957,49 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
         role: m.role_name,
         state,
         state_severity: stateSeverity,
-        has_focus: userFocus.length > 0,
-        focus_cards: userFocus.map((f) => ({
-          card_id: f.card_id,
-          card_title: f.card_title,
-          deep_work: f.deep_work === 1,
-          started_at: f.started_at,
-          estimate_days: f.estimate_days
+        has_cards_needing_update: cardsNeedingUpdate.length > 0,
+        cards_needing_update_count: cardsNeedingUpdate.length,
+        open_cards_count: userOpenCards.length,
+        open_cards: userOpenCards.map((c) => ({
+          card_id: c.id,
+          card_title: c.title,
+          due_date: c.due_date,
+          first_moved_or_assigned_at: c.first_moved_or_assigned_at,
+          needs_update: cardsNeedingUpdate.some(cn => cn.id === c.id)
         })),
         evidence: {
           checked_items: checkedItems,
           comments: commentSnippets,
           files,
           check_ins: checkinTexts,
-          unanswered_reviews: unansweredReviews
+          unanswered_reviews: unansweredReviews,
+          completed_cards: userCompletedCards.map((c) => ({
+            id: c.id,
+            title: c.title,
+            completed_at: c.completed_at,
+            completion_note: c.completion_note,
+            completion_evidence_url: c.completion_evidence_url
+          }))
         },
         leave_days_last_30_days: leave30Map[m.id] || 0,
-        flags: Array.from(new Set(flags))
+        visible_warnings: visibleWarnings,
+        internal_flags: Array.from(new Set(internalFlags)),
+        flags: visibleWarnings
       };
     });
 
-    // Priority sorting: what needs attention first
+    // Priority sorting:
+    // 1. Blocked
+    // 2. No update today
+    // 3. Updated today
+    // 4. No open tasks
+    // 5. On leave
     const statePriority = {
       'Blocked': 1,
-      'Focused-check-in-missing': 2,
-      'Needs review': 3,
-      'Idle': 4,
-      'Focused-check-in-done': 5,
-      'Active': 6,
-      'On leave': 7
+      'No update today': 2,
+      'Updated today': 3,
+      'No open tasks': 4,
+      'On leave': 5
     };
     people.sort((a, b) => {
       const pA = statePriority[a.state] || 99;
@@ -4885,8 +5013,93 @@ router.get('/:id/daily-tracker/people', requireAuth, async (req, res, next) => {
       timezone,
       is_working_day: isWorkingDay,
       cutoff_passed: isPastCutoff,
+      cutoff_time: cutoffStr,
       pending_requests: pendingLeaveRows,
       people
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/workspaces/:id/checkins/pending
+router.get('/:id/checkins/pending', requireAuth, requirePermission('checkin.create'), async (req, res, next) => {
+  const routeWsId = Number(req.params.id);
+  try {
+    const [wsRow] = await req.db.query('SELECT settings FROM workspaces WHERE id = ?', [routeWsId]);
+    let wsSettings = {};
+    try {
+      wsSettings = typeof wsRow?.settings === 'string' ? JSON.parse(wsRow.settings) : (wsRow?.settings || {});
+    } catch {}
+    const timezone = wsSettings?.timezone || 'Asia/Kolkata';
+    const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5];
+    const holidays = wsSettings?.holidays || [];
+    const cutoffStr = wsSettings?.cutoff_time || '17:00';
+    const [cutH, cutM] = cutoffStr.split(':').map(Number);
+
+    const now = new Date();
+    const timeFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric', minute: 'numeric', hour12: false
+    });
+    const parts = timeFmt.formatToParts(now);
+    const curHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+    const curMin = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+    const isPastCutoff = curHour > cutH || (curHour === cutH && curMin >= cutM);
+
+    const tzFmt = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayStr = tzFmt.format(now);
+
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const targetDtObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const jsDay = targetDtObj.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    const isWorkingDay = workingDays.includes(isoDay) && !holidays.includes(todayStr);
+
+    // Cards assigned to user in workspace, not in done list, no check-in today
+    const cardRows = await req.db.query(
+      `SELECT c.id, c.title, c.created_at, c.first_moved_or_assigned_at, c.due_date, c.list_id,
+              l.name as list_name, l.board_id, b.name as board_title
+       FROM cards c
+       JOIN card_members cm ON c.id = cm.card_id
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id
+       WHERE b.workspace_id = ?
+         AND cm.user_id = ?
+         AND (l.is_done_list = 0 OR l.is_done_list IS NULL)
+         AND c.id NOT IN (
+           SELECT card_id FROM check_ins WHERE user_id = ? AND work_date = ?
+         )
+       ORDER BY COALESCE(c.first_moved_or_assigned_at, c.created_at) ASC, c.id ASC`,
+      [routeWsId, req.user.id, req.user.id, todayStr]
+    );
+
+    const pendingCards = [];
+    for (const card of cardRows) {
+      const startRef = card.first_moved_or_assigned_at || card.created_at;
+      const daysOpen = calculateWorkingDaysOpen(startRef, todayStr, workingDays, holidays);
+      const daysUntilDue = card.due_date ? getWorkingDaysUntilDue(card.due_date, todayStr, workingDays, holidays) : 0;
+      if (isWorkingDay && (daysOpen >= 1 || daysUntilDue >= 2)) {
+        pendingCards.push({
+          id: card.id,
+          title: card.title,
+          board_id: card.board_id,
+          board_title: card.board_title,
+          list_name: card.list_name,
+          first_moved_or_assigned_at: card.first_moved_or_assigned_at,
+          due_date: card.due_date,
+          days_open: daysOpen
+        });
+      }
+    }
+
+    return res.json({
+      date: todayStr,
+      timezone,
+      cutoff_time: cutoffStr,
+      cutoff_passed: isPastCutoff,
+      is_working_day: isWorkingDay,
+      cards: pendingCards.slice(0, 3)
     });
   } catch (err) {
     next(err);

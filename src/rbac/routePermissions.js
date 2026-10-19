@@ -93,6 +93,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/workspaces/:id/search',                                  { permission: 'search.use',                 scope: 'company' }],
   ['GET /api/workspaces/:id/daily-tracker',                           { permission: 'daily_tracker.view',         scope: 'company' }],
   ['GET /api/workspaces/:id/daily-tracker/people',                    { permission: 'daily_tracker.view_people',  scope: 'company' }],
+  ['GET /api/workspaces/:id/checkins/pending',                        { permission: 'checkin.create',             scope: 'company' }],
   ['GET /api/workspaces/:id/leave-days',                              { permission: 'leave.request',              scope: 'company' }],
   ['POST /api/workspaces/:id/leave-days',                             { permission: 'leave.request',              scope: 'company' }],
   ['PATCH /api/workspaces/:id/leave-days/:leaveId',                   { permission: 'leave.approve',              scope: 'company' }],
@@ -139,10 +140,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/assigners',         { permission: 'task.edit',             scope: 'project' }],
   ['POST /api/cards/:id/copy',              { permission: 'task.duplicate',        scope: 'project' }],
 
-  // ─── Card: Focus & Check-ins ───────────────────────────────────────────────
-  ['POST /api/cards/:id/focus',                     { permission: 'task.focus',            scope: 'project' }],
-  ['DELETE /api/cards/:id/focus',                   { permission: 'task.focus',            scope: 'project' }],
-  ['POST /api/cards/:id/focus/deep-work',           { permission: 'task.mark_deep_work',   scope: 'project' }],
+  // ─── Card: Check-ins ───────────────────────────────────────────────────────
   ['GET /api/cards/:id/checkins',                   { permission: 'checkin.view',          scope: 'project' }],
   ['POST /api/cards/:id/checkins',                  { permission: 'checkin.create',        scope: 'project' }],
   ['PATCH /api/cards/:id/checkins/:checkinId',      { permission: 'checkin.create',        scope: 'project' }],

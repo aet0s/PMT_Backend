@@ -88,8 +88,6 @@ const PERMISSIONS = [
   { key: 'task.duplicate', module: 'task', label: 'Duplicate Tasks', description: 'Clone card with checklist and labels', scope: 'project', dangerous: false },
   { key: 'task.archive', module: 'task', label: 'Archive Tasks', description: 'Archive cards without deleting', scope: 'project', dangerous: false },
   { key: 'task.restore', module: 'task', label: 'Restore Tasks', description: 'Restore archived cards', scope: 'project', dangerous: false },
-  { key: 'task.focus', module: 'task', label: 'Set Task Focus', description: 'Set active focus on assigned task for daily tracking', scope: 'project', dangerous: false },
-  { key: 'task.mark_deep_work', module: 'task', label: 'Mark Deep Work', description: 'Designate tasks as deep work with customized check-in cadences', scope: 'project', dangerous: false },
 
   // --- Subtask ---
   { key: 'subtask.create', module: 'subtask', label: 'Create Subtasks', description: 'Add subtasks to cards', scope: 'project', dangerous: false, planned: true },
@@ -272,7 +270,7 @@ const SYSTEM_ROLES = {
       'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
       'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
       'list.create', 'list.edit', 'list.reorder', 'list.delete',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete', 'task.delete_own', 'task.focus', 'task.mark_deep_work',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete', 'task.delete_own',
       'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.bulk_delete', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
@@ -300,12 +298,12 @@ const SYSTEM_ROLES = {
     permissions: [
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view', 'list.create', 'list.edit', 'list.reorder',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own', 'task.focus', 'task.mark_deep_work',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own',
       'task.watch', 'task.set_priority', 'task.bulk_edit', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own', 'comment.delete_any',
       'attachment.view', 'attachment.upload', 'attachment.delete_own', 'attachment.delete_any', 'file.view',
-      'checkin.create', 'checkin.view', 'leave.request', 'leave.approve',
+      'checkin.create', 'checkin.view', 'checkin.review', 'leave.request', 'leave.approve',
       'label.view', 'label.create', 'label.edit', 'label.delete_own',
       'custom_field.view', 'custom_field.create', 'custom_field.edit', 'milestone.view', 'milestone.create', 'milestone.edit',
       'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
@@ -327,7 +325,7 @@ const SYSTEM_ROLES = {
     permissions: [
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own', 'task.focus',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own',
       'task.watch', 'task.set_priority', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',
@@ -437,11 +435,8 @@ const PREREQUISITE_PERMISSIONS = {
   'task.archive': ['task.view', 'project.view'],
   'task.restore': ['task.view', 'project.view'],
   'task.view': ['project.view'],
-  'task.focus': ['task.view', 'project.view'],
-  'task.mark_deep_work': ['task.edit', 'task.view', 'project.view'],
-
   // Check-in operations
-  'checkin.create': ['task.focus', 'task.view', 'project.view'],
+  'checkin.create': ['task.view', 'project.view'],
   'checkin.view': ['task.view', 'project.view'],
   'checkin.review': ['checkin.view', 'task.view', 'project.view'],
 
