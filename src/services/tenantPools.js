@@ -44,6 +44,12 @@ function attachPoolErrorHandler(pool, label) {
     pool.on('error', (err) => {
       console.warn(`[WARN] MySQL pool error (${label}):`, err?.code || err?.message);
     });
+    pool.on('connection', (connection) => {
+      const tz = process.env.MYSQL_TIMEZONE || '+05:30';
+      connection.query(`SET time_zone = '${tz}'`, (err) => {
+        if (err) console.warn(`[WARN] Failed to set session time_zone:`, err.message);
+      });
+    });
   }
 }
 

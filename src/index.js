@@ -105,6 +105,7 @@ app.use((req, res, next) => {
         'Content-Type, Authorization, x-origin-id, x-client-mutation-id, X-Requested-With, Accept, Origin, Cache-Control, X-Request-Id, X-Forwarded-For, x-tenant-id, x-tenant-slug'
       );
     }
+    res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id, Date, X-Server-Time');
     res.setHeader('Access-Control-Max-Age', '86400');
 
     // Respond immediately to OPTIONS preflight requests
@@ -152,6 +153,16 @@ app.use(csrfProtection(getAllowedOrigins));
 app.use(cookieParser());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Dedicated server time endpoint for instant client synchronization
+app.get('/api/time', (req, res) => {
+  const now = new Date();
+  res.json({
+    server_time: now.toISOString(),
+    server_time_ms: now.getTime(),
+    timezone: process.env.APP_TIMEZONE || process.env.TZ || 'Asia/Kolkata'
+  });
+});
 
 // Direct access to /uploads is strictly prohibited in all environments.
 // Files must only be accessed through the authenticated /api/files route with permission checks.
