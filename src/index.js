@@ -159,6 +159,7 @@ app.get('/api/time', (req, res) => {
   const now = new Date();
   res.json({
     server_time: now.toISOString(),
+    serverTime: now.toISOString(),
     server_time_ms: now.getTime(),
     timezone: process.env.APP_TIMEZONE || process.env.TZ || 'Asia/Kolkata'
   });
