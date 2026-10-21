@@ -136,10 +136,15 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposedHeaders: ['X-Request-Id'],
+    exposedHeaders: ['X-Request-Id', 'Date', 'X-Server-Time'],
     maxAge: 86400
   })
 );
+
+app.use((req, res, next) => {
+  res.setHeader('X-Server-Time', new Date().toISOString());
+  next();
+});
 
 const { csrfProtection } = require('./middleware/csrf');
 app.use(csrfProtection(getAllowedOrigins));

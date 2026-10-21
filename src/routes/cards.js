@@ -277,14 +277,11 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
     }
 
     const formattedDueDate = formatSqlDateTime(due_date);
-    const effectiveStartDate = (req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== '')
-      ? req.body.start_date
-      : new Date();
-    const formattedStartDate = formatSqlDateTime(effectiveStartDate);
+    const formattedStartDate = formatSqlDateTime(req.body.start_date);
     const cleanDescription = sanitizeDescription(description);
 
     const cardExec = await req.db.execute(
-      'INSERT INTO cards (list_id, title, description, position, start_date, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO cards (list_id, title, description, position, start_date, due_date, created_by) VALUES (?, ?, ?, ?, COALESCE(?, NOW()), ?, ?)',
       [list_id, title, cleanDescription, position, formattedStartDate, formattedDueDate, req.user.id]
     );
     const cardId = cardExec.insertId;
