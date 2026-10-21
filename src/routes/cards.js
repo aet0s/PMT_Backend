@@ -19,6 +19,18 @@ const router = express.Router();
 
 function formatSqlDateTime(dateVal) {
   if (dateVal === null || dateVal === undefined || dateVal === '') return null;
+  if (typeof dateVal === 'string') {
+    const trimmed = dateVal.trim();
+    const matchTime = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)$/);
+    if (matchTime) {
+      const timePart = matchTime[2].length === 5 ? `${matchTime[2]}:00` : matchTime[2];
+      return `${matchTime[1]} ${timePart}`;
+    }
+    const matchDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/);
+    if (matchDate) {
+      return `${matchDate[1]} 23:59:59`;
+    }
+  }
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return null;
   return d.toISOString().slice(0, 19).replace('T', ' ');
@@ -160,11 +172,13 @@ async function getFullCard(cardId, dbInstance = null) {
 
     try {
       const boardRes = await db.query(
-        'SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+        'SELECT l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
         [cardId]
       );
       if (boardRes.length > 0) {
         const boardId = boardRes[0].board_id;
+        card.board_id = boardId;
+        card.workspace_id = boardRes[0].workspace_id;
         const countRes = await db.query(
           `SELECT COUNT(*) as task_num 
            FROM cards c2 
@@ -225,13 +239,29 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
       position = maxPos ? Number(maxPos) + 1000.0 : 1000.0;
     }
 
-    const cleanDescription = sanitizeDescription(description);
+    if (due_date !== undefined && due_date !== null && due_date !== '') {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      let dueStr = '';
+      if (typeof due_date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(due_date)) {
+        dueStr = due_date.slice(0, 10);
+      } else {
+        const d = new Date(due_date);
+        if (!isNaN(d.getTime())) {
+          dueStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+      if (dueStr && dueStr < todayStr) {
+        return res.status(400).json({ error: { message: 'Due date cannot be in the past', code: 'BAD_REQUEST' } });
+      }
+    }
 
     const formattedDueDate = formatSqlDateTime(due_date);
     const effectiveStartDate = (req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== '')
       ? req.body.start_date
       : new Date();
     const formattedStartDate = formatSqlDateTime(effectiveStartDate);
+    const cleanDescription = sanitizeDescription(description);
 
     const cardExec = await req.db.execute(
       'INSERT INTO cards (list_id, title, description, position, start_date, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -314,6 +344,55 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
     const oldCard = oldCardRes[0];
+
+    // Bug 5: Permission enforcement for card edits:
+    // Owner, Admin, Project Manager, Team Lead (rank >= 50) can modify any card.
+    // Team Members and lower roles may only modify cards they created OR are assigned to.
+    const callerRoleRows = await req.db.query(
+      `SELECT r.rank, r.name FROM workspace_members wm 
+       LEFT JOIN roles r ON wm.role_id = r.id 
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [oldCard.workspace_id, req.user.id]
+    );
+    const callerRoleRow = callerRoleRows && callerRoleRows[0];
+    const callerRank = Number(callerRoleRow?.rank || 30);
+    const roleName = String(callerRoleRow?.name || '').toLowerCase();
+    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
+
+    if (!isTopLevel) {
+      const isCreator = Number(oldCard.created_by) === Number(req.user.id);
+      const assigneeRows = await req.db.query(
+        'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ?',
+        [cardId, req.user.id]
+      );
+      const isAssignee = Array.isArray(assigneeRows) && assigneeRows.length > 0;
+      if (!isCreator && !isAssignee) {
+        return res.status(403).json({
+          error: {
+            message: 'Members can only edit cards they created or are assigned to. You can only view and comment on other cards.',
+            code: 'FORBIDDEN'
+          }
+        });
+      }
+    }
+
+    // Bug 1: Validate due_date is not in the past
+    if (due_date !== undefined && due_date !== null && due_date !== '') {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      let dueStr = '';
+      if (typeof due_date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(due_date)) {
+        dueStr = due_date.slice(0, 10);
+      } else {
+        const d = new Date(due_date);
+        if (!isNaN(d.getTime())) {
+          dueStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+      if (dueStr && dueStr < todayStr) {
+        return res.status(400).json({ error: { message: 'Due date cannot be in the past', code: 'BAD_REQUEST' } });
+      }
+    }
 
     const updates = [];
     const values = [];
@@ -1996,8 +2075,8 @@ router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.
       await notify({
         db: req.db,
         tenantId: req.tenant?.id,
-        boardId,
-        cardId,
+        boardId: board_id,
+        cardId: card_id,
         eventType: 'checklist_item.deleted',
         actorId: req.user.id,
         data: { itemText: text, checklistTitle: checklist_title, cardTitle: fullCard?.title || 'Card' }

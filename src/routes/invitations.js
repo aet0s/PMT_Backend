@@ -266,7 +266,7 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
     [normalizedEmail]
   );
   if (existingUserRes.length > 0) {
-    const err = new Error('This user is already a member of the company. You can assign workspaces and boards directly from the Members menu.');
+    const err = new Error('This email address is already registered to an existing member. Each member must have a unique email address.');
     err.status = 400;
     err.code = 'USER_ALREADY_MEMBER';
     throw err;

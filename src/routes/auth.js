@@ -405,7 +405,7 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
     const emailExists = await isEmailAlreadyRegistered(normalizedEmail);
     if (emailExists) {
       return res.status(409).json({
-        error: { message: `Email "${normalizedEmail}" is already registered.`, code: 'EMAIL_CONFLICT' }
+        error: { message: 'This email address is already registered to an existing member. Each member must have a unique email address.', code: 'EMAIL_CONFLICT' }
       });
     }
 
@@ -731,7 +731,7 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
       const emailExists = await isEmailAlreadyRegistered(normalizedEmail);
       if (emailExists) {
         return res.status(409).json({
-          error: { message: `Email "${normalizedEmail}" is already registered.`, code: 'EMAIL_CONFLICT' }
+          error: { message: 'This email address is already registered to an existing member. Each member must have a unique email address.', code: 'EMAIL_CONFLICT' }
         });
       }
 
@@ -821,7 +821,7 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
     const existing = await activeDb.query('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
     if (existing.length > 0) {
       return res.status(400).json({
-        error: { message: 'Email is already registered', code: 'EMAIL_IN_USE' }
+        error: { message: 'This email address is already registered to an existing member. Each member must have a unique email address.', code: 'EMAIL_IN_USE' }
       });
     }
 
