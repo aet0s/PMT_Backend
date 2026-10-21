@@ -453,14 +453,42 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         const openWorkingDays = calculateWorkingDaysOpen(startDate, new Date(), workingDays, holidays);
 
         if (openWorkingDays > 2) {
-          const outcomeNote = req.body.completion_note || oldCard.completion_note;
+          let outcomeNote = req.body.completion_note || oldCard.completion_note;
           if (!outcomeNote || String(outcomeNote).trim().length < 20) {
-            return res.status(400).json({
-              error: {
-                message: 'A one-line result of at least 20 characters is required when completing a task open for more than 2 working days',
-                code: 'ONE_LINE_RESULT_REQUIRED'
+            // Check fallback: if the card has a recent comment or check-in with >= 20 characters
+            try {
+              const latestCommentRes = await req.db.query(
+                'SELECT body FROM comments WHERE card_id = ? AND LENGTH(TRIM(body)) >= 20 ORDER BY created_at DESC LIMIT 1',
+                [cardId]
+              );
+              if (latestCommentRes && latestCommentRes[0]?.body) {
+                outcomeNote = latestCommentRes[0].body.trim();
+              } else {
+                const latestCheckinRes = await req.db.query(
+                  'SELECT did FROM check_ins WHERE card_id = ? AND LENGTH(TRIM(did)) >= 20 ORDER BY created_at DESC LIMIT 1',
+                  [cardId]
+                );
+                if (latestCheckinRes && latestCheckinRes[0]?.did) {
+                  outcomeNote = latestCheckinRes[0].did.trim();
+                }
               }
-            });
+            } catch (fallbackErr) {
+              // Ignore fallback query failure
+            }
+
+            if (outcomeNote && String(outcomeNote).trim().length >= 20) {
+              if (req.body.completion_note === undefined) {
+                updates.push('completion_note = ?');
+                values.push(sanitizePlain(outcomeNote));
+              }
+            } else {
+              return res.status(400).json({
+                error: {
+                  message: 'A one-line result of at least 20 characters is required when completing a task open for more than 2 working days',
+                  code: 'ONE_LINE_RESULT_REQUIRED'
+                }
+              });
+            }
           }
         }
       } catch (err) {
@@ -472,6 +500,9 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         updates.push('completed_by = ?');
         values.push(req.user.id);
       }
+    } else if (is_complete === false) {
+      updates.push('completed_at = NULL');
+      updates.push('completed_by = NULL');
     }
 
     if (req.body.completion_note !== undefined) {
