@@ -364,7 +364,8 @@ async function resolveWorkspaceId(req) {
 
   // 4. STRICT CONSISTENCY VALIDATION:
   // Any client-supplied board_id or workspace_id in params, query, or body MUST agree with derived values.
-  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || req.query?.workspace_id;
+  const isDailyTrackerRoute = routePath.includes('/daily-tracker') || subPath.includes('/daily-tracker');
+  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (!isDailyTrackerRoute ? req.query?.workspace_id : null);
   if (clientWs && Number(clientWs) !== Number(derivedWorkspaceId)) {
     const err = new Error(`Workspace mismatch: resource belongs to workspace ${derivedWorkspaceId}, but request supplied ${clientWs}`);
     err.status = 400;

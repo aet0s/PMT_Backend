@@ -90,6 +90,14 @@ router.get('/', requireAuth, requirePermission('notification.view_own'), async (
 
     if (mentionsOnly) {
       whereClauses.push("(n.event_type = 'comment.mention' OR n.type = 'mention' OR n.priority = 1)");
+    } else if (filter === 'cards') {
+      whereClauses.push("(n.event_type LIKE 'card.%' OR n.type = 'card' OR (n.event_type NOT LIKE 'comment.%' AND n.event_type NOT LIKE 'checklist.%' AND n.event_type NOT LIKE 'board.%' AND n.card_id IS NOT NULL))");
+    } else if (filter === 'comments') {
+      whereClauses.push("(n.event_type LIKE 'comment.%' OR n.type = 'comment')");
+    } else if (filter === 'checklists') {
+      whereClauses.push("(n.event_type LIKE 'checklist.%' OR n.type = 'checklist')");
+    } else if (filter === 'boards') {
+      whereClauses.push("(n.event_type LIKE 'board.%' OR n.type = 'board' OR (n.event_type IS NULL AND n.board_id IS NOT NULL AND n.card_id IS NULL))");
     }
 
     if (category) {
