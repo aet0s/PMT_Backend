@@ -21,10 +21,11 @@ function formatSqlDateTime(dateVal) {
   if (dateVal === null || dateVal === undefined || dateVal === '') return null;
   if (typeof dateVal === 'string') {
     const trimmed = dateVal.trim();
-    const matchTime = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)$/);
+    const matchTime = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/);
     if (matchTime) {
+      const datePart = matchTime[1];
       const timePart = matchTime[2].length === 5 ? `${matchTime[2]}:00` : matchTime[2];
-      return `${matchTime[1]} ${timePart}`;
+      return `${datePart} ${timePart}`;
     }
     const matchDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/);
     if (matchDate) {
@@ -33,7 +34,8 @@ function formatSqlDateTime(dateVal) {
   }
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 19).replace('T', ' ');
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function calculateWorkingDaysOpen(startDate, endDate = new Date(), workingDays = [1, 2, 3, 4, 5], holidays = []) {
@@ -257,10 +259,7 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
     }
 
     const formattedDueDate = formatSqlDateTime(due_date);
-    const effectiveStartDate = (req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== '')
-      ? req.body.start_date
-      : new Date();
-    const formattedStartDate = formatSqlDateTime(effectiveStartDate);
+    const formattedStartDate = formatSqlDateTime(req.body.start_date);
     const cleanDescription = sanitizeDescription(description);
 
     const cardExec = await req.db.execute(
@@ -1086,7 +1085,7 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
         newTitle,
         sourceCard.description || '',
         position,
-        sourceCard.start_date ? formatSqlDateTime(sourceCard.start_date) : formatSqlDateTime(new Date()),
+        sourceCard.start_date ? formatSqlDateTime(sourceCard.start_date) : null,
         sourceCard.due_date ? formatSqlDateTime(sourceCard.due_date) : null,
         sourceCard.is_complete ? 1 : 0,
         req.user.id
