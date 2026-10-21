@@ -29,6 +29,7 @@ function getBaseMysqlConfig(database) {
     connectionLimit: TENANT_POOL_LIMIT,
     queueLimit: 0,
     timezone: process.env.MYSQL_TIMEZONE || 'local',
+    dateStrings: true,
     charset: 'utf8mb4',
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,

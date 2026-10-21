@@ -34,8 +34,26 @@ function formatSqlDateTime(dateVal) {
   }
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return null;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+  const tz = process.env.APP_TIMEZONE || process.env.TZ || 'Asia/Kolkata';
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(d);
+    const getPart = (type) => parts.find((p) => p.type === type)?.value;
+    return `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+  } catch (e) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
 }
 
 function calculateWorkingDaysOpen(startDate, endDate = new Date(), workingDays = [1, 2, 3, 4, 5], holidays = []) {
@@ -259,7 +277,10 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
     }
 
     const formattedDueDate = formatSqlDateTime(due_date);
-    const formattedStartDate = formatSqlDateTime(req.body.start_date);
+    const effectiveStartDate = (req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== '')
+      ? req.body.start_date
+      : new Date();
+    const formattedStartDate = formatSqlDateTime(effectiveStartDate);
     const cleanDescription = sanitizeDescription(description);
 
     const cardExec = await req.db.execute(
