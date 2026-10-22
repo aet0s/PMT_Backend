@@ -273,10 +273,27 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
       position = maxPos ? Number(maxPos) + 1000.0 : 1000.0;
     }
 
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    let startStr = '';
+    const rawStart = req.body.start_date !== undefined && req.body.start_date !== null && req.body.start_date !== ''
+      ? req.body.start_date
+      : todayStr; // In POST, start_date defaults to NOW() if not provided
+
+    if (rawStart) {
+      if (typeof rawStart === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawStart)) {
+        startStr = rawStart.slice(0, 10);
+      } else {
+        const sd = new Date(rawStart);
+        if (!isNaN(sd.getTime())) {
+          startStr = `${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}-${String(sd.getDate()).padStart(2, '0')}`;
+        }
+      }
+    }
+
+    let dueStr = '';
     if (due_date !== undefined && due_date !== null && due_date !== '') {
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      let dueStr = '';
       if (typeof due_date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(due_date)) {
         dueStr = due_date.slice(0, 10);
       } else {
@@ -285,9 +302,22 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
           dueStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         }
       }
-      if (dueStr && dueStr < todayStr) {
-        return res.status(400).json({ error: { message: 'Due date cannot be in the past', code: 'BAD_REQUEST' } });
+    }
+
+    if (dueStr) {
+      const minDue = startStr || todayStr;
+      if (dueStr < minDue) {
+        return res.status(400).json({
+          error: {
+            message: startStr ? 'Due date cannot be before start date' : 'Due date cannot be in the past',
+            code: 'BAD_REQUEST'
+          }
+        });
       }
+    }
+
+    if (startStr && dueStr && startStr > dueStr) {
+      return res.status(400).json({ error: { message: 'Start date cannot be after due date', code: 'BAD_REQUEST' } });
     }
 
     const formattedDueDate = formatSqlDateTime(due_date);
@@ -407,22 +437,54 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       }
     }
 
-    // Bug 1: Validate due_date is not in the past
-    if (due_date !== undefined && due_date !== null && due_date !== '') {
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      let dueStr = '';
-      if (typeof due_date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(due_date)) {
-        dueStr = due_date.slice(0, 10);
+    // Validate start_date and due_date logic
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    const effectiveStartRaw = start_date !== undefined ? start_date : oldCard.start_date;
+    const effectiveDueRaw = due_date !== undefined ? due_date : oldCard.due_date;
+
+    let startStr = '';
+    if (effectiveStartRaw) {
+      if (typeof effectiveStartRaw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(effectiveStartRaw)) {
+        startStr = effectiveStartRaw.slice(0, 10);
       } else {
-        const d = new Date(due_date);
+        const sd = new Date(effectiveStartRaw);
+        if (!isNaN(sd.getTime())) {
+          startStr = `${sd.getFullYear()}-${String(sd.getMonth() + 1).padStart(2, '0')}-${String(sd.getDate()).padStart(2, '0')}`;
+        }
+      }
+    }
+
+    let dueStr = '';
+    if (effectiveDueRaw) {
+      if (typeof effectiveDueRaw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(effectiveDueRaw)) {
+        dueStr = effectiveDueRaw.slice(0, 10);
+      } else {
+        const d = new Date(effectiveDueRaw);
         if (!isNaN(d.getTime())) {
           dueStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         }
       }
-      if (dueStr && dueStr < todayStr) {
-        return res.status(400).json({ error: { message: 'Due date cannot be in the past', code: 'BAD_REQUEST' } });
+    }
+
+    if (dueStr) {
+      if (startStr) {
+        if (dueStr < startStr) {
+          return res.status(400).json({ error: { message: 'Due date cannot be before start date', code: 'BAD_REQUEST' } });
+        }
+      } else {
+        // No start date exists on the card or in this update
+        if (dueStr < todayStr) {
+          return res.status(400).json({
+            error: { message: 'Due date cannot be in the past when no start date is set', code: 'BAD_REQUEST' }
+          });
+        }
       }
+    }
+
+    if (startStr && dueStr && startStr > dueStr) {
+      return res.status(400).json({ error: { message: 'Start date cannot be after due date', code: 'BAD_REQUEST' } });
     }
 
     const updates = [];
