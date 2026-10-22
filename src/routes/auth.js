@@ -1535,16 +1535,41 @@ router.post('/forgot-password/send-otp', validate(sendOtpSchema), async (req, re
     // Check directory and databases for user existence
     try {
       const masterDb = getMasterDb();
-      const existing = await masterDb.query('SELECT id FROM tenant_user_directory WHERE email = ?', [normalizedEmail]);
+      const existing = await masterDb.query(
+        'SELECT id FROM tenant_user_directory WHERE LOWER(email) = ? LIMIT 1',
+        [normalizedEmail]
+      );
       if (existing && existing.length > 0) userFound = true;
     } catch {}
 
     if (!userFound) {
       try {
         const devDb = getDevSingleDb();
-        const existing = await devDb.query('SELECT id, name FROM users WHERE email = ?', [normalizedEmail]);
+        const existing = await devDb.query('SELECT id, name FROM users WHERE LOWER(email) = ? LIMIT 1', [normalizedEmail]);
         if (existing && existing.length > 0) userFound = true;
       } catch {}
+    }
+
+    // Fallback: If not found in directory or devDb, search active tenant databases and auto-heal directory
+    if (!userFound) {
+      try {
+        const masterDb = getMasterDb();
+        const activeTenants = await masterDb.query("SELECT id, db_name FROM tenants WHERE status = 'active'");
+        for (const t of activeTenants) {
+          try {
+            const tenantDb = await getTenantDb(t.id);
+            const users = await tenantDb.query('SELECT id, name FROM users WHERE LOWER(email) = ? LIMIT 1', [normalizedEmail]);
+            if (users && users.length > 0) {
+              userFound = true;
+              // Auto-heal directory so future lookups succeed instantly
+              await masterDb.execute('INSERT IGNORE INTO tenant_user_directory (email, tenant_id) VALUES (?, ?)', [normalizedEmail, t.id]);
+              break;
+            }
+          } catch {}
+        }
+      } catch (dirErr) {
+        console.warn('[FORGOT_PASSWORD_DIRECTORY_FALLBACK_WARN]', dirErr.message);
+      }
     }
 
     // Rate limit check: 30-second cooldown between requests
@@ -1807,9 +1832,23 @@ router.post('/forgot-password/reset', validate(resetPasswordWithOtpSchema), asyn
     } else {
       const masterDb = getMasterDb();
       const usersInDir = await masterDb.query(
-        'SELECT id, tenant_id FROM tenant_user_directory WHERE email = ?',
+        'SELECT id, tenant_id FROM tenant_user_directory WHERE LOWER(email) = ?',
         [normalizedEmail]
       );
+      if (usersInDir.length === 0) {
+        // Fallback: check active tenants directly
+        const activeTenants = await masterDb.query("SELECT id, db_name FROM tenants WHERE status = 'active'");
+        for (const t of activeTenants) {
+          try {
+            const tenantDb = await getTenantDb(t.id);
+            const [u] = await tenantDb.query('SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1', [normalizedEmail]);
+            if (u) {
+              usersInDir.push({ id: null, tenant_id: t.id });
+              await masterDb.execute('INSERT IGNORE INTO tenant_user_directory (email, tenant_id) VALUES (?, ?)', [normalizedEmail, t.id]);
+            }
+          } catch {}
+        }
+      }
       if (usersInDir.length === 0) {
         return res.status(404).json({ error: { message: 'User account not found', code: 'USER_NOT_FOUND' } });
       }

@@ -3375,6 +3375,167 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
   }
 });
 
+// PATCH /api/workspaces/:id/company-members/:userId/credentials - Edit email and change password (Owner only)
+router.patch('/:id/company-members/:userId/credentials', requireAuth, async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const targetUserId = Number(req.params.userId);
+  const { email, password, must_change_password } = req.body;
+
+  try {
+    // 1. Enforce that CALLER is an Owner
+    const callerRoles = await req.db.query(
+      `SELECT r.id, r.name, r.is_system, r.is_editable, COALESCE(r.rank, 30) as rank
+       FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ?`,
+      [req.user.id]
+    );
+    const callerIsOwner = callerRoles.some((r) => isOwnerRole(r)) || (req.tenant && Number(req.tenant.owner_id) === Number(req.user.id));
+    if (!callerIsOwner) {
+      return res.status(403).json({
+        error: { message: 'Only an organization Owner can change passwords or edit emails for other users.', code: 'FORBIDDEN_OWNER_ONLY' }
+      });
+    }
+
+    // 2. Fetch target user
+    const [targetUser] = await req.db.query('SELECT id, name, email FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) {
+      return res.status(404).json({ error: { message: 'User not found', code: 'USER_NOT_FOUND' } });
+    }
+
+    const updates = [];
+    const values = [];
+    let normalizedNewEmail = null;
+    let emailUpdated = false;
+    let passwordUpdated = false;
+
+    // 3. Process email edit if provided and changed
+    if (email !== undefined && email !== null && email.trim() !== '') {
+      normalizedNewEmail = email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedNewEmail)) {
+        return res.status(400).json({ error: { message: 'Invalid email address format', code: 'INVALID_EMAIL' } });
+      }
+
+      if (normalizedNewEmail !== targetUser.email.toLowerCase()) {
+        // Check uniqueness in tenant users table
+        const [existing] = await req.db.query(
+          'SELECT id FROM users WHERE LOWER(email) = ? AND id != ?',
+          [normalizedNewEmail, targetUserId]
+        );
+        if (existing) {
+          return res.status(400).json({
+            error: { message: 'Email is already in use by another user in this organization.', code: 'EMAIL_ALREADY_IN_USE' }
+          });
+        }
+
+        updates.push('email = ?');
+        values.push(normalizedNewEmail);
+        emailUpdated = true;
+      }
+    }
+
+    // 4. Process password change if provided
+    if (password !== undefined && password !== null && password !== '') {
+      const { validatePassword } = require('../utils/passwordPolicy');
+      const passCheck = validatePassword(password);
+      if (!passCheck.isValid) {
+        return res.status(400).json({ error: { message: passCheck.error, code: 'PASSWORD_TOO_WEAK' } });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      updates.push('password_hash = ?');
+      values.push(passwordHash);
+
+      updates.push('failed_login_attempts = 0');
+      updates.push('locked_until = NULL');
+
+      const mustChange = must_change_password !== undefined ? (must_change_password ? 1 : 0) : 0;
+      updates.push('must_change_password = ?');
+      values.push(mustChange);
+
+      passwordUpdated = true;
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        error: { message: 'No credential changes provided (provide new email or password)', code: 'NO_CHANGES' }
+      });
+    }
+
+    values.push(targetUserId);
+    await req.db.execute(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+
+    // 5. If email was updated, sync master directory and pending invitations
+    if (emailUpdated && normalizedNewEmail) {
+      try {
+        const { getMasterDb } = require('../services/tenantPools');
+        const masterDb = getMasterDb();
+        const tenantId = req.tenant?.id || 1;
+
+        const updateRes = await masterDb.execute(
+          'UPDATE tenant_user_directory SET email = ? WHERE LOWER(email) = ? AND tenant_id = ?',
+          [normalizedNewEmail, targetUser.email.toLowerCase(), tenantId]
+        );
+        if (updateRes.affectedRows === 0) {
+          await masterDb.execute(
+            'INSERT IGNORE INTO tenant_user_directory (email, tenant_id) VALUES (?, ?)',
+            [normalizedNewEmail, tenantId]
+          );
+        }
+
+        if (req.tenant) {
+          await masterDb.execute(
+            'UPDATE tenants SET owner_email = ? WHERE id = ? AND LOWER(owner_email) = ?',
+            [normalizedNewEmail, req.tenant.id, targetUser.email.toLowerCase()]
+          );
+        }
+      } catch (dirErr) {
+        console.warn('[CREDENTIALS_UPDATE_DIR_WARN]', dirErr.message);
+      }
+
+      try {
+        await req.db.execute(
+          'UPDATE pending_invitations SET email = ? WHERE LOWER(email) = ?',
+          [normalizedNewEmail, targetUser.email.toLowerCase()]
+        );
+      } catch {}
+    }
+
+    // 6. Invalidate active sessions and disconnect sockets
+    await revokeAllSessions(req.db, targetUserId, 'ADMIN_CREDENTIALS_UPDATE', req);
+    disconnectUserSockets(targetUserId, req.tenant ? req.tenant.id : null, 'ADMIN_CREDENTIALS_UPDATE');
+
+    // 7. Log auth audit event
+    await logAuthEvent(req.db, {
+      userId: targetUserId,
+      email: normalizedNewEmail || targetUser.email,
+      eventType: passwordUpdated && emailUpdated ? 'PASSWORD_AND_EMAIL_CHANGE' : (passwordUpdated ? 'PASSWORD_RESET' : 'EMAIL_CHANGE'),
+      req,
+      metadata: { resetBy: req.user.id, byOwner: true, emailUpdated, passwordUpdated }
+    });
+
+    broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', {
+      workspaceId,
+      userId: targetUserId,
+      email: normalizedNewEmail || targetUser.email
+    }, req.headers['x-origin-id'], req.tenant?.id);
+
+    return res.json({
+      success: true,
+      message: 'User credentials updated successfully by owner',
+      user: {
+        id: targetUserId,
+        name: targetUser.name,
+        email: normalizedNewEmail || targetUser.email
+      },
+      email_updated: emailUpdated,
+      password_updated: passwordUpdated
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Helper function to check if user has company admin/owner status
 async function isCompanyAdminOrOwner(userId, db) {
   const rows = await db.query(

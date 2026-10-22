@@ -218,6 +218,10 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Company member removal'
   },
+  'PATCH /api/workspaces/:id/company-members/:userId/credentials': {
+    noNotify: true,
+    reason: 'Company member credential update by owner'
+  },
   'POST /api/workspaces/:workspaceId/members/:userId/reset-password': {
     noNotify: true,
     reason: 'Admin password reset is logged in audit log, not notifiable to in-app'

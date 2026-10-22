@@ -193,13 +193,13 @@ class SmtpEmailProvider {
         });
 
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('SMTP connection timed out after 4000ms')), 4000)
+          setTimeout(() => reject(new Error('SMTP connection timed out after 10000ms')), 10000)
         );
 
         const info = await Promise.race([sendPromise, timeoutPromise]);
         return { success: true, messageId: info.messageId };
       } catch (err) {
-        console.error('[SMTP NOTICE] Could not deliver via SMTP, logged to console:', err.message);
+        console.error(`[SMTP ERROR] Could not deliver email to ${to} via SMTP (${err.message}). Logged to console as fallback.`);
         return { success: true, messageId: `fallback-console-${Date.now()}` };
       }
     }

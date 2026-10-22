@@ -87,6 +87,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/workspaces/:id/company-members/:userId/workspaces',     { permission: 'member.invite',              scope: 'company' }],
   ['POST /api/workspaces/:id/company-members/:userId/boards',         { permission: 'member.invite',              scope: 'company' }],
   ['DELETE /api/workspaces/:id/company-members/:userId',              { permission: 'member.remove',              scope: 'company' }],
+  ['PATCH /api/workspaces/:id/company-members/:userId/credentials',   { permission: 'member.assign_role',         scope: 'company' }],
   ['GET /api/workspaces/:id/issues',                                  { permission: 'task.view',                  scope: 'company' }],
   ['GET /api/workspaces/:id/audit',                                   { permission: 'audit.view',                 scope: 'company' }],
   ['GET /api/workspaces/:id/audit/export',                            { permission: 'audit.export',               scope: 'company' }],
