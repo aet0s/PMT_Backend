@@ -42,20 +42,28 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
       }
     }
 
-    if (boardIdFilter && !allAccessibleBoardIds.includes(boardIdFilter)) {
-      return res.json({
-        userWorkspaces,
-        userBoards: [],
-        workspaces: [],
-        boards: [],
-        cards: [],
-        total: 0,
-        page,
-        limit,
-        totalPages: 0,
-        availableLabels: [],
-        availableMembers: []
-      });
+    if (boardIdFilter) {
+      const [boardCheck] = await req.db.query(
+        `SELECT b.id FROM boards b
+         JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
+         WHERE b.id = ? AND wm.user_id = ?`,
+        [boardIdFilter, req.user.id]
+      );
+      if (!boardCheck) {
+        return res.json({
+          userWorkspaces,
+          userBoards: [],
+          workspaces: [],
+          boards: [],
+          cards: [],
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+          availableLabels: [],
+          availableMembers: []
+        });
+      }
     }
 
     // 2. Fetch user's active boards for board selection (filtered by accessibleBoardIds)
@@ -71,27 +79,75 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
       );
     }
 
-    // 3. Fetch archived workspaces
-    const workspacesRes = await req.db.query(
-      `SELECT w.id, w.name, w.created_at, wm.role
-       FROM workspaces w
-       JOIN workspace_members wm ON w.id = wm.workspace_id
-       WHERE wm.user_id = ? AND w.is_archived = 1
-       ORDER BY w.created_at DESC`,
+    // Check if user is a Company Owner / Admin
+    const isCompanyAdminOrOwner = await req.db.query(
+      `SELECT 1 FROM workspace_members wm
+       JOIN roles r ON wm.role_id = r.id
+       WHERE wm.user_id = ? AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)) OR wm.role IN ('Owner', 'Super Admin', 'Admin'))
+       LIMIT 1`,
       [req.user.id]
     );
+    const hasCompanyWideAccess = isCompanyAdminOrOwner.length > 0;
 
-    // 4. Fetch archived boards (filtered by accessibleBoardIds or workspace permissions)
+    // 3. Fetch archived workspaces
+    let workspacesRes = [];
+    if (hasCompanyWideAccess) {
+      workspacesRes = await req.db.query(
+        `SELECT DISTINCT w.id, w.name, w.created_at, COALESCE(r.name, wm.role, 'Owner') as role, COALESCE(r.rank, 100) as rank
+         FROM workspaces w
+         LEFT JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
+         LEFT JOIN roles r ON wm.role_id = r.id
+         WHERE w.is_archived = 1
+         ORDER BY w.created_at DESC`,
+        [req.user.id]
+      );
+    } else {
+      workspacesRes = await req.db.query(
+        `SELECT w.id, w.name, w.created_at, COALESCE(r.name, wm.role) as role, r.rank
+         FROM workspaces w
+         JOIN workspace_members wm ON w.id = wm.workspace_id
+         LEFT JOIN roles r ON wm.role_id = r.id
+         WHERE wm.user_id = ? AND w.is_archived = 1
+         ORDER BY w.created_at DESC`,
+        [req.user.id]
+      );
+    }
+
+    // 4. Fetch archived boards (scoped to candidate workspaces user has access to, NOT filtered by single card boardIdFilter)
     let boardsRes = [];
-    if (allAccessibleBoardIds.length > 0) {
+    if (hasCompanyWideAccess) {
+      const boardParams = [req.user.id];
+      let wsCond = '';
+      if (workspaceIdFilter) {
+        wsCond = 'AND w.id = ?';
+        boardParams.push(workspaceIdFilter);
+      }
       boardsRes = await req.db.query(
-        `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.created_at, w.name as workspace_name, wm.role
+        `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.created_at, w.name as workspace_name, COALESCE(r.name, wm.role, 'Owner') as role
+         FROM boards b
+         JOIN workspaces w ON b.workspace_id = w.id
+         LEFT JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
+         LEFT JOIN roles r ON wm.role_id = r.id
+         WHERE b.is_archived = 1 ${wsCond}
+         ORDER BY b.created_at DESC`,
+        boardParams
+      );
+    } else {
+      const boardParams = [req.user.id];
+      let wsCond = '';
+      if (workspaceIdFilter) {
+        wsCond = 'AND w.id = ?';
+        boardParams.push(workspaceIdFilter);
+      }
+      boardsRes = await req.db.query(
+        `SELECT DISTINCT b.id, b.workspace_id, b.name, b.background_color, b.created_at, w.name as workspace_name, COALESCE(r.name, wm.role) as role
          FROM boards b
          JOIN workspaces w ON b.workspace_id = w.id
          JOIN workspace_members wm ON w.id = wm.workspace_id AND wm.user_id = ?
-         WHERE b.id IN (?) AND b.is_archived = 1
+         LEFT JOIN roles r ON wm.role_id = r.id
+         WHERE b.is_archived = 1 ${wsCond}
          ORDER BY b.created_at DESC`,
-        [req.user.id, allAccessibleBoardIds]
+        boardParams
       );
     }
 

@@ -187,10 +187,9 @@ async function safeQuery(db, sql, params = []) {
       }
     }
 
-    // 7. Other system roles receive permissions ONLY IF newly created or options.forceRoles = true
+    // 7. System roles receive their canonical permissions
     for (const [roleName, roleDef] of Object.entries(SYSTEM_ROLES)) {
       if (roleName === 'Owner' || roleName === 'Admin') continue;
-      if (!newlyCreatedRoleNames.has(roleName) && !options.forceRoles) continue;
 
       const rRows = await safeQuery(
         db,

@@ -20,7 +20,8 @@ const PERMISSIONS = [
   { key: 'workspace.create', module: 'workspace', label: 'Create Workspace', description: 'Create new workspaces', scope: 'company', dangerous: false },
   { key: 'workspace.edit', module: 'workspace', label: 'Edit Workspace', description: 'Edit workspace name and settings', scope: 'company', dangerous: false },
   { key: 'workspace.delete', module: 'workspace', label: 'Delete Workspace', description: 'Delete entire workspace and all child boards', scope: 'company', dangerous: true },
-  { key: 'workspace.archive', module: 'workspace', label: 'Archive Workspace', description: 'Archive or restore workspaces', scope: 'company', dangerous: false },
+  { key: 'workspace.archive', module: 'workspace', label: 'Archive Workspace', description: 'Archive workspaces', scope: 'company', dangerous: false },
+  { key: 'workspace.restore', module: 'workspace', label: 'Restore Workspace', description: 'Restore archived workspaces', scope: 'company', dangerous: false },
 
   // --- Team ---
   { key: 'team.view', module: 'team', label: 'View Teams', description: 'View teams and department memberships', scope: 'company', dangerous: false, planned: true },
@@ -391,7 +392,10 @@ const SYSTEM_ROLES = {
 /**
  * Legacy permission key mapping eliminated for Section 7 / Phase E
  */
-const LEGACY_PERMISSION_ALIASES = {};
+const LEGACY_PERMISSION_ALIASES = {
+  'workspace.restore': 'workspace.archive',
+  'project.restore': 'project.archive'
+};
 
 // Reverse map
 const REVERSE_ALIASES = {};
@@ -517,6 +521,7 @@ const PREREQUISITE_PERMISSIONS = {
   'workspace.edit': ['workspace.view'],
   'workspace.delete': ['workspace.view'],
   'workspace.archive': ['workspace.view'],
+  'workspace.restore': ['workspace.view'],
 
   // Audit
   'audit.view': ['workspace.view'],

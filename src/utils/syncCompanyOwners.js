@@ -49,7 +49,6 @@ async function syncCompanyOwners(db, targetUserId = null) {
         `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
          SELECT w.id, ?, ?, ?
          FROM workspaces w
-         WHERE w.is_archived = 0
          ON DUPLICATE KEY UPDATE role = VALUES(role), role_id = VALUES(role_id)`,
         [uid, ownerRoleName, ownerRoleId]
       );

@@ -186,6 +186,20 @@ async function getFullCard(cardId, dbInstance = null) {
     );
     card.attachments = attRes;
 
+    try {
+      const checkinsRes = await db.query(
+        `SELECT ci.*, u.name as user_name, u.avatar_url 
+         FROM check_ins ci 
+         JOIN users u ON ci.user_id = u.id 
+         WHERE ci.card_id = ? 
+         ORDER BY ci.work_date DESC, ci.id DESC`,
+        [cardId]
+      );
+      card.checkins = checkinsRes;
+    } catch (ciErr) {
+      card.checkins = [];
+    }
+
     card.active_focus = null;
     card.is_focus = false;
     card.is_deep_work = false;
@@ -324,8 +338,8 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
 router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     const { list_id, title, description, position, start_date, due_date, is_complete, is_archived, priority } = req.body;
     const reqs = [];
-    if (is_archived === true) reqs.push('task.archive');
-    if (is_archived === false) reqs.push('task.restore');
+    if (is_archived === true) reqs.push({ any: ['task.archive', 'task.edit'] });
+    if (is_archived === false) reqs.push({ any: ['task.restore', 'task.archive', 'archive.restore', 'task.edit'] });
     if (list_id !== undefined || position !== undefined) reqs.push('task.move');
     if (priority !== undefined) reqs.push({ any: ['task.set_priority', 'task.edit'] });
 

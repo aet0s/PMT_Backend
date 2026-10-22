@@ -308,10 +308,20 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
 router.patch(
   '/:id',
   requireAuth,
+  async (req, res, next) => {
+    try {
+      if (req.user?.id) {
+        await syncCompanyOwners(req.db, req.user.id);
+      }
+      next();
+    } catch (_) {
+      next();
+    }
+  },
   requirePermissionForBody((req) => {
     const { is_archived } = req.body;
-    if (is_archived === true) return 'workspace.archive';
-    if (is_archived === false) return 'workspace.restore';
+    if (is_archived === true) return { any: ['workspace.archive', 'workspace.edit'] };
+    if (is_archived === false) return { any: ['workspace.archive', 'workspace.restore', 'workspace.edit', 'archive.restore'] };
     return { any: ['workspace.edit', 'workspace.edit_settings'] };
   }),
   validate(updateWorkspaceSchema),
@@ -3853,6 +3863,8 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
   const routeWsId = Number(req.params.id);
 
   try {
+    await syncCompanyOwners(req.db, req.user.id);
+
     const isMember = await req.db.query(
       'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
       [routeWsId, req.user.id]
@@ -3959,22 +3971,20 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     ];
     const queryParams = [activeWsIds, allAllowedBoardIds];
 
-    if (boardId) {
-      if (!allAllowedBoardIds.includes(boardId)) {
-        return res.json({
-          cards: [],
-          pagination: { page, limit, total: 0, totalPages: 0 },
-          summary: { total: 0, completed: 0, in_progress: 0, completion_rate: 0, date: targetDate, mode },
-          filterOptions: { workspaces: allowedWorkspaces, labels: [], boards: [] }
-        });
-      }
+    const effectiveBoardId = (boardId && allAllowedBoardIds.includes(boardId)) ? boardId : null;
+    if (effectiveBoardId) {
       whereConditions.push('b.id = ?');
-      queryParams.push(boardId);
+      queryParams.push(effectiveBoardId);
     }
 
     if (labelId) {
-      whereConditions.push('EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label_id = ?)');
-      queryParams.push(labelId);
+      whereConditions.push(`EXISTS (
+        SELECT 1 FROM card_labels cl 
+        JOIN labels l2 ON cl.label_id = l2.id 
+        WHERE cl.card_id = c.id 
+        AND (cl.label_id = ? OR LOWER(l2.name) = (SELECT LOWER(name) FROM labels WHERE id = ? LIMIT 1))
+      )`);
+      queryParams.push(labelId, labelId);
     }
 
     if (search) {
@@ -4210,17 +4220,29 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardChecklistsMap[row.card_id].push(row);
       });
 
-      // 8. Card Focus (removed in v3)
-
-      // 9. Check-ins for targetDate
-      const ciRes = await req.db.query(
-        `SELECT ci.*, u.name as user_name
+      // 9. Check-ins for cards: in_progress mode fetches all updates for ongoing tasks
+      let ciSql;
+      let ciParams;
+      if (mode === 'in_progress') {
+        ciSql = `SELECT ci.*, u.name as user_name, u.avatar_url
          FROM check_ins ci
          JOIN users u ON ci.user_id = u.id
-         WHERE ci.card_id IN (?) AND ci.work_date = ?
-         ORDER BY ci.id DESC`,
-        [cardIds, targetDate]
-      );
+         WHERE ci.card_id IN (?)
+         ORDER BY ci.work_date DESC, ci.id DESC`;
+        ciParams = [cardIds];
+      } else {
+        ciSql = `SELECT ci.*, u.name as user_name, u.avatar_url
+         FROM check_ins ci
+         JOIN users u ON ci.user_id = u.id
+         WHERE ci.card_id IN (?)
+           AND (
+             ci.work_date = ?
+             OR ci.id IN (SELECT MAX(id) FROM check_ins WHERE card_id IN (?) GROUP BY card_id)
+           )
+         ORDER BY ci.work_date DESC, ci.id DESC`;
+        ciParams = [cardIds, targetDate, cardIds];
+      }
+      const ciRes = await req.db.query(ciSql, ciParams);
       ciRes.forEach((row) => {
         if (!cardCheckinsMap[row.card_id]) cardCheckinsMap[row.card_id] = [];
         cardCheckinsMap[row.card_id].push(row);
@@ -4235,7 +4257,8 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       const attachments = cardAttachmentsMap[c.id] || [];
       const checklistItems = cardChecklistsMap[c.id] || [];
       const focusList = cardFocusMap[c.id] || [];
-      const checkinsToday = cardCheckinsMap[c.id] || [];
+      const allCardCheckins = cardCheckinsMap[c.id] || [];
+      const checkinsToday = allCardCheckins.filter((ci) => ci.work_date === targetDate);
 
       const flags = [];
 
@@ -4264,6 +4287,18 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
           latestActivityEvent = 'added_comment';
           latestActor = topComm.user_name;
           latestMeta = { body: topComm.body };
+        }
+      }
+
+      // Check-ins activity: update latest activity if check-in is more recent
+      if (allCardCheckins.length > 0) {
+        const topCi = allCardCheckins[0];
+        const ciDate = new Date(topCi.created_at);
+        if (ciDate > latestActivityAt) {
+          latestActivityAt = ciDate;
+          latestActivityEvent = 'checkin';
+          latestActor = topCi.user_name;
+          latestMeta = { progress_pct: topCi.progress_pct, status: topCi.status, work_date: topCi.work_date };
         }
       }
 
@@ -4480,16 +4515,17 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         }
       }
 
-      // 6. Check-in Today (v3 SIMPLIFY: focus & deep work removed)
-      const todayCheckin = checkinsToday[0] || null;
+      // 6. Check-in: For in_progress, prefer the latest check-in across all days; otherwise check-in for targetDate
+      const topCheckin = (mode === 'in_progress' ? allCardCheckins[0] : (checkinsToday[0] || allCardCheckins[0])) || null;
 
       // Activity Pill & Genuine Work Evaluation
       let activityPill = null;
       let hasGenuineWork = false;
 
-      if (todayCheckin) {
-        const flagSuffix = todayCheckin.flags ? ` [${todayCheckin.flags}]` : '';
-        activityPill = `🎯 Check-in (${todayCheckin.progress_pct}% - ${todayCheckin.status}) by ${todayCheckin.user_name}${flagSuffix}`;
+      if (topCheckin) {
+        const flagSuffix = topCheckin.flags ? ` [${topCheckin.flags}]` : '';
+        const countSuffix = allCardCheckins.length > 1 ? ` (${allCardCheckins.length} updates)` : '';
+        activityPill = `🎯 Check-in (${topCheckin.progress_pct}% - ${topCheckin.status}) by ${topCheckin.user_name}${flagSuffix}${countSuffix}`;
         hasGenuineWork = true;
       } else if (creditedChecklistCount > 0 && creditedCommentsCount > 0) {
         const actor = lastChecklistActor ? ` by ${lastChecklistActor}` : '';
@@ -4541,24 +4577,30 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         comments_count: creditedCommentsCount,
         has_focus: false,
         is_deep_work: false,
-        checkin_today: todayCheckin
+        checkin_today: topCheckin,
+        latest_checkin: topCheckin,
+        checkins: allCardCheckins,
+        total_checkins_count: allCardCheckins.length
       };
     });
 
-    // Filter options restricted to allowed boards only (Bug A fix)
+    // Filter options restricted to allowed boards only
+    const candidateBoardIds = effectiveBoardId ? [effectiveBoardId] : allAllowedBoardIds;
     const labels = await req.db.query(
-      `SELECT DISTINCT l.id, l.name, l.color
+      `SELECT MIN(l.id) as id, l.name, l.color
        FROM labels l
-       WHERE l.board_id IN (?)
+       WHERE l.board_id IN (?) AND l.name IS NOT NULL AND TRIM(l.name) != ''
+       GROUP BY l.name, l.color
        ORDER BY l.name ASC`,
-      [allAllowedBoardIds]
+      [candidateBoardIds]
     );
 
     const boards = await req.db.query(
-      `SELECT id, name, workspace_id
-       FROM boards
-       WHERE id IN (?) AND is_archived = 0
-       ORDER BY name ASC`,
+      `SELECT b.id, b.name, b.workspace_id, w.name as workspace_name
+       FROM boards b
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.id IN (?) AND b.is_archived = 0
+       ORDER BY b.name ASC`,
       [allAllowedBoardIds]
     );
 
@@ -4963,7 +5005,9 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
         cards_needing_update_count: cardsNeedingUpdate.length,
         open_cards_count: userOpenCards.length,
         open_cards: userOpenCards.map((c) => ({
+          id: c.id,
           card_id: c.id,
+          title: c.title,
           card_title: c.title,
           due_date: c.due_date,
           first_moved_or_assigned_at: c.first_moved_or_assigned_at,
@@ -4977,7 +5021,9 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
           unanswered_reviews: unansweredReviews,
           completed_cards: userCompletedCards.map((c) => ({
             id: c.id,
+            card_id: c.id,
             title: c.title,
+            card_title: c.title,
             completed_at: c.completed_at,
             completion_note: c.completion_note,
             completion_evidence_url: c.completion_evidence_url

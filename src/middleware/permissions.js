@@ -343,8 +343,8 @@ async function resolveWorkspaceId(req) {
 
   // 3. Fallback for workspace routes without resource params
   if (!derivedWorkspaceId) {
-    const rawWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || req.query?.workspace_id;
-    if (rawWs) derivedWorkspaceId = Number(rawWs);
+    const rawWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (req.query?.workspace_id && req.query.workspace_id !== 'all' ? req.query.workspace_id : null);
+    if (rawWs && !isNaN(Number(rawWs))) derivedWorkspaceId = Number(rawWs);
   }
 
   // Fallback for notifications
@@ -358,15 +358,31 @@ async function resolveWorkspaceId(req) {
     }
   }
 
+  // Fallback for archive
+  if (!derivedWorkspaceId && (routePath.includes('/archive') || req.baseUrl?.includes('/archive') || req.originalUrl?.includes('/archive')) && req.user?.id) {
+    const wmRes = await db.query(
+      'SELECT workspace_id FROM workspace_members WHERE user_id = ? ORDER BY workspace_id ASC LIMIT 1',
+      [req.user.id]
+    );
+    if (wmRes[0]?.workspace_id) {
+      derivedWorkspaceId = wmRes[0].workspace_id;
+    } else {
+      const anyWs = await db.query('SELECT id FROM workspaces ORDER BY id ASC LIMIT 1');
+      if (anyWs[0]?.id) {
+        derivedWorkspaceId = anyWs[0].id;
+      }
+    }
+  }
+
   if (!derivedWorkspaceId) {
     return null;
   }
 
   // 4. STRICT CONSISTENCY VALIDATION:
   // Any client-supplied board_id or workspace_id in params, query, or body MUST agree with derived values.
-  // For tracker/reporting endpoints where query.workspace_id acts as an optional sub-filter, do not trigger mismatch.
-  const isFilterQuery = req.path?.includes('daily-tracker') || req.originalUrl?.includes('daily-tracker') || req.path?.includes('reports') || req.originalUrl?.includes('reports');
-  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (!isFilterQuery ? req.query?.workspace_id : null);
+  // For tracker/reporting/archive endpoints where query.workspace_id acts as an optional sub-filter, do not trigger mismatch.
+  const isFilterQuery = req.path?.includes('daily-tracker') || req.originalUrl?.includes('daily-tracker') || req.path?.includes('reports') || req.originalUrl?.includes('reports') || req.path?.includes('archive') || req.originalUrl?.includes('archive') || req.baseUrl?.includes('archive');
+  const clientWs = req.params?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || (!isFilterQuery && req.query?.workspace_id !== 'all' ? req.query?.workspace_id : null);
   if (clientWs && Number(clientWs) !== Number(derivedWorkspaceId)) {
     const err = new Error(`Workspace mismatch: resource belongs to workspace ${derivedWorkspaceId}, but request supplied ${clientWs}`);
     err.status = 400;
@@ -382,17 +398,26 @@ async function resolveWorkspaceId(req) {
     throw err;
   }
 
-  // 5. Visibility check: Actor must belong to the resource's workspace
+  // 5. Visibility check: Actor must belong to the resource's workspace or be a company Owner/Admin
   if (req.user?.id) {
     const memRows = await db.query(
       'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? LIMIT 1',
       [derivedWorkspaceId, req.user.id]
     );
     if (memRows.length === 0) {
-      const err = new Error('Resource not found');
-      err.status = 404;
-      err.code = 'NOT_FOUND';
-      throw err;
+      const companyAdminRows = await db.query(
+        `SELECT 1 FROM workspace_members wm
+         JOIN roles r ON wm.role_id = r.id
+         WHERE wm.user_id = ? AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)) OR wm.role IN ('Owner', 'Super Admin', 'Admin'))
+         LIMIT 1`,
+        [req.user.id]
+      );
+      if (companyAdminRows.length === 0) {
+        const err = new Error('Resource not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
     }
   }
 
@@ -457,6 +482,31 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
   }
 
   if (!wsRole) {
+    // Check if user has company-level Owner or Admin standing across tenant
+    const companyRoleRows = await db.query(
+      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank, r.is_system, r.is_editable
+       FROM workspace_members wm
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       WHERE wm.user_id = ? AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)) OR wm.role IN ('Owner', 'Super Admin', 'Admin'))
+       ORDER BY COALESCE(r.rank, 0) DESC LIMIT 1`,
+      [userId]
+    );
+    if (companyRoleRows.length > 0) {
+      const cRole = companyRoleRows[0];
+      const isOwner = isOwnerRole(cRole) || cRole.role_name === 'Owner' || cRole.role_name === 'Super Admin' || Number(cRole.rank) >= 100;
+      if (isOwner) {
+        if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, true);
+        return true;
+      }
+      if (Number(cRole.rank) >= 80 || cRole.role_name === 'Admin') {
+        const disallowedForAdmin = ['workspace.delete', 'company.delete', 'company.export_data', 'billing.manage'];
+        if (!disallowedForAdmin.includes(permissionKey)) {
+          if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, true);
+          return true;
+        }
+      }
+    }
+
     if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, false);
     return false;
   }

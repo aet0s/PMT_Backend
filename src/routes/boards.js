@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { parseJson } = require('../db/mysql');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
-const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, accessibleBoardIds, getActiveDb } = require('../middleware/permissions');
+const { requirePermission, requirePermissionForBody, userHasPermission, usersWithPermission, getUserPermissions, accessibleBoardIds, getActiveDb } = require('../middleware/permissions');
 const { getRoleRank, normalizeRoleName } = require('../utils/roleRank');
 const { broadcastBoardEvent, sendUserEvent } = require('../socket');
 const path = require('path');
@@ -438,8 +438,8 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
 // PATCH /api/boards/:id
 router.patch('/:id', requireAuth, requirePermissionForBody((req) => {
   const { name, background_color, is_archived } = req.body;
-  if (is_archived === true) return 'project.archive';
-  if (is_archived === false) return 'archive.restore';
+  if (is_archived === true) return { any: ['project.archive', 'project.edit_settings'] };
+  if (is_archived === false) return { any: ['archive.restore', 'project.archive', 'project.edit_settings'] };
   return 'project.edit_settings';
 }), validate(updateBoardSchema), async (req, res, next) => {
   const boardId = Number(req.params.id);
@@ -630,7 +630,7 @@ router.delete(
 });
 
 // GET /api/boards/:id/workspace-members (List workspace members and their access status to this board)
-router.get('/:id/workspace-members', requireAuth, requirePermission('member.view'), async (req, res, next) => {
+router.get('/:id/workspace-members', requireAuth, requirePermission({ any: ['member.view', 'project.view'] }), async (req, res, next) => {
   const boardId = Number(req.params.id);
 
   try {
@@ -644,18 +644,30 @@ router.get('/:id/workspace-members', requireAuth, requirePermission('member.view
       `SELECT u.id, u.name, u.email, u.avatar_url, 
               COALESCE(r.name, wm.role, 'Team Member') as workspace_role,
               bm.role as board_role,
-              (EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = wm.role_id AND p.key IN ('project.view', 'project.create')) OR bm.user_id IS NOT NULL) as has_access,
-              (EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = wm.role_id AND p.key IN ('project.manage_members', 'workspace.edit'))) as is_workspace_admin
+              (
+                COALESCE(r.rank, 0) >= 80
+                OR wm.role IN ('Owner', 'Super Admin', 'Admin')
+                OR r.name IN ('Owner', 'Super Admin', 'Admin')
+              ) as is_workspace_admin
        FROM workspace_members wm
        JOIN users u ON wm.user_id = u.id
-       LEFT JOIN roles r ON wm.role_id = r.id
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
        LEFT JOIN board_members bm ON bm.board_id = ? AND bm.user_id = u.id
        WHERE wm.workspace_id = ?
        ORDER BY is_workspace_admin DESC, u.name ASC`,
       [boardId, workspaceId]
     );
 
-    return res.json({ members: membersRes });
+    const userIds = membersRes.map((m) => m.id);
+    const authorizedIds = new Set(await usersWithPermission(req.db, workspaceId, boardId, 'project.view', userIds));
+
+    const members = membersRes.map((m) => ({
+      ...m,
+      has_access: authorizedIds.has(m.id),
+      is_workspace_admin: Boolean(m.is_workspace_admin)
+    }));
+
+    return res.json({ members });
   } catch (err) {
     next(err);
   }
@@ -1099,7 +1111,7 @@ router.get('/:id/archived', requireAuth, requirePermission(['archive.view', 'pro
 });
 
 // POST /api/boards/:id/archive - Archive board
-router.post('/:id/archive', requireAuth, requirePermission('project.archive'), async (req, res, next) => {
+router.post('/:id/archive', requireAuth, requirePermission({ any: ['project.archive', 'project.edit_settings'] }), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
@@ -1127,7 +1139,7 @@ router.post('/:id/archive', requireAuth, requirePermission('project.archive'), a
 });
 
 // POST /api/boards/:id/restore - Restore archived board
-router.post('/:id/restore', requireAuth, requirePermission('archive.restore'), async (req, res, next) => {
+router.post('/:id/restore', requireAuth, requirePermission({ any: ['archive.restore', 'project.archive', 'project.edit_settings'] }), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
