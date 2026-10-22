@@ -172,13 +172,45 @@ router.get('/', requireAuth, async (req, res, next) => {
        ORDER BY w.id ASC`,
       [req.user.id]
     );
+
+    // Count active tasks assigned to the current user per workspace
+    let assignedCountMap = {};
+    if (wsRes.length > 0) {
+      try {
+        const assignedCounts = await req.db.query(
+          `SELECT b.workspace_id, COUNT(DISTINCT c.id) as assigned_count
+           FROM cards c
+           JOIN card_members cm ON c.id = cm.card_id
+           JOIN lists l ON c.list_id = l.id
+           JOIN boards b ON l.board_id = b.id
+           WHERE cm.user_id = ?
+             AND (c.is_archived = 0 OR c.is_archived IS NULL)
+             AND (c.is_complete = 0 OR c.is_complete IS NULL)
+             AND (l.is_done_list = 0 OR l.is_done_list IS NULL)
+             AND (b.is_archived = 0 OR b.is_archived IS NULL)
+           GROUP BY b.workspace_id`,
+          [req.user.id]
+        );
+        assignedCounts.forEach((r) => {
+          assignedCountMap[r.workspace_id] = Number(r.assigned_count) || 0;
+        });
+      } catch (cntErr) {
+        console.error('[WORKSPACES_ASSIGNED_TASKS_COUNT_ERROR]', cntErr);
+      }
+    }
+
     const workspacesWithParsedSettings = wsRes.map((w) => {
       let parsed = w.settings;
       if (typeof parsed === 'string') {
         try { parsed = JSON.parse(parsed); } catch {}
       }
       const iconUrl = w.icon_url || parsed?.icon_url || null;
-      return { ...w, icon_url: iconUrl, settings: parsed };
+      return {
+        ...w,
+        icon_url: iconUrl,
+        settings: parsed,
+        assigned_tasks_count: assignedCountMap[w.id] || 0
+      };
     });
     return res.json({ workspaces: workspacesWithParsedSettings });
   } catch (err) {
@@ -207,7 +239,36 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
       try { parsed = JSON.parse(parsed); } catch {}
     }
     const iconUrl = w.icon_url || parsed?.icon_url || null;
-    return res.json({ workspace: { ...w, icon_url: iconUrl, settings: parsed } });
+
+    let assignedTasksCount = 0;
+    try {
+      const assignedCountRes = await req.db.query(
+        `SELECT COUNT(DISTINCT c.id) as assigned_count
+         FROM cards c
+         JOIN card_members cm ON c.id = cm.card_id
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE b.workspace_id = ?
+           AND cm.user_id = ?
+           AND (c.is_archived = 0 OR c.is_archived IS NULL)
+           AND (c.is_complete = 0 OR c.is_complete IS NULL)
+           AND (l.is_done_list = 0 OR l.is_done_list IS NULL)
+           AND (b.is_archived = 0 OR b.is_archived IS NULL)`,
+        [workspaceId, req.user.id]
+      );
+      assignedTasksCount = Number(assignedCountRes[0]?.assigned_count) || 0;
+    } catch (cntErr) {
+      console.error('[WORKSPACE_DETAILS_ASSIGNED_COUNT_ERROR]', cntErr);
+    }
+
+    return res.json({
+      workspace: {
+        ...w,
+        icon_url: iconUrl,
+        settings: parsed,
+        assigned_tasks_count: assignedTasksCount
+      }
+    });
   } catch (err) {
     next(err);
   }

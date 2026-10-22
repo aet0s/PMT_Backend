@@ -6,7 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
 const localStorage = require('../storage');
-const { broadcastBoardEvent } = require('../socket');
+const { broadcastBoardEvent, sendUserEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
 const { processOutbox } = require('../services/notificationOutbox');
@@ -1057,6 +1057,8 @@ router.post(
       );
       broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
     }
+
+    sendUserEvent(user_id, 'user:workspace_tasks_updated', { cardId, action }, req.tenant ? req.tenant.id : null);
 
     return res.json({ action, user_id });
   } catch (err) {
