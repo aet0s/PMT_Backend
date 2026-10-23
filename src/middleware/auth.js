@@ -26,6 +26,9 @@ function extractToken(req) {
   if (req.cookies && req.cookies.token) {
     return req.cookies.token;
   }
+  if (req.query && req.query.token) {
+    return String(req.query.token).trim();
+  }
   return null;
 }
 
@@ -235,6 +238,10 @@ const requireAuth = async (req, res, next) => {
     }
 
     const dbUser = authProfile.dbUser;
+    if (dbUser) {
+      req.user.name = req.user.name || dbUser.name;
+      req.user.email = req.user.email || dbUser.email;
+    }
     if (dbUser.locked_until && new Date(dbUser.locked_until) > new Date()) {
       return res.status(423).json({
         error: { message: 'Account is temporarily locked due to multiple failed login attempts', code: 'ACCOUNT_LOCKED' }
@@ -307,6 +314,18 @@ const requireAuth = async (req, res, next) => {
         });
       }
     }
+
+    try {
+      const { setAuditContext } = require('../utils/auditContext');
+      setAuditContext({
+        actor: req.user,
+        actorUserId: req.user.id,
+        actorType: 'user',
+        actorName: req.user.name,
+        actorEmail: req.user.email,
+        sessionId: req.user.sessionId || sessionId
+      });
+    } catch (_) {}
 
     next();
   } catch (err) {

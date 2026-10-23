@@ -234,6 +234,10 @@ const ROUTE_NOTIFICATION_MAP = {
     noNotify: true,
     reason: 'Role creation is non-notifiable (recorded in audit logs)'
   },
+  'POST /api/workspaces/:id/audit-events/verify': {
+    noNotify: true,
+    reason: 'Audit integrity verification is a compliance check, not a user-notifiable event'
+  },
   'PATCH /api/roles/:id': {
     noNotify: true,
     reason: 'Role update is non-notifiable (recorded in audit logs)'

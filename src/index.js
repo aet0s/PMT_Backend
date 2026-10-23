@@ -64,6 +64,12 @@ const { getAllowedOrigins, isOriginAllowed } = require('./utils/corsOrigins');
 const { requestIdMiddleware } = require('./middleware/requestId');
 app.use(requestIdMiddleware);
 
+const { auditContextMiddleware } = require('./utils/auditContext');
+app.use(auditContextMiddleware);
+
+const { auditSafetyNetMiddleware } = require('./middleware/auditSafetyNet');
+app.use(auditSafetyNetMiddleware);
+
 // Helmet Security Headers with cross-origin resource policy for subdomains and HSTS in production
 app.use(
   helmet({

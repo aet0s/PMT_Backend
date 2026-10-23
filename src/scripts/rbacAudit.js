@@ -389,13 +389,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 157 || prodSingleResult.count !== 157) {
-    console.error(`[AUDIT FAILED] Expected exactly 157 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 165 || prodSingleResult.count !== 165) {
+    console.error(`[AUDIT FAILED] Expected exactly 165 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 158 || testSingleResult.count !== 158) {
-    console.error(`[AUDIT FAILED] Expected exactly 158 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 166 || testSingleResult.count !== 166) {
+    console.error(`[AUDIT FAILED] Expected exactly 166 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -418,18 +418,19 @@ function runAudit() {
   const nonPlannedPermissions = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
   const plannedPermissions = PERMISSIONS.filter((p) => p.planned).map((p) => p.key);
 
-  if (PERMISSIONS.length !== 151) {
-    console.error(`[AUDIT FAILED] Expected exactly 151 registry permissions, found ${PERMISSIONS.length}`);
+  if (PERMISSIONS.length !== 152) {
+    console.error(`[AUDIT FAILED] Expected exactly 152 registry permissions, found ${PERMISSIONS.length}`);
     process.exit(1);
   }
-  if (nonPlannedPermissions.length !== 81 || plannedPermissions.length !== 70) {
-    console.error(`[AUDIT FAILED] Expected 81 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
+  if (nonPlannedPermissions.length !== 82 || plannedPermissions.length !== 70) {
+    console.error(`[AUDIT FAILED] Expected 82 active and 70 planned permissions, found ${nonPlannedPermissions.length} active and ${plannedPermissions.length} planned`);
     process.exit(1);
   }
 
   // The fine-grained or handler-enforced permissions complementing direct route declarations:
   const FINE_GRAINED_AND_HANDLER_PERMISSIONS = new Set([
     'workspace.archive',
+    'workspace.restore',
     'role.assign',
     'list.reorder',
     'task.move',

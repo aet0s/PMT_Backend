@@ -16,6 +16,14 @@ const {
 const { sendUserEvent, disconnectUserSockets, broadcastWorkspaceEvent } = require('../socket');
 const { notify } = require('../services/notify');
 const { logActivity } = require('../utils/activity');
+const auditService = require('../services/audit');
+const {
+  getAuditEvents,
+  getAuditEventById,
+  getAuditEventFacets,
+  exportAuditEvents,
+  verifyAuditIntegrity
+} = require('./auditEventsController');
 const { revokeAllSessions } = require('../services/sessionService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
@@ -1233,45 +1241,71 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     );
     const oldBoardIds = oldBoardsRes.map((r) => r.board_id);
 
-    // Update member role_id and role name
-    await req.db.execute(
-      'UPDATE workspace_members SET role_id = ?, role = ? WHERE workspace_id = ? AND user_id = ?',
-      [role_id, newRole.name, workspaceId, targetUserId]
-    );
+    // Atomic Database Transaction for member role and board permissions (Item 2a, Item 2b)
+    await req.db.transaction(async (tx) => {
+      // Update member role_id and role name
+      await tx.execute(
+        'UPDATE workspace_members SET role_id = ?, role = ? WHERE workspace_id = ? AND user_id = ?',
+        [role_id, newRole.name, workspaceId, targetUserId]
+      );
 
-    // Update board permissions if provided
+      // Update board permissions if provided
+      if (Array.isArray(board_ids)) {
+        const wsBoards = await tx.query('SELECT id FROM boards WHERE workspace_id = ?', [workspaceId]);
+        const validWsBoardIds = wsBoards.map((b) => b.id);
+
+        if (validWsBoardIds.length > 0) {
+          if (board_ids.length > 0) {
+            await tx.query(
+              `DELETE FROM board_members 
+               WHERE user_id = ? AND board_id IN (?) AND board_id NOT IN (?)`,
+              [targetUserId, validWsBoardIds, board_ids]
+            );
+          } else {
+            await tx.query(
+              `DELETE FROM board_members 
+               WHERE user_id = ? AND board_id IN (?)`,
+              [targetUserId, validWsBoardIds]
+            );
+          }
+        }
+
+        for (const bId of board_ids) {
+          if (validWsBoardIds.includes(bId)) {
+            await tx.execute(
+              `INSERT INTO board_members (board_id, user_id, role)
+               VALUES (?, ?, 'member')
+               ON DUPLICATE KEY UPDATE role = VALUES(role)`,
+              [bId, targetUserId]
+            );
+          }
+        }
+      }
+
+      // Record audit event inside same transaction (fail-closed)
+      await auditService.record({
+        action: 'member.role_changed',
+        category: 'member',
+        entityType: 'user',
+        entityId: targetUserId,
+        entityLabel: targetRole.role_name,
+        workspaceId,
+        targetUserId,
+        changes: [
+          { field: 'role_id', from: oldRoleId, to: role_id },
+          { field: 'role_name', from: targetRole.role_name, to: newRole.name }
+        ],
+        meta: {
+          old_role: targetRole.role_name,
+          new_role: newRole.name,
+          board_ids: board_ids || []
+        },
+        db: tx
+      });
+    });
+
+    // Notify added/removed board access individually
     if (Array.isArray(board_ids)) {
-      const wsBoards = await req.db.query('SELECT id FROM boards WHERE workspace_id = ?', [workspaceId]);
-      const validWsBoardIds = wsBoards.map((b) => b.id);
-
-      if (validWsBoardIds.length > 0) {
-        if (board_ids.length > 0) {
-          await req.db.query(
-            `DELETE FROM board_members 
-             WHERE user_id = ? AND board_id IN (?) AND board_id NOT IN (?)`,
-            [targetUserId, validWsBoardIds, board_ids]
-          );
-        } else {
-          await req.db.query(
-            `DELETE FROM board_members 
-             WHERE user_id = ? AND board_id IN (?)`,
-            [targetUserId, validWsBoardIds]
-          );
-        }
-      }
-
-      for (const bId of board_ids) {
-        if (validWsBoardIds.includes(bId)) {
-          await req.db.execute(
-            `INSERT INTO board_members (board_id, user_id, role)
-             VALUES (?, ?, 'member')
-             ON DUPLICATE KEY UPDATE role = VALUES(role)`,
-            [bId, targetUserId]
-          );
-        }
-      }
-
-      // Notify added/removed board access individually
       const addedBoardIds = board_ids.filter((bId) => !oldBoardIds.includes(bId));
       const removedBoardIds = oldBoardIds.filter((bId) => !board_ids.includes(bId));
 
@@ -1288,7 +1322,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
             meta: { boardName: bRes[0]?.name || 'Board' }
           },
           req.db
-        );
+        ).catch(() => {});
       }
 
       for (const bId of removedBoardIds) {
@@ -1304,7 +1338,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
             meta: { boardName: bRes[0]?.name || 'Board' }
           },
           req.db
-        );
+        ).catch(() => {});
       }
     }
 
@@ -1329,7 +1363,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
           meta: { roleName: roleRes[0]?.name || 'Member', workspaceName: wsRes[0]?.name || 'Workspace' }
         },
         req.db
-      );
+      ).catch(() => {});
     }
 
     broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', { workspaceId, targetUserId, roleId: role_id }, req.headers['x-origin-id'], req.tenant?.id);
@@ -1984,7 +2018,10 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
   const search = req.query.search ? String(req.query.search).trim() : null;
 
   try {
-    const whereConditions = ['(a.workspace_id = ? OR b.workspace_id = ?)'];
+    const whereConditions = [
+      '(a.workspace_id = ? OR b.workspace_id = ?)',
+      "a.action_type NOT LIKE '%login%' AND a.action_type NOT LIKE '%logout%' AND a.action_type NOT LIKE '%password%' AND a.action_type NOT LIKE '%2fa%' AND a.action_type NOT LIKE '%session%' AND a.action_type NOT LIKE '%invite%' AND a.action_type NOT LIKE '%role%'"
+    ];
     const queryParams = [workspaceId, workspaceId];
 
     // Section 5.4: Filter activity by accessibleBoardIds
@@ -2012,19 +2049,17 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
     }
 
     const category = (req.query.category || '').trim().toLowerCase();
+    const FEED_CATEGORY_ACTION_MAP = {
+      tasks: ['created_card', 'copied_card', 'card.copied', 'moved_card', 'marked_complete', 'completed_card', 'marked_incomplete', 'deleted_card', 'archived_card', 'unarchived_card', 'due_date_changed'],
+      comments: ['added_comment'],
+      members: ['member_added', 'member_removed', 'assigner_added', 'assigner_removed'],
+      attachments: ['attachment_added'],
+      labels: ['label_added', 'label_removed']
+    };
     if (category && category !== 'all') {
-      if (category === 'auth') {
-        whereConditions.push("(a.action_type LIKE '%login%' OR a.action_type LIKE '%logout%' OR a.action_type LIKE '%password%' OR a.action_type LIKE '%2fa%' OR a.action_type LIKE '%session%')");
-      } else if (category === 'tasks' || category === 'cards') {
-        whereConditions.push("(a.action_type LIKE '%card%' OR a.action_type LIKE '%task%' OR a.action_type LIKE '%due_date%' OR a.action_type LIKE '%complete%' OR a.action_type LIKE '%checklist%')");
-      } else if (category === 'comments') {
-        whereConditions.push("(a.action_type LIKE '%comment%')");
-      } else if (category === 'members') {
-        whereConditions.push("(a.action_type LIKE '%member%' OR a.action_type LIKE '%assign%' OR a.action_type LIKE '%invite%')");
-      } else if (category === 'roles') {
-        whereConditions.push("(a.action_type LIKE '%role%' OR a.action_type LIKE '%permission%')");
-      } else if (category === 'boards') {
-        whereConditions.push("(a.action_type LIKE '%board%' OR a.action_type LIKE '%list%' OR a.action_type LIKE '%label%')");
+      if (FEED_CATEGORY_ACTION_MAP[category]) {
+        whereConditions.push('a.action_type IN (?)');
+        queryParams.push(FEED_CATEGORY_ACTION_MAP[category]);
       }
     }
 
@@ -2085,7 +2120,9 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
       [workspaceId]
     );
 
-    // 4. Parse meta_json safely
+    const canViewAudit = await userHasPermission(req.user.id, workspaceId, 'audit.view', req.db);
+
+    // 4. Parse meta_json safely and strip sensitive meta if user lacks audit.view
     const activities = rows.map((row) => {
       let meta = {};
       try {
@@ -2098,6 +2135,13 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
         meta = {};
       }
 
+      if (!canViewAudit) {
+        delete meta.email;
+        delete meta.ip_address;
+        delete meta.user_agent;
+        delete meta.ip;
+      }
+
       return {
         id: row.id,
         board_id: row.board_id,
@@ -2107,7 +2151,7 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
         card_title: row.card_title || meta.card_title || meta.title || null,
         user_id: row.user_id,
         user_name: row.user_name || 'System',
-        user_email: row.user_email,
+        user_email: canViewAudit ? row.user_email : undefined,
         user_avatar: row.user_avatar,
         action_type: row.action_type,
         meta,
@@ -3610,43 +3654,26 @@ async function isCompanyAdminOrOwner(userId, db) {
   return rows.length > 0;
 }
 
-// GET /api/workspaces/:id/audit - View audit logs
-router.get('/:id/audit', requireAuth, requirePermission('audit.view'), async (req, res, next) => {
-  const workspaceId = Number(req.params.id);
-  const limit = Math.min(Number(req.query.limit) || 50, 200);
-  try {
-    const logs = await req.db.query(
-      `SELECT id, user_id, email, event_type, ip_address, user_agent, metadata, created_at
-       FROM auth_audit_log
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      [limit]
-    );
-    return res.json({ logs });
-  } catch (err) {
-    next(err);
-  }
-});
+// GET /api/workspaces/:id/audit-events - Workspace compliance audit events
+router.get('/:id/audit-events', requireAuth, requirePermission('audit.view'), getAuditEvents);
 
-// GET /api/workspaces/:id/audit/export - Export audit logs as CSV
-router.get('/:id/audit/export', requireAuth, requirePermission('audit.export'), async (req, res, next) => {
-  const workspaceId = Number(req.params.id);
-  try {
-    const logs = await req.db.query(
-      `SELECT id, user_id, email, event_type, ip_address, user_agent, created_at
-       FROM auth_audit_log
-       ORDER BY created_at DESC
-       LIMIT 5000`
-    );
-    const header = 'id,user_id,email,event_type,ip_address,user_agent,created_at\n';
-    const rows = logs.map(l => `${l.id},${l.user_id || ''},"${l.email || ''}","${l.event_type || ''}","${l.ip_address || ''}","${(l.user_agent || '').replace(/"/g, '""')}","${l.created_at}"`).join('\n');
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="audit-export-ws-${workspaceId}.csv"`);
-    return res.send(header + rows);
-  } catch (err) {
-    next(err);
-  }
-});
+// GET /api/workspaces/:id/audit-events/facets - Dropdown facets and counts
+router.get('/:id/audit-events/facets', requireAuth, requirePermission('audit.view'), getAuditEventFacets);
+
+// GET /api/workspaces/:id/audit-events/export - Export audit logs as CSV or JSON
+router.get('/:id/audit-events/export', requireAuth, requirePermission('audit.export'), exportAuditEvents);
+
+// POST /api/workspaces/:id/audit-events/verify - Verify cryptographic hash-chain integrity
+router.post('/:id/audit-events/verify', requireAuth, requirePermission('audit.view'), verifyAuditIntegrity);
+
+// GET /api/workspaces/:id/audit-events/:eventId - Full audit event detail with changes & hash
+router.get('/:id/audit-events/:eventId', requireAuth, requirePermission('audit.view'), getAuditEventById);
+
+// GET /api/workspaces/:id/audit - Legacy alias returning workspace-scoped compliance audit events
+router.get('/:id/audit', requireAuth, requirePermission('audit.view'), getAuditEvents);
+
+// GET /api/workspaces/:id/audit/export - Legacy alias exporting workspace-scoped compliance audit events
+router.get('/:id/audit/export', requireAuth, requirePermission('audit.export'), exportAuditEvents);
 
 // GET /api/workspaces/:id/search - Global workspace search
 router.get('/:id/search', requireAuth, requirePermission('search.use'), async (req, res, next) => {
@@ -4079,6 +4106,396 @@ function getWorkingDaysBetween(startDate, endDate, workingDays = [1, 2, 3, 4, 5]
   }
   return Math.max(1, count);
 }
+
+// GET /api/workspaces/:id/my-tasks - Comprehensive personal work hub for any user (with team switcher for managers/leads)
+router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
+  const workspaceId = Number(req.params.id);
+  const currentUserId = Number(req.user.id);
+
+  try {
+    await syncCompanyOwners(req.db, currentUserId);
+
+    // 1. Verify user belongs to workspace
+    const memberCheck = await req.db.query(
+      `SELECT wm.role, wm.role_id, COALESCE(r.name, wm.role, 'Team Member') as role_name
+       FROM workspace_members wm
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, currentUserId]
+    );
+
+    if (memberCheck.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied: You are not a member of this workspace', code: 'FORBIDDEN' } });
+    }
+
+    const currentRole = (memberCheck[0].role_name || '').toLowerCase();
+    // Strictly Owner only can switch and inspect other members
+    const isOwner = ['owner', 'super admin'].includes(currentRole);
+    const canSwitchMember = isOwner;
+
+    // 2. Determine target user (strictly current user unless requester is Owner)
+    let targetUserId = currentUserId;
+    if (req.query.userId && Number(req.query.userId) !== currentUserId) {
+      if (canSwitchMember) {
+        targetUserId = Number(req.query.userId);
+      }
+    }
+
+    // 3. Get target user details
+    const targetUserRows = await req.db.query(
+      `SELECT u.id, u.name, u.email, u.avatar_url,
+              COALESCE(r.name, wm.role, 'Team Member') as role_name
+       FROM users u
+       JOIN workspace_members wm ON u.id = wm.user_id
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       WHERE wm.workspace_id = ? AND u.id = ?`,
+      [workspaceId, targetUserId]
+    );
+
+    if (targetUserRows.length === 0) {
+      return res.status(404).json({ error: { message: 'Target user is not a member of this workspace', code: 'NOT_FOUND' } });
+    }
+    const targetUser = targetUserRows[0];
+
+    // 4. Team members list (strictly for Owner switcher only)
+    let teamMembers = [];
+    if (canSwitchMember) {
+      teamMembers = await req.db.query(
+        `SELECT u.id, u.name, u.email, u.avatar_url,
+                COALESCE(r.name, wm.role, 'Team Member') as role_name,
+                COUNT(DISTINCT CASE WHEN c.is_archived = 0 AND c.is_complete = 0 AND (l.is_done_list = 0 OR l.is_done_list IS NULL) THEN c.id END) as active_tasks_count
+         FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+         LEFT JOIN card_members cm ON u.id = cm.user_id
+         LEFT JOIN cards c ON cm.card_id = c.id
+         LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+         LEFT JOIN boards b ON l.board_id = b.id AND b.workspace_id = wm.workspace_id AND b.is_archived = 0
+         WHERE wm.workspace_id = ? AND wm.status != 'deactivated'
+         GROUP BY u.id, u.name, u.email, u.avatar_url, role_name
+         ORDER BY u.name ASC`,
+        [workspaceId]
+      );
+    }
+
+    // 5. Check accessible boards for the requesting user
+    const hasAccessAll = await userHasPermission(currentUserId, workspaceId, 'project.access_all', req.db);
+    let allowedBoardIds = [];
+    if (!hasAccessAll) {
+      allowedBoardIds = await accessibleBoardIds(currentUserId, workspaceId, 'project.view', req.db);
+      if (allowedBoardIds.length === 0) {
+        return res.json({
+          user: targetUser,
+          canSwitchMember,
+          teamMembers,
+          boards: [],
+          summary: { total_assigned: 0, active_count: 0, todo: 0, in_progress: 0, review: 0, completed: 0, overdue: 0, due_soon: 0, assigned_by_me: 0, completion_rate: 0 },
+          cards: [],
+          pagination: { page: 1, limit: 20, total: 0, totalPages: 1 }
+        });
+      }
+    }
+
+    let boardFilterClause = '';
+    const boardFilterParams = [workspaceId, targetUserId];
+    if (!hasAccessAll) {
+      boardFilterClause += ' AND b.id IN (?)';
+      boardFilterParams.push(allowedBoardIds);
+    }
+
+    // 6. Query all assigned cards for target user
+    const assignedRows = await req.db.query(
+      `SELECT
+         c.id, c.title, c.description, c.due_date, c.start_date, c.is_complete, c.completed_at, c.created_at,
+         c.list_id, l.name as list_name, l.position as list_position,
+         b.id as board_id, b.name as board_name, b.background_color as board_bg,
+         CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
+         CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+         CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+       FROM card_members cm
+       JOIN cards c ON cm.card_id = c.id
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+       WHERE b.workspace_id = ?
+         AND cm.user_id = ?
+         AND c.is_archived = 0
+         ${boardFilterClause}
+       ORDER BY is_effectively_complete ASC, is_overdue DESC, c.due_date ASC, c.id DESC`,
+      boardFilterParams
+    );
+
+    // 7. Query all cards delegated/assigned by target user
+    let delegatedBoardClause = '';
+    const delegatedParams = [targetUserId, targetUserId, workspaceId];
+    if (!hasAccessAll) {
+      delegatedBoardClause = ' AND b.id IN (?)';
+      delegatedParams.push(allowedBoardIds);
+    }
+
+    const delegatedRows = await req.db.query(
+      `SELECT DISTINCT
+         c.id, c.title, c.description, c.due_date, c.start_date, c.is_complete, c.completed_at, c.created_at,
+         c.list_id, l.name as list_name, l.position as list_position,
+         b.id as board_id, b.name as board_name, b.background_color as board_bg,
+         CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
+         CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue
+       FROM (
+         SELECT card_id FROM card_assigners WHERE user_id = ?
+         UNION
+         SELECT card_id FROM activity_log WHERE user_id = ? AND action_type = 'created_card' AND card_id IS NOT NULL
+       ) ca
+       JOIN cards c ON ca.card_id = c.id
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+       WHERE b.workspace_id = ?
+         AND c.is_archived = 0
+         ${delegatedBoardClause}
+       ORDER BY is_effectively_complete ASC, c.id DESC`,
+      delegatedParams
+    );
+
+    // 8. Fetch co-members, labels, checklist counts, comment counts for all retrieved cards
+    const allCardIds = Array.from(new Set([...assignedRows.map(r => r.id), ...delegatedRows.map(r => r.id)]));
+
+    const membersMap = {};
+    const labelsMap = {};
+    const checklistMap = {};
+    const commentsCountMap = {};
+
+    if (allCardIds.length > 0) {
+      const membersData = await req.db.query(
+        `SELECT cm.card_id, u.id as user_id, u.name, u.email, u.avatar_url
+         FROM card_members cm
+         JOIN users u ON cm.user_id = u.id
+         WHERE cm.card_id IN (?)`,
+        [allCardIds]
+      );
+      membersData.forEach((m) => {
+        if (!membersMap[m.card_id]) membersMap[m.card_id] = [];
+        membersMap[m.card_id].push({
+          id: m.user_id,
+          name: m.name,
+          email: m.email,
+          avatar_url: m.avatar_url
+        });
+      });
+
+      const labelsData = await req.db.query(
+        `SELECT cl.card_id, l.id, l.name, l.color
+         FROM card_labels cl
+         JOIN labels l ON cl.label_id = l.id
+         WHERE cl.card_id IN (?)`,
+        [allCardIds]
+      );
+      labelsData.forEach((lb) => {
+        if (!labelsMap[lb.card_id]) labelsMap[lb.card_id] = [];
+        labelsMap[lb.card_id].push({
+          id: lb.id,
+          name: lb.name,
+          color: lb.color
+        });
+      });
+
+      const checklistData = await req.db.query(
+        `SELECT ch.card_id,
+                COUNT(ci.id) as total_items,
+                SUM(CASE WHEN ci.is_checked = 1 THEN 1 ELSE 0 END) as completed_items
+         FROM checklists ch
+         LEFT JOIN checklist_items ci ON ch.id = ci.checklist_id
+         WHERE ch.card_id IN (?)
+         GROUP BY ch.card_id`,
+        [allCardIds]
+      );
+      checklistData.forEach((c) => {
+        checklistMap[c.card_id] = {
+          total: Number(c.total_items || 0),
+          completed: Number(c.completed_items || 0)
+        };
+      });
+
+      const commentsData = await req.db.query(
+        `SELECT card_id, COUNT(*) as comment_count
+         FROM comments
+         WHERE card_id IN (?)
+         GROUP BY card_id`,
+        [allCardIds]
+      );
+      commentsData.forEach((cm) => {
+        commentsCountMap[cm.card_id] = Number(cm.comment_count || 0);
+      });
+    }
+
+    function classifyStage(listName, isDone) {
+      if (isDone) return 'done';
+      const name = (listName || '').toLowerCase().trim();
+      if (name.includes('done') || name.includes('complete') || name.includes('finished') || name.includes('closed') || name.includes('resolved')) {
+        return 'done';
+      }
+      if (name.includes('review') || name.includes('qa') || name.includes('test') || name.includes('verify') || name.includes('audit')) {
+        return 'review';
+      }
+      if (name.includes('progress') || name.includes('doing') || name.includes('wip') || name.includes('working') || name.includes('dev') || name.includes('active')) {
+        return 'in_progress';
+      }
+      if (name.includes('todo') || name.includes('to do') || name.includes('to-do') || name.includes('backlog') || name.includes('open') || name.includes('new') || name.includes('ready') || name.includes('pending')) {
+        return 'todo';
+      }
+      return 'in_progress';
+    }
+
+    // Format assigned tasks
+    const formattedAssigned = assignedRows.map((r, idx) => {
+      const isDone = Boolean(r.is_effectively_complete);
+      const stage = classifyStage(r.list_name, isDone);
+      return {
+        id: r.id,
+        task_number: r.id,
+        title: r.title,
+        description: r.description,
+        due_date: r.due_date,
+        start_date: r.start_date,
+        is_complete: isDone,
+        completed_at: r.completed_at,
+        created_at: r.created_at,
+        list_id: r.list_id,
+        list_name: r.list_name,
+        list_position: r.list_position,
+        stage,
+        board_id: r.board_id,
+        board_name: r.board_name,
+        board_bg: r.board_bg,
+        is_overdue: Boolean(r.is_overdue),
+        is_due_soon: Boolean(r.is_due_soon),
+        members: membersMap[r.id] || [],
+        labels: labelsMap[r.id] || [],
+        checklist: checklistMap[r.id] || { total: 0, completed: 0 },
+        comment_count: commentsCountMap[r.id] || 0
+      };
+    });
+
+    // Format delegated tasks
+    const formattedDelegated = delegatedRows.map((r) => {
+      const isDone = Boolean(r.is_effectively_complete);
+      const stage = classifyStage(r.list_name, isDone);
+      return {
+        id: r.id,
+        task_number: r.id,
+        title: r.title,
+        description: r.description,
+        due_date: r.due_date,
+        start_date: r.start_date,
+        is_complete: isDone,
+        completed_at: r.completed_at,
+        created_at: r.created_at,
+        list_id: r.list_id,
+        list_name: r.list_name,
+        stage,
+        board_id: r.board_id,
+        board_name: r.board_name,
+        board_bg: r.board_bg,
+        is_overdue: Boolean(r.is_overdue),
+        members: membersMap[r.id] || [],
+        labels: labelsMap[r.id] || [],
+        checklist: checklistMap[r.id] || { total: 0, completed: 0 },
+        comment_count: commentsCountMap[r.id] || 0
+      };
+    });
+
+    // Compute overall summary metrics across the workspace for target user
+    const activeAssigned = formattedAssigned.filter((t) => !t.is_complete);
+    const completedAssigned = formattedAssigned.filter((t) => t.is_complete);
+    const inProgressCount = activeAssigned.filter((t) => t.stage === 'in_progress').length;
+    const todoCount = activeAssigned.filter((t) => t.stage === 'todo').length;
+    const reviewCount = activeAssigned.filter((t) => t.stage === 'review').length;
+    const overdueCount = activeAssigned.filter((t) => t.is_overdue).length;
+    const dueSoonCount = activeAssigned.filter((t) => t.is_due_soon).length;
+    const totalAssignedCount = formattedAssigned.length;
+    const completionRate = totalAssignedCount > 0 ? Math.round((completedAssigned.length / totalAssignedCount) * 100) : 0;
+
+    // Distinct boards for filter dropdown
+    const distinctBoardsMap = {};
+    [...formattedAssigned, ...formattedDelegated].forEach((t) => {
+      if (t.board_id && !distinctBoardsMap[t.board_id]) {
+        distinctBoardsMap[t.board_id] = { id: t.board_id, name: t.board_name };
+      }
+    });
+    const distinctBoards = Object.values(distinctBoardsMap);
+
+    // 9. Apply Tab, Board, Stage, and Search Filters
+    const tab = String(req.query.tab || 'assigned').toLowerCase();
+    const boardId = req.query.boardId;
+    const stage = req.query.stage;
+    const search = String(req.query.search || '').trim().toLowerCase();
+
+    let candidateList = [];
+    if (tab === 'delegated') {
+      candidateList = formattedDelegated;
+    } else if (tab === 'completed') {
+      candidateList = completedAssigned;
+    } else {
+      candidateList = formattedAssigned;
+    }
+
+    let filteredCards = candidateList.filter((c) => {
+      // Board filter
+      if (boardId && boardId !== 'all' && String(c.board_id) !== String(boardId)) {
+        return false;
+      }
+      // Stage filter
+      if (stage && stage !== 'all') {
+        if (stage === 'overdue' && !c.is_overdue) return false;
+        if (stage === 'in_progress' && c.stage !== 'in_progress') return false;
+        if (stage === 'todo' && c.stage !== 'todo') return false;
+        if (stage === 'review' && c.stage !== 'review') return false;
+        if (stage === 'done' && !c.is_complete) return false;
+      }
+      // Search query filter
+      if (search) {
+        const titleMatch = (c.title || '').toLowerCase().includes(search);
+        const descMatch = (c.description || '').toLowerCase().includes(search);
+        const boardMatch = (c.board_name || '').toLowerCase().includes(search);
+        if (!titleMatch && !descMatch && !boardMatch) return false;
+      }
+      return true;
+    });
+
+    // 10. Server-Side Pagination (exactly 20 per page by default)
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+    const totalMatching = filteredCards.length;
+    const totalPages = Math.max(1, Math.ceil(totalMatching / limit));
+    const offset = (page - 1) * limit;
+    const pagedCards = filteredCards.slice(offset, offset + limit);
+
+    return res.json({
+      user: targetUser,
+      canSwitchMember,
+      teamMembers,
+      boards: distinctBoards,
+      summary: {
+        total_assigned: totalAssignedCount,
+        active_count: activeAssigned.length,
+        todo: todoCount,
+        in_progress: inProgressCount,
+        review: reviewCount,
+        completed: completedAssigned.length,
+        overdue: overdueCount,
+        due_soon: dueSoonCount,
+        assigned_by_me: formattedDelegated.length,
+        completion_rate: completionRate
+      },
+      cards: pagedCards,
+      pagination: {
+        page,
+        limit,
+        total: totalMatching,
+        totalPages
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // GET /api/workspaces/:id/daily-tracker - Server-side paginated & filtered daily task tracking (v2)
 router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.view'), async (req, res, next) => {

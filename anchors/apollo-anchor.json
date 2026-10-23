@@ -1,0 +1,10 @@
+{
+  "tenant_slug": "apollo",
+  "tenant_db": "pm_t_apollo_2a6aaee4",
+  "anchored_at": "2026-10-23T10:00:09.025Z",
+  "event_count": 210,
+  "last_event_id": 210,
+  "last_event_uid": "5bfbcc92-e8b7-4cb2-bb2b-c3c8d4fe2b31",
+  "last_row_hash": "b8352b683b2c3b798b4f2abd042bc5b6237179fe7cdec64679a8a4fee899e2d7",
+  "key_id": "v1"
+}

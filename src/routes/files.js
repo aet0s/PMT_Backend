@@ -7,6 +7,7 @@ const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const { requireAuth, getJwtSecret } = require('../middleware/auth');
 const storage = require('../storage');
+const auditService = require('../services/audit');
 
 const router = express.Router();
 const UPLOADS_DIR = storage.UPLOADS_DIR || (process.env.UPLOADS_DIR
@@ -150,6 +151,24 @@ router.post('/avatar', requireAuth, (req, res, next) => {
       const saveRes = await storage.saveAvatar(tenantId, req.user.id, req.file);
 
       await req.db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [saveRes.file_url, req.user.id]);
+
+      await auditService.record({
+        action: 'attachment.created',
+        category: 'attachment',
+        entityType: 'avatar',
+        entityId: req.user.id,
+        entityLabel: `Avatar: ${req.user.name || req.user.email}`,
+        actorUserId: req.user.id,
+        outcome: 'success',
+        severity: 'info',
+        changes: [{ field: 'avatar_url', from: '[PREVIOUS]', to: saveRes.file_url }],
+        meta: {
+          file_name: req.file.originalname,
+          size_bytes: req.file.size,
+          mimetype: req.file.mimetype
+        },
+        db: req.db
+      }).catch((e) => console.warn('[WARN] Avatar audit record failed:', e.message));
 
       return res.json({
         message: 'Avatar uploaded successfully',

@@ -86,7 +86,35 @@ async function runMigrationsOnDb(dbName, migrationType) {
       }
 
       console.log(`[MIGRATE] Applying ${migrationType}/${file} on ${dbName}...`);
-      await conn.query(sqlContent);
+      if (file.startsWith('0029') && sqlContent.includes('-- Append-only guard triggers')) {
+        const parts = sqlContent.split('-- Append-only guard triggers');
+        const schemaPart = parts[0];
+        const triggerPart = parts[1];
+
+        await conn.query(schemaPart);
+
+        try {
+          await conn.query(triggerPart);
+          await conn.query(
+            `INSERT INTO audit_system_status (setting_key, setting_value) 
+             VALUES ('append_only_triggers', 'installed: active') 
+             ON DUPLICATE KEY UPDATE setting_value = 'installed: active'`
+          );
+        } catch (trgErr) {
+          const reason = trgErr.message || String(trgErr);
+          console.warn(`[WARN] Migration ${file} on ${dbName}: Triggers could not be installed (${reason}). Boot continuing.`);
+          try {
+            await conn.query(
+              `INSERT INTO audit_system_status (setting_key, setting_value) 
+               VALUES ('append_only_triggers', ?) 
+               ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+              [`append-only triggers not installed: ${reason}`]
+            );
+          } catch (_) {}
+        }
+      } else {
+        await conn.query(sqlContent);
+      }
       await conn.execute(
         'INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)',
         [version, file, checksum]

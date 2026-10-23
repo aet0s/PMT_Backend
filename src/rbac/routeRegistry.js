@@ -31,6 +31,7 @@ const ROUTE_MANIFEST = [
   { method: 'PATCH', path: '/api/workspaces/:id', permission: 'workspace.edit', scope: 'company' },
   { method: 'DELETE', path: '/api/workspaces/:id', permission: 'workspace.delete', scope: 'company' },
   { method: 'GET', path: '/api/workspaces/:id/my-permissions', publicReason: 'Authenticated user effective permission check for workspace', scope: 'project' },
+  { method: 'GET', path: '/api/workspaces/:id/my-tasks', publicReason: 'User reads their own assigned/created tasks, or authorized lead inspects member tasks', scope: 'project' },
   { method: 'GET', path: '/api/workspaces/:id/roles', permission: 'role.view', scope: 'company' },
   { method: 'POST', path: '/api/workspaces/:id/roles', permission: 'role.create', scope: 'company' },
   { method: 'GET', path: '/api/workspaces/:id/members', permission: 'member.view', scope: 'company' },
@@ -38,8 +39,13 @@ const ROUTE_MANIFEST = [
   { method: 'DELETE', path: '/api/workspaces/:id/members/:userId', permission: 'member.remove', scope: 'company' },
   { method: 'POST', path: '/api/workspaces/:workspaceId/members/:userId/reset-password', permission: 'member.reset_password', scope: 'company' },
   { method: 'POST', path: '/api/workspaces/:workspaceId/members/:userId/reset-2fa', permission: 'member.reset_2fa', scope: 'company' },
-  { method: 'GET', path: '/api/workspaces/:id/audit', permission: 'audit.view', scope: 'company' },
-  { method: 'GET', path: '/api/workspaces/:id/audit/export', permission: 'audit.export', scope: 'company' },
+  { method: 'GET', path: '/api/workspaces/:id/audit', permission: 'audit.view', scope: 'workspace' },
+  { method: 'GET', path: '/api/workspaces/:id/audit/export', permission: 'audit.export', scope: 'workspace' },
+  { method: 'GET', path: '/api/workspaces/:id/audit-events', permission: 'audit.view', scope: 'workspace' },
+  { method: 'GET', path: '/api/workspaces/:id/audit-events/facets', permission: 'audit.view', scope: 'workspace' },
+  { method: 'GET', path: '/api/workspaces/:id/audit-events/export', permission: 'audit.export', scope: 'workspace' },
+  { method: 'POST', path: '/api/workspaces/:id/audit-events/verify', permission: 'audit.view', scope: 'workspace' },
+  { method: 'GET', path: '/api/workspaces/:id/audit-events/:eventId', permission: 'audit.view', scope: 'workspace' },
   { method: 'GET', path: '/api/workspaces/:id/search', permission: 'search.use', scope: 'company' },
 
   // --- Roles ---

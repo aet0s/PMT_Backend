@@ -14,6 +14,7 @@ const crypto = require('crypto');
 const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, getActiveDb } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
+const auditService = require('../services/audit');
 
 const router = express.Router();
 
@@ -336,11 +337,33 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
       [cardId, req.user.id]
     );
 
+    const bRes = await req.db.query('SELECT name, workspace_id FROM boards WHERE id = ?', [boardId]);
+
+    // Record default assigner audit & activity entry
+    await auditService.record({
+      action: 'card.assigner_added',
+      category: 'card',
+      entityType: 'card',
+      entityId: cardId,
+      entityLabel: title,
+      workspaceId: bRes[0]?.workspace_id || null,
+      boardId,
+      cardId,
+      actorUserId: req.user.id,
+      targetUserId: req.user.id,
+      targetUserName: req.user.name,
+      outcome: 'success',
+      severity: 'info',
+      changes: [{ field: 'assigners', from: [], to: [{ id: req.user.id, name: req.user.name }] }],
+      meta: { assigner_name: req.user.name, is_default: true, reason: 'creator_default_assigner' },
+      activityAction: 'assigner_added',
+      activityMeta: { assigner_name: req.user.name, before: [], after: [{ id: req.user.id, name: req.user.name }] },
+      db: req.db
+    });
+
     const [card] = await req.db.query('SELECT * FROM cards WHERE id = ?', [cardId]);
 
     await logActivity(boardId, card.id, req.user.id, 'created_card', { title: card.title }, req.db);
-
-    const bRes = await req.db.query('SELECT name, workspace_id FROM boards WHERE id = ?', [boardId]);
     await notify(
       {
         eventType: 'card.created',
@@ -423,17 +446,34 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     if (!isTopLevel) {
       const isCreator = Number(oldCard.created_by) === Number(req.user.id);
       const assigneeRows = await req.db.query(
-        'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ?',
-        [cardId, req.user.id]
+        'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ? UNION SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
+        [cardId, req.user.id, cardId, req.user.id]
       );
-      const isAssignee = Array.isArray(assigneeRows) && assigneeRows.length > 0;
-      if (!isCreator && !isAssignee) {
+      const isAssigneeOrAssigner = Array.isArray(assigneeRows) && assigneeRows.length > 0;
+      if (!isCreator && !isAssigneeOrAssigner) {
         return res.status(403).json({
           error: {
-            message: 'Members can only edit cards they created or are assigned to. You can only view and comment on other cards.',
+            message: 'Members can only edit cards they created, are assigned to, or are assigners of. You can only view and comment on other cards.',
             code: 'FORBIDDEN'
           }
         });
+      }
+
+      // Card completion enforcement: Only assigners (or top-level roles like owner) can mark a card as complete
+      if (is_complete !== undefined) {
+        const assignerRows = await req.db.query(
+          'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
+          [cardId, req.user.id]
+        );
+        const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
+        if (!isAssigner) {
+          return res.status(403).json({
+            error: {
+              message: 'Cards can only be marked as completed by assigners.',
+              code: 'FORBIDDEN'
+            }
+          });
+        }
       }
     }
 
@@ -526,6 +566,22 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     if (list_id !== undefined) {
       const tlRes = await req.db.query('SELECT * FROM lists WHERE id = ?', [list_id]);
       targetList = tlRes[0] || null;
+
+      if (!isTopLevel && targetList && targetList.is_done_list && Number(oldCard.list_id) !== Number(list_id)) {
+        const assignerRows = await req.db.query(
+          'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
+          [cardId, req.user.id]
+        );
+        const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
+        if (!isAssigner) {
+          return res.status(403).json({
+            error: {
+              message: 'Cards can only be marked as completed by assigners.',
+              code: 'FORBIDDEN'
+            }
+          });
+        }
+      }
     }
 
     const isCompleting = Boolean(is_complete) || Boolean(targetList && targetList.is_done_list);
@@ -546,42 +602,18 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         const openWorkingDays = calculateWorkingDaysOpen(startDate, new Date(), workingDays, holidays);
 
         if (openWorkingDays > 2) {
-          let outcomeNote = req.body.completion_note || oldCard.completion_note;
+          const outcomeNote = req.body.completion_note !== undefined ? req.body.completion_note : oldCard.completion_note;
           if (!outcomeNote || String(outcomeNote).trim().length < 20) {
-            // Check fallback: if the card has a recent comment or check-in with >= 20 characters
-            try {
-              const latestCommentRes = await req.db.query(
-                'SELECT body FROM comments WHERE card_id = ? AND LENGTH(TRIM(body)) >= 20 ORDER BY created_at DESC LIMIT 1',
-                [cardId]
-              );
-              if (latestCommentRes && latestCommentRes[0]?.body) {
-                outcomeNote = latestCommentRes[0].body.trim();
-              } else {
-                const latestCheckinRes = await req.db.query(
-                  'SELECT did FROM check_ins WHERE card_id = ? AND LENGTH(TRIM(did)) >= 20 ORDER BY created_at DESC LIMIT 1',
-                  [cardId]
-                );
-                if (latestCheckinRes && latestCheckinRes[0]?.did) {
-                  outcomeNote = latestCheckinRes[0].did.trim();
-                }
+            return res.status(400).json({
+              error: {
+                message: 'A one-line result of at least 20 characters is required when completing a task open for more than 2 working days',
+                code: 'ONE_LINE_RESULT_REQUIRED'
               }
-            } catch (fallbackErr) {
-              // Ignore fallback query failure
-            }
-
-            if (outcomeNote && String(outcomeNote).trim().length >= 20) {
-              if (req.body.completion_note === undefined) {
-                updates.push('completion_note = ?');
-                values.push(sanitizePlain(outcomeNote));
-              }
-            } else {
-              return res.status(400).json({
-                error: {
-                  message: 'A one-line result of at least 20 characters is required when completing a task open for more than 2 working days',
-                  code: 'ONE_LINE_RESULT_REQUIRED'
-                }
-              });
-            }
+            });
+          }
+          if (req.body.completion_note !== undefined) {
+            updates.push('completion_note = ?');
+            values.push(sanitizePlain(outcomeNote));
           }
         }
       } catch (err) {
@@ -1087,6 +1119,11 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
     const targetUser = targetUserRes[0];
     const targetUserName = targetUser?.name || 'User';
 
+    const beforeAssigners = (await req.db.query(
+      'SELECT u.id, u.name FROM card_assigners ca JOIN users u ON ca.user_id = u.id WHERE ca.card_id = ?',
+      [cardId]
+    )).map((u) => ({ id: u.id, name: u.name }));
+
     const existing = await req.db.query(
       'SELECT * FROM card_assigners WHERE card_id = ? AND user_id = ?',
       [cardId, user_id]
@@ -1096,15 +1133,47 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
     if (existing.length > 0) {
       await req.db.execute('DELETE FROM card_assigners WHERE card_id = ? AND user_id = ?', [cardId, user_id]);
       action = 'removed';
-      if (boardId) {
-        await logActivity(boardId, cardId, req.user.id, 'assigner_removed', { assigner_name: targetUserName }, req.db);
-      }
     } else {
       await req.db.execute('INSERT IGNORE INTO card_assigners (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
       action = 'added';
-      if (boardId) {
-        await logActivity(boardId, cardId, req.user.id, 'assigner_added', { assigner_name: targetUserName }, req.db);
-      }
+    }
+
+    const afterAssigners = (await req.db.query(
+      'SELECT u.id, u.name FROM card_assigners ca JOIN users u ON ca.user_id = u.id WHERE ca.card_id = ?',
+      [cardId]
+    )).map((u) => ({ id: u.id, name: u.name }));
+
+    const auditAction = action === 'removed' ? 'card.assigner_removed' : 'card.assigner_added';
+    const activityAction = action === 'removed' ? 'assigner_removed' : 'assigner_added';
+
+    if (boardId) {
+      await auditService.record({
+        action: auditAction,
+        category: 'card',
+        entityType: 'card',
+        entityId: cardId,
+        entityLabel: cardTitle,
+        boardId,
+        cardId,
+        actorUserId: req.user.id,
+        targetUserId: user_id,
+        targetUserName,
+        outcome: 'success',
+        severity: 'info',
+        changes: [{ field: 'assigners', from: beforeAssigners, to: afterAssigners }],
+        meta: {
+          assigner_name: targetUserName,
+          before: beforeAssigners,
+          after: afterAssigners
+        },
+        activityAction,
+        activityMeta: {
+          assigner_name: targetUserName,
+          before: beforeAssigners,
+          after: afterAssigners
+        },
+        db: req.db
+      });
     }
 
     if (boardId) {
@@ -1140,6 +1209,15 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
     if (!sourceCard) {
       return res.status(404).json({ error: { message: 'Source card not found', code: 'NOT_FOUND' } });
     }
+
+    const srcListRes = await req.db.query(
+      `SELECT l.id, l.name, l.board_id, b.workspace_id, b.name as board_name 
+       FROM lists l 
+       JOIN boards b ON l.board_id = b.id 
+       WHERE l.id = ?`,
+      [sourceCard.list_id]
+    );
+    const srcList = srcListRes[0] || {};
 
     // 2. Fetch target list & board
     const listRes = await req.db.query(
@@ -1194,6 +1272,28 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
       'INSERT IGNORE INTO card_assigners (card_id, user_id) VALUES (?, ?)',
       [newCardId, req.user.id]
     );
+
+    // Record default assigner audit & activity entry
+    await auditService.record({
+      action: 'card.assigner_added',
+      category: 'card',
+      entityType: 'card',
+      entityId: newCardId,
+      entityLabel: newTitle,
+      workspaceId: targetWorkspaceId,
+      boardId: targetBoardId,
+      cardId: newCardId,
+      actorUserId: req.user.id,
+      targetUserId: req.user.id,
+      targetUserName: req.user.name,
+      outcome: 'success',
+      severity: 'info',
+      changes: [{ field: 'assigners', from: [], to: [{ id: req.user.id, name: req.user.name }] }],
+      meta: { assigner_name: req.user.name, is_default: true, reason: 'creator_default_assigner' },
+      activityAction: 'assigner_added',
+      activityMeta: { assigner_name: req.user.name, before: [], after: [{ id: req.user.id, name: req.user.name }] },
+      db: req.db
+    });
 
     // 6. Copy Checklists & Items
     if (Array.isArray(sourceCard.checklists) && sourceCard.checklists.length > 0) {
@@ -1262,8 +1362,42 @@ router.post('/:id/copy', requireAuth, requirePermission('task.duplicate'), async
 
     // 9. Members & comments explicitly NOT copied
 
-    // 10. Log Activity on target board
-    await logActivity(targetBoardId, newCardId, req.user.id, 'created_card', { title: newTitle, copied_from: sourceCard.title }, req.db);
+    // 10. Record card.copied audit event & dual-write created_card activity
+    await auditService.record({
+      action: 'card.copied',
+      category: 'card',
+      entityType: 'card',
+      entityId: newCardId,
+      entityLabel: newTitle,
+      workspaceId: targetWorkspaceId,
+      boardId: targetBoardId,
+      cardId: newCardId,
+      actorUserId: req.user.id,
+      outcome: 'success',
+      severity: 'info',
+      changes: [
+        { field: 'title', from: sourceCard.title, to: newTitle },
+        { field: 'board_id', from: srcList.board_id, to: targetBoardId },
+        { field: 'board_name', from: srcList.board_name, to: targetList.board_name },
+        { field: 'list_id', from: sourceCard.list_id, to: list_id },
+        { field: 'list_name', from: srcList.name, to: targetList.name }
+      ],
+      meta: {
+        source_card_id: sourceCardId,
+        source_card_title: sourceCard.title,
+        source_board_id: srcList.board_id,
+        source_board_name: srcList.board_name,
+        source_list_id: sourceCard.list_id,
+        source_list_name: srcList.name,
+        target_board_id: targetBoardId,
+        target_board_name: targetList.board_name,
+        target_list_id: list_id,
+        target_list_name: targetList.name
+      },
+      activityAction: 'created_card',
+      activityMeta: { title: newTitle, copied_from: sourceCard.title },
+      db: req.db
+    });
 
     // 11. Notifications
     await notify(

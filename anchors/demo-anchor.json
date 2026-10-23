@@ -1,0 +1,10 @@
+{
+  "tenant_slug": "demo",
+  "tenant_db": "pm_t_demo",
+  "anchored_at": "2026-10-23T11:34:41.788Z",
+  "event_count": 58,
+  "last_event_id": 58,
+  "last_event_uid": "f4e52e5d-313a-48d0-bdd0-0c5a15965027",
+  "last_row_hash": "7165ef1c63734ef0c18a3f364b0fdee271739b80cd335b9a1006a1f4e6f94092",
+  "key_id": "v1"
+}

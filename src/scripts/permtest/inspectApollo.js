@@ -8,10 +8,14 @@ async function inspect() {
     password: '',
   });
 
-  const [tables] = await conn.query('SHOW TABLES FROM `pm_t_apollo_82816566`');
+  const [tRows] = await conn.query("SELECT db_name FROM `pm_master`.tenants WHERE slug = 'apollo'");
+  const dbName = tRows[0]?.db_name;
+  console.log('Apollo dbName:', dbName);
+
+  const [tables] = await conn.query(`SHOW TABLES FROM \`${dbName}\``);
   console.log('Tables in Apollo:', tables.map(t => Object.values(t)[0]));
 
-  const [roles] = await conn.query('SELECT * FROM `pm_t_apollo_82816566`.roles');
+  const [roles] = await conn.query(`SELECT id, name, rank FROM \`${dbName}\`.roles`);
   console.log('Roles in Apollo:', roles);
 
   const [cardCols] = await conn.query('SHOW COLUMNS FROM `pm_t_apollo_82816566`.cards');

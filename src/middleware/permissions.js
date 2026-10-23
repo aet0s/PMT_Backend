@@ -1023,12 +1023,54 @@ function requirePermission(permissionConfig, options = {}) {
       }
 
       if (!hasPerm) {
+        // Audit denied attempt on mutating routes or audit/export routes
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) || (req.originalUrl || req.url || '').includes('/audit')) {
+          try {
+            const auditService = require('../services/audit');
+            if (req.db) {
+              await auditService.record({
+                action: 'security.permission_denied',
+                category: 'security',
+                entityType: 'permission',
+                entityLabel: String(req.originalUrl || req.url),
+                outcome: 'denied',
+                severity: 'warning',
+                workspaceId,
+                meta: {
+                  method: req.method,
+                  url: req.originalUrl || req.url,
+                  requiredPermission: activeConfig,
+                  deniedUserId: req.user?.id
+                },
+                db: req.db
+              }).catch(() => {});
+            }
+          } catch (_) {}
+        }
+
         return res.status(403).json({
           error: {
             message: 'You do not have permission to do that',
             code: 'PERMISSION_DENIED'
           }
         });
+      }
+
+      if (req.user && workspaceId) {
+        let roleName = null;
+        if (req._rbacWsRoleCache) {
+          const cached = req._rbacWsRoleCache.get(`${req.user.id}:${workspaceId}`);
+          if (cached?.name) roleName = cached.name;
+        }
+        try {
+          const { setAuditContext } = require('../utils/auditContext');
+          const updates = { workspaceId };
+          if (roleName) {
+            req.user.role = roleName;
+            updates.actorRole = roleName;
+          }
+          setAuditContext(updates);
+        } catch (_) {}
       }
 
       next();
