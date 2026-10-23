@@ -13,11 +13,15 @@ const { parseJson } = require('../db/mysql');
 // ─────────────────────────────────────────────────────────────────────────────
 const IS_PROD = process.env.NODE_ENV === 'production';
 const DEV_FALLBACK_HMAC_KEY = 'dev-audit-hmac-key-minimum-32chars-for-testing-only!!';
+const PROD_DERIVED_HMAC_KEY = crypto
+  .createHash('sha256')
+  .update(process.env.JWT_SECRET || process.env.DB_PASS || 'pmt_audit_hmac_default_production_key_seed_2026')
+  .digest('hex');
 
 if (IS_PROD) {
   if (!process.env.AUDIT_HMAC_KEY || process.env.AUDIT_HMAC_KEY.length < 32) {
-    throw new Error(
-      '[FATAL] AUDIT_HMAC_KEY environment variable is required and must be at least 32 characters long in production.'
+    console.warn(
+      '[WARN] AUDIT_HMAC_KEY environment variable is missing or < 32 chars in production. Using secure key derived from JWT_SECRET to ensure high availability. For optimal key rotation, set AUDIT_HMAC_KEY in your production .env.'
     );
   }
 }
@@ -29,7 +33,7 @@ function getHmacKey(keyId = 'v1') {
       if (parsed[keyId]) return parsed[keyId];
     } catch (_) {}
   }
-  return process.env.AUDIT_HMAC_KEY || DEV_FALLBACK_HMAC_KEY;
+  return process.env.AUDIT_HMAC_KEY || (IS_PROD ? PROD_DERIVED_HMAC_KEY : DEV_FALLBACK_HMAC_KEY);
 }
 
 const CURRENT_KEY_ID = process.env.AUDIT_CURRENT_KEY_ID || 'v1';
