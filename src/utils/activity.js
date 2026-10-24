@@ -103,12 +103,31 @@ async function logActivity(boardIdOrOptions, cardIdArg, userIdArg, actionTypeArg
       userId = metaJson.user_id || metaJson.userId;
     }
 
-    // Determine audit action and category mapping
-    const auditMap = ACTIVITY_TO_AUDIT_ACTION[actionType] || {
-      action: actionType.includes('.') ? actionType : `system.${actionType}`,
-      category: 'system',
-      entityType: cardId ? 'card' : boardId ? 'board' : workspaceId ? 'workspace' : 'unknown'
-    };
+    // Determine audit action and category mapping based on entity context
+    let auditMap = ACTIVITY_TO_AUDIT_ACTION[actionType];
+    if (actionType === 'member_removed') {
+      if (cardId) {
+        auditMap = { action: 'card.assignee_removed', category: 'card', entityType: 'card' };
+      } else if (boardId) {
+        auditMap = { action: 'board.member_removed', category: 'board', entityType: 'board' };
+      } else {
+        auditMap = { action: 'member.removed', category: 'member', entityType: 'workspace' };
+      }
+    } else if (actionType === 'member_added') {
+      if (cardId) {
+        auditMap = { action: 'card.assignee_added', category: 'card', entityType: 'card' };
+      } else if (boardId) {
+        auditMap = { action: 'board.member_added', category: 'board', entityType: 'board' };
+      } else {
+        auditMap = { action: 'member.added', category: 'member', entityType: 'workspace' };
+      }
+    } else if (!auditMap) {
+      auditMap = {
+        action: actionType.includes('.') ? actionType : `system.${actionType}`,
+        category: 'system',
+        entityType: cardId ? 'card' : boardId ? 'board' : workspaceId ? 'workspace' : 'unknown'
+      };
+    }
 
     // Record through primary audit service (handles audit_events and activity_log dual-write)
     const auditRes = await auditService.record({

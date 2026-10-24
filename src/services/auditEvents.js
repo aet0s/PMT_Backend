@@ -208,6 +208,12 @@ const AUDIT_EVENT_CATALOGUE = {
     entityType: 'user',
     description: 'Company owner transferred to another user'
   },
+  'member.profile_updated': {
+    category: 'member',
+    severity: 'info',
+    entityType: 'user',
+    description: 'User personal profile updated (name, email, timezone, locale, avatar)'
+  },
 
   // Role Events
   'role.created': {

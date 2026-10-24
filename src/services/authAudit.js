@@ -3,6 +3,7 @@
 
 const { getClientIp } = require('../middleware/rateLimit');
 const auditService = require('./audit');
+const { AUDIT_EVENT_CATALOGUE } = require('./auditEvents');
 
 async function logAuthEvent(db, {
   userId = null,
@@ -27,10 +28,10 @@ async function logAuthEvent(db, {
       [userId ? Number(userId) : null, email || null, eventType, ipAddress, userAgent, metaJson]
     );
 
+
     const evLower = String(eventType).toLowerCase();
     const isFailure = evLower.includes('fail') || evLower.includes('lockout');
     const computedOutcome = outcome || (isFailure ? 'failed' : 'success');
-    const computedSeverity = severity || (isFailure ? 'warning' : 'info');
 
     let dotAction = eventType;
     if (eventType === 'LOGIN_SUCCESS') dotAction = 'auth.login_success';
@@ -39,16 +40,21 @@ async function logAuthEvent(db, {
     else if (eventType === 'ACCOUNT_LOCKED_ATTEMPT') dotAction = 'auth.lockout';
     else if (eventType === 'LOGOUT') dotAction = 'auth.logout';
     else if (eventType === 'PASSWORD_CHANGED') dotAction = 'auth.password_changed';
-    else if (eventType === 'TWO_FA_ENABLED') dotAction = 'auth.two_fa_enabled';
-    else if (eventType === 'TWO_FA_DISABLED') dotAction = 'auth.two_fa_disabled';
-    else if (eventType === 'TWO_FA_RESET') dotAction = 'auth.two_fa_reset';
-    else if (!dotAction.startsWith('auth.')) dotAction = `auth.${evLower}`;
+    else if (eventType === 'TWO_FA_ENABLED') dotAction = 'auth.2fa_enabled';
+    else if (eventType === 'TWO_FA_DISABLED') dotAction = 'auth.2fa_disabled';
+    else if (eventType === 'TWO_FA_RESET') dotAction = 'auth.2fa_reset';
+    else if (!dotAction.includes('.')) dotAction = `auth.${evLower}`;
+
+    const catalogueEntry = AUDIT_EVENT_CATALOGUE[dotAction];
+    const category = catalogueEntry?.category || (dotAction.startsWith('auth.') ? 'auth' : 'system');
+    const entityType = catalogueEntry?.entityType || 'user';
+    const computedSeverity = severity || catalogueEntry?.severity || (isFailure ? 'warning' : 'info');
 
     // Mirror to audit_events and activity_log via unified audit service
     await auditService.record({
       action: dotAction,
-      category: 'auth',
-      entityType: 'user',
+      category,
+      entityType,
       entityId: userId ? Number(userId) : null,
       entityLabel: email || (metadata?.name || null),
       actorUserId: userId ? Number(userId) : null,

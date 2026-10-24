@@ -91,7 +91,7 @@ const ROUTE_AUDIT_MAP = {
     description: 'Updates password on forced password reset'
   },
   'PUT /api/auth/profile': {
-    auditEvents: ['auth.login_success'],
+    auditEvents: ['member.profile_updated'],
     description: 'Updates user personal profile (name, avatar, timezone)'
   },
   'POST /api/auth/2fa/generate': {
@@ -281,10 +281,7 @@ const ROUTE_AUDIT_MAP = {
   // ==========================================
   // --- FILES ---
   // ==========================================
-  'POST /api/files/avatar': {
-    auditEvents: ['auth.login_success'],
-    description: 'Updates user avatar image file'
-  },
+
   'POST /api/files/preview-token': {
     exemption: true,
     reason: 'Generates short-lived stateless preview token for viewing attachments'

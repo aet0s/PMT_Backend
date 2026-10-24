@@ -79,6 +79,26 @@ async function runMigrationsOnDb(dbName, migrationType) {
       const checksum = crypto.createHash('sha256').update(sqlContent, 'utf8').digest('hex');
 
       if (appliedMap.has(version)) {
+        // If 0029 was previously applied, verify whether append_only_triggers are active; if not, retry installing them!
+        if (file.startsWith('0029') && sqlContent.includes('-- Append-only guard triggers')) {
+          try {
+            const [statusRows] = await conn.query(
+              "SELECT setting_value FROM audit_system_status WHERE setting_key = 'append_only_triggers'"
+            );
+            if (!statusRows.length || !statusRows[0].setting_value.includes('installed: active')) {
+              console.log(`[MIGRATE] Retrying trigger installation for ${file} on ${dbName}...`);
+              const parts = sqlContent.split('-- Append-only guard triggers');
+              await conn.query(parts[1]);
+              await conn.query(
+                `INSERT INTO audit_system_status (setting_key, setting_value) 
+                 VALUES ('append_only_triggers', 'installed: active') 
+                 ON DUPLICATE KEY UPDATE setting_value = 'installed: active'`
+              );
+              console.log(`[MIGRATE] Successfully installed triggers on retry for ${file}`);
+            }
+          } catch (_) {}
+        }
+
         if (appliedMap.get(version) !== checksum) {
           console.warn(`[WARN] Migration ${file} on ${dbName} checksum changed from applied version!`);
         }
@@ -86,6 +106,7 @@ async function runMigrationsOnDb(dbName, migrationType) {
       }
 
       console.log(`[MIGRATE] Applying ${migrationType}/${file} on ${dbName}...`);
+      let migrationFullySucceeded = true;
       if (file.startsWith('0029') && sqlContent.includes('-- Append-only guard triggers')) {
         const parts = sqlContent.split('-- Append-only guard triggers');
         const schemaPart = parts[0];
@@ -101,8 +122,9 @@ async function runMigrationsOnDb(dbName, migrationType) {
              ON DUPLICATE KEY UPDATE setting_value = 'installed: active'`
           );
         } catch (trgErr) {
+          migrationFullySucceeded = false;
           const reason = trgErr.message || String(trgErr);
-          console.warn(`[WARN] Migration ${file} on ${dbName}: Triggers could not be installed (${reason}). Boot continuing.`);
+          console.warn(`[WARN] Migration ${file} on ${dbName}: Triggers could not be installed (${reason}). Boot continuing. Migration will retry on next startup.`);
           try {
             await conn.query(
               `INSERT INTO audit_system_status (setting_key, setting_value) 
@@ -115,12 +137,17 @@ async function runMigrationsOnDb(dbName, migrationType) {
       } else {
         await conn.query(sqlContent);
       }
-      await conn.execute(
-        'INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)',
-        [version, file, checksum]
-      );
-      appliedThisRun.push(file);
-      console.log(`[MIGRATE] Successfully applied ${file}`);
+
+      if (migrationFullySucceeded) {
+        await conn.execute(
+          'INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)',
+          [version, file, checksum]
+        );
+        appliedThisRun.push(file);
+        console.log(`[MIGRATE] Successfully applied ${file}`);
+      } else {
+        console.warn(`[WARN] Migration ${file} on ${dbName} partially applied (triggers failed). Not recording in schema_migrations so it will be retried.`);
+      }
     }
 
     return appliedThisRun;

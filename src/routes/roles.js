@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { requirePermission, userHasPermission, getUserPermissions } = require('../middleware/permissions');
-const { isOwnerRole, isReservedRoleName } = require('../utils/roleRank');
+const { isOwnerRole, isReservedRoleName, getRoleRank } = require('../utils/roleRank');
 const { broadcastWorkspaceEvent, sendUserEvent } = require('../socket');
 const { logAuthEvent } = require('../services/authAudit');
 const {

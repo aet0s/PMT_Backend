@@ -20,8 +20,8 @@ const PROD_DERIVED_HMAC_KEY = crypto
 
 if (IS_PROD) {
   if (!process.env.AUDIT_HMAC_KEY || process.env.AUDIT_HMAC_KEY.length < 32) {
-    console.warn(
-      '[WARN] AUDIT_HMAC_KEY environment variable is missing or < 32 chars in production. Using secure key derived from JWT_SECRET to ensure high availability. For optimal key rotation, set AUDIT_HMAC_KEY in your production .env.'
+    throw new Error(
+      '[FATAL] Production requires an explicit AUDIT_HMAC_KEY environment variable with minimum 32 characters for cryptographic audit integrity.'
     );
   }
 }
@@ -130,11 +130,27 @@ const COALESCE_ACTIONS = new Set([
   'audit.viewed'
 ]);
 
-// Map: `${tenantKey}:${action}:${actor}:${route}:${minuteBucket}` -> { entry, repeat_count, first_time, last_time }
+// Map: `${tenantKey}:${action}:${actor}:${route}:${minuteBucket}` -> { id, repeat_count, first_occurred_at, last_occurred_at }
 const coalesceBuffer = new Map();
 
 function getMinuteBucket(ts = Date.now()) {
   return Math.floor(ts / 60000);
+}
+
+let lastPrunedBucket = 0;
+
+function pruneCoalesceBufferIfNeeded() {
+  const currentBucket = getMinuteBucket();
+  if (currentBucket > lastPrunedBucket) {
+    lastPrunedBucket = currentBucket;
+    for (const [key] of coalesceBuffer.entries()) {
+      const parts = key.split(':');
+      const bucket = Number(parts[parts.length - 1]);
+      if (!bucket || currentBucket - bucket >= 2) {
+        coalesceBuffer.delete(key);
+      }
+    }
+  }
 }
 
 // 1-hour session audit view throttle map
@@ -263,15 +279,46 @@ async function record(options = {}) {
 
   // 1-minute coalescing check for high-frequency events (Item 4)
   if (COALESCE_ACTIONS.has(action) && !options.bypassCoalesce) {
+    pruneCoalesceBufferIfNeeded();
+    const tenantIdent = ctx?.tenantId || ctx?.req?.tenant?.id || ctx?.req?.tenant?.slug || workspaceId || 'default';
     const routeIdent = options.route || entityLabel || 'default';
     const actorIdent = actorUserId || ipAddress || 'anonymous';
     const minuteBucket = getMinuteBucket();
-    const coalesceKey = `${action}:${actorIdent}:${routeIdent}:${minuteBucket}`;
+    const coalesceKey = `${tenantIdent}:${action}:${actorIdent}:${routeIdent}:${minuteBucket}`;
 
     const existingCoalesced = coalesceBuffer.get(coalesceKey);
     if (existingCoalesced) {
       existingCoalesced.repeat_count++;
       existingCoalesced.last_occurred_at = new Date().toISOString();
+
+      // Persist incremented repeat count into database with optimistic concurrency guard
+      if (existingCoalesced.id && db) {
+        try {
+          const rows = await db.query(
+            'SELECT meta, row_hash FROM audit_events WHERE id = ?',
+            [existingCoalesced.id]
+          );
+          if (rows && rows.length > 0) {
+            if (rows[0].row_hash) {
+              // Finalizer closed the window for this row. Evict key so next event starts a fresh row.
+              coalesceBuffer.delete(coalesceKey);
+            } else {
+              const currentMeta = parseJson(rows[0].meta) || {};
+              currentMeta.repeat_count = existingCoalesced.repeat_count;
+              currentMeta.last_occurred_at = existingCoalesced.last_occurred_at;
+              const [updRes] = await db.execute(
+                'UPDATE audit_events SET meta = ? WHERE id = ? AND row_hash IS NULL',
+                [JSON.stringify(currentMeta), existingCoalesced.id]
+              );
+              if (updRes && updRes.affectedRows === 0) {
+                // Concurrently finalized between SELECT and UPDATE
+                coalesceBuffer.delete(coalesceKey);
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       return {
         id: existingCoalesced.id || null,
         coalesced: true,
@@ -434,6 +481,7 @@ async function record(options = {}) {
   ];
 
   let auditEventId = null;
+  let auditInsertFailed = false;
   try {
     const execResult = await db.execute(insertSql, insertParams);
     auditEventId = execResult.insertId;
@@ -446,19 +494,20 @@ async function record(options = {}) {
       );
       throw insertErr;
     }
+    auditInsertFailed = true;
     console.warn(
       `[AUDIT_WARN] Non-critical audit insert failed for action "${action}":`,
       insertErr.message
     );
-    return null;
   }
 
-  // Register in coalescing buffer if applicable
-  if (COALESCE_ACTIONS.has(action) && !options.bypassCoalesce) {
+  // Register in coalescing buffer if applicable and insert succeeded
+  if (!auditInsertFailed && COALESCE_ACTIONS.has(action) && !options.bypassCoalesce) {
+    const tenantIdent = ctx?.tenantId || ctx?.req?.tenant?.id || ctx?.req?.tenant?.slug || workspaceId || 'default';
     const routeIdent = options.route || entityLabel || 'default';
     const actorIdent = actorUserId || ipAddress || 'anonymous';
     const minuteBucket = getMinuteBucket();
-    const coalesceKey = `${action}:${actorIdent}:${routeIdent}:${minuteBucket}`;
+    const coalesceKey = `${tenantIdent}:${action}:${actorIdent}:${routeIdent}:${minuteBucket}`;
     coalesceBuffer.set(coalesceKey, {
       id: auditEventId,
       repeat_count: 1,
@@ -595,12 +644,20 @@ async function finalizeAuditChain(db, options = {}) {
 
   let count = 0;
   for (const row of unfinalized) {
+    // Evict this row from in-memory coalesceBuffer to prevent concurrent coalescing while finalizing
+    for (const [k, v] of coalesceBuffer.entries()) {
+      if (v.id === row.id) {
+        coalesceBuffer.delete(k);
+      }
+    }
+
     const occurredAtSql =
       row.occurred_at instanceof Date
         ? row.occurred_at.toISOString().slice(0, 23).replace('T', ' ')
         : String(row.occurred_at).slice(0, 23).replace('T', ' ');
 
-    const canonicalPayload = canonicalizeJson({
+    let currentMeta = typeof row.meta === 'string' ? parseJson(row.meta) : row.meta;
+    let canonicalPayload = canonicalizeJson({
       event_uid: row.event_uid,
       occurred_at: occurredAtSql,
       workspace_id: row.workspace_id,
@@ -615,20 +672,56 @@ async function finalizeAuditChain(db, options = {}) {
       outcome: row.outcome,
       severity: row.severity,
       changes: typeof row.changes === 'string' ? parseJson(row.changes) : row.changes,
-      meta: typeof row.meta === 'string' ? parseJson(row.meta) : row.meta,
+      meta: currentMeta,
       source: row.source
     });
 
     const hmacKey = getHmacKey(row.key_id);
-    const rowHash = crypto
+    let rowHash = crypto
       .createHmac('sha256', hmacKey)
       .update(canonicalPayload + ':' + prevHash)
       .digest('hex');
 
-    await db.execute(
-      'UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ? AND row_hash IS NULL',
-      [prevHash, rowHash, row.id]
+    const rawMetaStr = typeof row.meta === 'string' ? row.meta : JSON.stringify(row.meta);
+    const [upd] = await db.execute(
+      'UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ? AND row_hash IS NULL AND (meta <=> ? OR meta = ?)',
+      [prevHash, rowHash, row.id, rawMetaStr, rawMetaStr]
     );
+
+    if (upd && upd.affectedRows === 0) {
+      // Concurrently updated by a coalescing call during hash computation. Re-read fresh meta and finalize.
+      const recheck = await db.query('SELECT row_hash, meta FROM audit_events WHERE id = ?', [row.id]);
+      const recheckRows = Array.isArray(recheck) && Array.isArray(recheck[0]) ? recheck[0] : recheck;
+      if (recheckRows && recheckRows.length > 0 && !recheckRows[0].row_hash) {
+        currentMeta = typeof recheckRows[0].meta === 'string' ? parseJson(recheckRows[0].meta) : recheckRows[0].meta;
+        canonicalPayload = canonicalizeJson({
+          event_uid: row.event_uid,
+          occurred_at: occurredAtSql,
+          workspace_id: row.workspace_id,
+          board_id: row.board_id,
+          card_id: row.card_id,
+          actor_user_id: row.actor_user_id,
+          actor_type: row.actor_type,
+          action: row.action,
+          category: row.category,
+          entity_type: row.entity_type,
+          entity_id: row.entity_id,
+          outcome: row.outcome,
+          severity: row.severity,
+          changes: typeof row.changes === 'string' ? parseJson(row.changes) : row.changes,
+          meta: currentMeta,
+          source: row.source
+        });
+        rowHash = crypto
+          .createHmac('sha256', hmacKey)
+          .update(canonicalPayload + ':' + prevHash)
+          .digest('hex');
+        await db.execute(
+          'UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ? AND row_hash IS NULL',
+          [prevHash, rowHash, row.id]
+        );
+      }
+    }
 
     prevHash = rowHash;
     count++;

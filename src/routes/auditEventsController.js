@@ -13,46 +13,85 @@ const auditService = require('../services/audit');
  * Parses date range strings in the given timezone (default Asia/Kolkata)
  * and returns UTC SQL datetime strings (both ends inclusive).
  */
+function convertDateStringToUtc(dateStr, timeZone = 'Asia/Kolkata', isEndOfDay = false) {
+  if (!dateStr) return null;
+  const clean = String(dateStr).trim();
+  if (clean.length <= 10 && /^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    const [y, m, d] = clean.split('-').map(Number);
+    const targetHour = isEndOfDay ? 23 : 0;
+    const targetMinute = isEndOfDay ? 59 : 0;
+    const targetSecond = isEndOfDay ? 59 : 0;
+    const approxUtc = new Date(Date.UTC(y, m - 1, d, targetHour, targetMinute, targetSecond));
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric', second: 'numeric',
+        hour12: false
+      });
+      const formatParts = (dt) => {
+        const parts = formatter.formatToParts(dt);
+        const map = {};
+        parts.forEach(p => map[p.type] = p.value);
+        return {
+          year: Number(map.year),
+          month: Number(map.month),
+          day: Number(map.day),
+          hour: Number(map.hour) === 24 ? 0 : Number(map.hour),
+          minute: Number(map.minute),
+          second: Number(map.second)
+        };
+      };
+      let guess = approxUtc.getTime();
+      for (let i = 0; i < 3; i++) {
+        const cur = formatParts(new Date(guess));
+        const curDateAsUtc = Date.UTC(cur.year, cur.month - 1, cur.day, cur.hour, cur.minute, cur.second);
+        const targetDateAsUtc = Date.UTC(y, m - 1, d, targetHour, targetMinute, targetSecond);
+        const diff = targetDateAsUtc - curDateAsUtc;
+        guess += diff;
+        if (diff === 0) break;
+      }
+      return new Date(guess + (isEndOfDay ? 999 : 0)).toISOString().slice(0, 23).replace('T', ' ');
+    } catch (_) {
+      const offset = timeZone === 'Asia/Kolkata' ? '+05:30' : 'Z';
+      const time = isEndOfDay ? '23:59:59.999' : '00:00:00.000';
+      const dt = new Date(`${clean}T${time}${offset}`);
+      return !isNaN(dt.getTime()) ? dt.toISOString().slice(0, 23).replace('T', ' ') : null;
+    }
+  }
+
+  try {
+    const d = new Date(clean);
+    return !isNaN(d.getTime()) ? d.toISOString().slice(0, 23).replace('T', ' ') : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Parses date range strings in any workspace timezone
+ * and returns UTC SQL datetime strings (both ends inclusive).
+ */
 function parseDateRangeToUtc(fromStr, toStr, timeZone = 'Asia/Kolkata') {
-  let fromUtc = null;
-  let toUtc = null;
-  const tzOffset = timeZone === 'Asia/Kolkata' ? '+05:30' : 'Z';
-
-  if (fromStr) {
-    const cleanFrom = String(fromStr).trim();
-    const fromTimeStr = cleanFrom.length <= 10 && /^\d{4}-\d{2}-\d{2}$/.test(cleanFrom)
-      ? `${cleanFrom}T00:00:00.000${tzOffset}`
-      : cleanFrom;
-    try {
-      const d = new Date(fromTimeStr);
-      if (!isNaN(d.getTime())) {
-        fromUtc = d.toISOString().slice(0, 23).replace('T', ' ');
-      }
-    } catch (_) {}
-  }
-
-  if (toStr) {
-    const cleanTo = String(toStr).trim();
-    const toTimeStr = cleanTo.length <= 10 && /^\d{4}-\d{2}-\d{2}$/.test(cleanTo)
-      ? `${cleanTo}T23:59:59.999${tzOffset}`
-      : cleanTo;
-    try {
-      const d = new Date(toTimeStr);
-      if (!isNaN(d.getTime())) {
-        toUtc = d.toISOString().slice(0, 23).replace('T', ' ');
-      }
-    } catch (_) {}
-  }
-
+  const fromUtc = convertDateStringToUtc(fromStr, timeZone, false);
+  const toUtc = convertDateStringToUtc(toStr, timeZone, true);
   return { fromUtc, toUtc };
 }
 
 /**
- * Sanitizes CSV cell to prevent formula injection (=, +, -, @, tab, CR).
+ * Sanitizes CSV cell to prevent formula injection (=, +, -, @, tab, CR)
+ * and properly serializes Date objects as ISO strings.
  */
 function sanitizeCsvCell(val) {
   if (val === null || val === undefined) return '""';
-  let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+  let str;
+  if (val instanceof Date) {
+    str = val.toISOString();
+  } else if (typeof val === 'object') {
+    str = JSON.stringify(val);
+  } else {
+    str = String(val);
+  }
   if (/^[=+\-@\t\r]/.test(str)) {
     str = "'" + str;
   }
@@ -337,10 +376,23 @@ async function getAuditEventById(req, res, next) {
       return res.status(404).json({ error: { message: 'Audit event not found', code: 'NOT_FOUND' } });
     }
 
+    const rawEvent = rows[0];
+
+    // Enforce board-level scoping: check project.access_all
+    if (rawEvent.board_id) {
+      const hasAccessAll = await userHasPermission(req.user.id, workspaceId, 'project.access_all', req.db);
+      if (!hasAccessAll) {
+        const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
+        if (!allowedBoardIds.includes(Number(rawEvent.board_id))) {
+          return res.status(404).json({ error: { message: 'Audit event not found', code: 'NOT_FOUND' } });
+        }
+      }
+    }
+
     const event = {
-      ...rows[0],
-      changes: parseJson(rows[0].changes),
-      meta: parseJson(rows[0].meta)
+      ...rawEvent,
+      changes: parseJson(rawEvent.changes),
+      meta: parseJson(rawEvent.meta)
     };
 
     return res.json({ event });
@@ -663,9 +715,10 @@ async function verifyAuditIntegrity(req, res, next) {
     let anchorWarning = null;
     let lastAnchor = null;
 
-    const tenantSlug = req.tenant?.slug || 'apollo';
-    const anchorFilePath = path.resolve(__dirname, '../../anchors', `${tenantSlug}-anchor.json`);
-    if (fs.existsSync(anchorFilePath)) {
+    const tenantSlug = req.tenant?.slug;
+    if (tenantSlug) {
+      const anchorFilePath = path.resolve(__dirname, '../../anchors', `${tenantSlug}-anchor.json`);
+      if (fs.existsSync(anchorFilePath)) {
       try {
         lastAnchor = JSON.parse(fs.readFileSync(anchorFilePath, 'utf8'));
         if (lastAnchor && lastAnchor.last_event_id) {
@@ -687,6 +740,7 @@ async function verifyAuditIntegrity(req, res, next) {
         anchorWarning = `Could not read anchor file: ${ancErr.message}`;
       }
     }
+  }
 
     // Log the verification attempt
     await auditService.record({

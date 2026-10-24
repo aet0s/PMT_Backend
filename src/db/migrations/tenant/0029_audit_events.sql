@@ -79,11 +79,51 @@ CREATE TRIGGER trg_audit_events_prevent_update
 BEFORE UPDATE ON audit_events
 FOR EACH ROW
 BEGIN
-  -- Allow cryptographic finalizer to assign hashes once (transition from NULL to hash)
-  IF OLD.row_hash IS NULL AND NEW.row_hash IS NOT NULL THEN
+  -- Strict immutability: once row_hash is assigned, row can never be modified
+  IF OLD.row_hash IS NOT NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events is an immutable append-only ledger; finalized rows cannot be modified.';
+  END IF;
+
+  -- Verify all immutable audit fields remain unchanged
+  IF NOT (
+    NEW.id = OLD.id AND
+    NEW.event_uid = OLD.event_uid AND
+    NEW.occurred_at = OLD.occurred_at AND
+    NEW.workspace_id <=> OLD.workspace_id AND
+    NEW.board_id <=> OLD.board_id AND
+    NEW.card_id <=> OLD.card_id AND
+    NEW.actor_user_id <=> OLD.actor_user_id AND
+    NEW.actor_type = OLD.actor_type AND
+    NEW.actor_name <=> OLD.actor_name AND
+    NEW.actor_email <=> OLD.actor_email AND
+    NEW.actor_role <=> OLD.actor_role AND
+    NEW.ip_address <=> OLD.ip_address AND
+    NEW.user_agent <=> OLD.user_agent AND
+    NEW.request_id <=> OLD.request_id AND
+    NEW.session_id <=> OLD.session_id AND
+    NEW.action = OLD.action AND
+    NEW.category = OLD.category AND
+    NEW.entity_type = OLD.entity_type AND
+    NEW.entity_id <=> OLD.entity_id AND
+    NEW.entity_label <=> OLD.entity_label AND
+    NEW.target_user_id <=> OLD.target_user_id AND
+    NEW.target_user_name <=> OLD.target_user_name AND
+    NEW.outcome = OLD.outcome AND
+    NEW.severity = OLD.severity AND
+    NEW.changes <=> OLD.changes AND
+    NEW.source = OLD.source AND
+    NEW.key_id = OLD.key_id
+  ) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Modifying immutable audit event fields is strictly prohibited.';
+  END IF;
+
+  -- Allow cryptographic finalizer (NULL -> NOT NULL) or pre-finalization coalescing meta update
+  IF NEW.row_hash IS NOT NULL THEN
     SET @audit_finalizing = 1;
+  ELSEIF NEW.meta IS NOT NULL THEN
+    SET @audit_coalescing = 1;
   ELSE
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events is an immutable append-only ledger; row modification is strictly prohibited.';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events update is only permitted for cryptographic finalization or pre-finalization coalescing.';
   END IF;
 END;
 
