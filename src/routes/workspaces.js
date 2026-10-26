@@ -4127,30 +4127,51 @@ function getWorkingDaysBetween(startDate, endDate, workingDays = [1, 2, 3, 4, 5]
   return Math.max(1, count);
 }
 
-// GET /api/workspaces/:id/my-tasks - Comprehensive personal work hub for any user (with team switcher for managers/leads)
+// GET /api/workspaces/:id/my-tasks - Comprehensive personal work hub for any user (supports all workspaces aggregation and single workspace scoping)
 router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
-  const workspaceId = Number(req.params.id);
   const currentUserId = Number(req.user.id);
+  const paramId = req.params.id;
+  const queryWs = req.query.workspaceId;
+  const isAllWorkspaces = queryWs === 'all' || (paramId === 'all' && (!queryWs || queryWs === 'all'));
+  const specificWorkspaceId = !isAllWorkspaces
+    ? Number(queryWs && queryWs !== 'all' ? queryWs : paramId)
+    : null;
 
   try {
     await syncCompanyOwners(req.db, currentUserId);
 
-    // 1. Verify user belongs to workspace
-    const memberCheck = await req.db.query(
-      `SELECT wm.role, wm.role_id, COALESCE(r.name, wm.role, 'Team Member') as role_name
+    // 1. Fetch user active workspace memberships
+    const userWorkspaces = await req.db.query(
+      `SELECT wm.workspace_id, wm.role, wm.role_id, COALESCE(r.name, wm.role, 'Team Member') as role_name,
+              w.id, w.name
        FROM workspace_members wm
+       JOIN workspaces w ON wm.workspace_id = w.id
        LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [workspaceId, currentUserId]
+       WHERE wm.user_id = ? AND wm.status != 'deactivated'
+       ORDER BY w.name ASC`,
+      [currentUserId]
     );
 
-    if (memberCheck.length === 0) {
-      return res.status(403).json({ error: { message: 'Access denied: You are not a member of this workspace', code: 'FORBIDDEN' } });
+    if (userWorkspaces.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied: You are not a member of any workspace', code: 'FORBIDDEN' } });
     }
 
-    const currentRole = (memberCheck[0].role_name || '').toLowerCase();
+    let activeWsIds = [];
+    let activeMember = null;
+    if (isAllWorkspaces) {
+      activeWsIds = userWorkspaces.map((w) => Number(w.id));
+    } else {
+      activeMember = userWorkspaces.find((w) => Number(w.id) === specificWorkspaceId);
+      if (!activeMember) {
+        return res.status(403).json({ error: { message: 'Access denied: You are not a member of this workspace', code: 'FORBIDDEN' } });
+      }
+      activeWsIds = [specificWorkspaceId];
+    }
+
     // Strictly Owner only can switch and inspect other members
-    const isOwner = ['owner', 'super admin'].includes(currentRole);
+    const isOwner = isAllWorkspaces
+      ? userWorkspaces.some((w) => ['owner', 'super admin'].includes((w.role_name || '').toLowerCase()))
+      : ['owner', 'super admin'].includes((activeMember?.role_name || '').toLowerCase());
     const canSwitchMember = isOwner;
 
     // 2. Determine target user (strictly current user unless requester is Owner)
@@ -4163,21 +4184,21 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
     // 3. Get target user details
     const targetUserRows = await req.db.query(
-      `SELECT u.id, u.name, u.email, u.avatar_url,
-              COALESCE(r.name, wm.role, 'Team Member') as role_name
+      `SELECT u.id, u.name, u.email, u.avatar_url
        FROM users u
-       JOIN workspace_members wm ON u.id = wm.user_id
-       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-       WHERE wm.workspace_id = ? AND u.id = ?`,
-      [workspaceId, targetUserId]
+       WHERE u.id = ?`,
+      [targetUserId]
     );
 
     if (targetUserRows.length === 0) {
-      return res.status(404).json({ error: { message: 'Target user is not a member of this workspace', code: 'NOT_FOUND' } });
+      return res.status(404).json({ error: { message: 'Target user not found', code: 'NOT_FOUND' } });
     }
-    const targetUser = targetUserRows[0];
+    const targetUser = {
+      ...targetUserRows[0],
+      role_name: activeMember?.role_name || userWorkspaces[0]?.role_name || 'Team Member'
+    };
 
-    // 4. Team members list (strictly for Owner switcher only)
+    // 4. Team members list (strictly for Owner switcher only across active workspaces)
     let teamMembers = [];
     if (canSwitchMember) {
       teamMembers = await req.db.query(
@@ -4191,36 +4212,32 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
          LEFT JOIN cards c ON cm.card_id = c.id
          LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
          LEFT JOIN boards b ON l.board_id = b.id AND b.workspace_id = wm.workspace_id AND b.is_archived = 0
-         WHERE wm.workspace_id = ? AND wm.status != 'deactivated'
+         WHERE wm.workspace_id IN (?) AND wm.status != 'deactivated'
          GROUP BY u.id, u.name, u.email, u.avatar_url, role_name
          ORDER BY u.name ASC`,
-        [workspaceId]
+        [activeWsIds]
       );
     }
 
-    // 5. Check accessible boards for the requesting user
-    const hasAccessAll = await userHasPermission(currentUserId, workspaceId, 'project.access_all', req.db);
-    let allowedBoardIds = [];
-    if (!hasAccessAll) {
-      allowedBoardIds = await accessibleBoardIds(currentUserId, workspaceId, 'project.view', req.db);
-      if (allowedBoardIds.length === 0) {
-        return res.json({
-          user: targetUser,
-          canSwitchMember,
-          teamMembers,
-          boards: [],
-          summary: { total_assigned: 0, active_count: 0, todo: 0, in_progress: 0, review: 0, completed: 0, overdue: 0, due_soon: 0, assigned_by_me: 0, completion_rate: 0 },
-          cards: [],
-          pagination: { page: 1, limit: 20, total: 0, totalPages: 1 }
-        });
-      }
+    // 5. Check accessible boards across all active workspaces
+    let allAllowedBoardIds = [];
+    for (const wsId of activeWsIds) {
+      const bIds = await accessibleBoardIds(currentUserId, wsId, 'project.view', req.db);
+      allAllowedBoardIds = allAllowedBoardIds.concat(bIds);
     }
+    allAllowedBoardIds = Array.from(new Set(allAllowedBoardIds));
 
-    let boardFilterClause = '';
-    const boardFilterParams = [workspaceId, targetUserId];
-    if (!hasAccessAll) {
-      boardFilterClause += ' AND b.id IN (?)';
-      boardFilterParams.push(allowedBoardIds);
+    if (allAllowedBoardIds.length === 0) {
+      return res.json({
+        user: targetUser,
+        canSwitchMember,
+        teamMembers,
+        workspaces: userWorkspaces.map((w) => ({ id: w.id, name: w.name })),
+        boards: [],
+        summary: { total_assigned: 0, active_count: 0, todo: 0, in_progress: 0, review: 0, completed: 0, overdue: 0, due_soon: 0, assigned_by_me: 0, completion_rate: 0 },
+        cards: [],
+        pagination: { page: 1, limit: 20, total: 0, totalPages: 1 }
+      });
     }
 
     // 6. Query all assigned cards for target user
@@ -4229,6 +4246,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
          c.id, c.title, c.description, c.due_date, c.start_date, c.is_complete, c.completed_at, c.created_at,
          c.list_id, l.name as list_name, l.position as list_position,
          b.id as board_id, b.name as board_name, b.background_color as board_bg,
+         w.id as workspace_id, w.name as workspace_name,
          CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
@@ -4236,27 +4254,22 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
        JOIN cards c ON cm.card_id = c.id
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?)
+         AND b.id IN (?)
          AND cm.user_id = ?
          AND c.is_archived = 0
-         ${boardFilterClause}
        ORDER BY is_effectively_complete ASC, is_overdue DESC, c.due_date ASC, c.id DESC`,
-      boardFilterParams
+      [activeWsIds, allAllowedBoardIds, targetUserId]
     );
 
     // 7. Query all cards delegated/assigned by target user
-    let delegatedBoardClause = '';
-    const delegatedParams = [targetUserId, targetUserId, workspaceId];
-    if (!hasAccessAll) {
-      delegatedBoardClause = ' AND b.id IN (?)';
-      delegatedParams.push(allowedBoardIds);
-    }
-
     const delegatedRows = await req.db.query(
       `SELECT DISTINCT
          c.id, c.title, c.description, c.due_date, c.start_date, c.is_complete, c.completed_at, c.created_at,
          c.list_id, l.name as list_name, l.position as list_position,
          b.id as board_id, b.name as board_name, b.background_color as board_bg,
+         w.id as workspace_id, w.name as workspace_name,
          CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue
        FROM (
@@ -4267,11 +4280,12 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
        JOIN cards c ON ca.card_id = c.id
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?)
+         AND b.id IN (?)
          AND c.is_archived = 0
-         ${delegatedBoardClause}
        ORDER BY is_effectively_complete ASC, c.id DESC`,
-      delegatedParams
+      [targetUserId, targetUserId, activeWsIds, allAllowedBoardIds]
     );
 
     // 8. Fetch co-members, labels, checklist counts, comment counts for all retrieved cards
@@ -4384,6 +4398,8 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         board_id: r.board_id,
         board_name: r.board_name,
         board_bg: r.board_bg,
+        workspace_id: r.workspace_id,
+        workspace_name: r.workspace_name,
         is_overdue: Boolean(r.is_overdue),
         is_due_soon: Boolean(r.is_due_soon),
         members: membersMap[r.id] || [],
@@ -4413,6 +4429,8 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         board_id: r.board_id,
         board_name: r.board_name,
         board_bg: r.board_bg,
+        workspace_id: r.workspace_id,
+        workspace_name: r.workspace_name,
         is_overdue: Boolean(r.is_overdue),
         members: membersMap[r.id] || [],
         labels: labelsMap[r.id] || [],
@@ -4436,7 +4454,12 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
     const distinctBoardsMap = {};
     [...formattedAssigned, ...formattedDelegated].forEach((t) => {
       if (t.board_id && !distinctBoardsMap[t.board_id]) {
-        distinctBoardsMap[t.board_id] = { id: t.board_id, name: t.board_name };
+        distinctBoardsMap[t.board_id] = {
+          id: t.board_id,
+          name: t.board_name,
+          workspace_id: t.workspace_id,
+          workspace_name: t.workspace_name
+        };
       }
     });
     const distinctBoards = Object.values(distinctBoardsMap);
@@ -4457,6 +4480,11 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
     }
 
     let filteredCards = candidateList.filter((c) => {
+      // Workspace filter
+      const wsFilter = req.query.workspaceId;
+      if (wsFilter && wsFilter !== 'all' && String(c.workspace_id) !== String(wsFilter)) {
+        return false;
+      }
       // Board filter
       if (boardId && boardId !== 'all' && String(c.board_id) !== String(boardId)) {
         return false;
@@ -4474,7 +4502,8 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         const titleMatch = (c.title || '').toLowerCase().includes(search);
         const descMatch = (c.description || '').toLowerCase().includes(search);
         const boardMatch = (c.board_name || '').toLowerCase().includes(search);
-        if (!titleMatch && !descMatch && !boardMatch) return false;
+        const wsMatch = (c.workspace_name || '').toLowerCase().includes(search);
+        if (!titleMatch && !descMatch && !boardMatch && !wsMatch) return false;
       }
       return true;
     });
@@ -4491,6 +4520,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
       user: targetUser,
       canSwitchMember,
       teamMembers,
+      workspaces: userWorkspaces.map((w) => ({ id: w.id, name: w.name })),
       boards: distinctBoards,
       summary: {
         total_assigned: totalAssignedCount,
