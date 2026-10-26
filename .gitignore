@@ -96,8 +96,13 @@ snapshots/
 *.dump
 *.sql.gz
 *.sql.bak
+*.sqlite
+*.sqlite3
+*.db
+*.db3
 
-# Keep essential migration scripts and schema definitions
+# Prevent arbitrary sql dumps/exports from being committed while preserving core migrations & schema
+*.sql
 !src/db/migrations/
 !src/db/migrations/**/*.sql
 !src/db/schema.sql
@@ -125,6 +130,12 @@ tmp/
 temp/
 .temp/
 .cache/
+.agents/
+.gemini/
+.claude/
+.cursor/
+.windsurf/
+.system_generated/
 
 # Process and runtime files
 pids/

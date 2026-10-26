@@ -734,6 +734,26 @@ router.post('/:id/auto-archive', requireAuth, requirePermission(['task.archive',
       for (const card of cardsToArchive) {
         broadcastWorkspaceEvent(workspaceId, 'card:archived', { cardId: card.id, boardId: card.board_id }, req.headers['x-origin-id'], req.tenant?.id);
       }
+
+      await auditService.record({
+        action: 'workspace.auto_archive',
+        category: 'task',
+        entityType: 'workspace',
+        entityId: workspaceId,
+        entityLabel: `Auto-archived ${cardsToArchive.length} completed task(s)`,
+        outcome: 'success',
+        severity: 'info',
+        actorId: req.user?.id,
+        meta: {
+          archivedCount: cardsToArchive.length,
+          days,
+          cardIds
+        },
+        db: req.db
+      }).catch(() => {});
+      res.locals._auditRecorded = true;
+    } else {
+      res.locals._auditRecorded = true; // Mark recorded so safety net skips logging empty routine checks
     }
 
     return res.json({
