@@ -147,7 +147,7 @@ async function getFullCard(cardId, dbInstance = null) {
     card.assigners = assignersRes;
 
     const membersRes = await db.query(
-      'SELECT u.id, u.name, u.email, u.avatar_url FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
+      'SELECT u.id, u.name, u.email, u.avatar_url, cm.assigned_by_user_id FROM users u JOIN card_members cm ON u.id = cm.user_id WHERE cm.card_id = ? ORDER BY u.name ASC',
       [cardId]
     );
     card.members = membersRes;
@@ -1035,8 +1035,52 @@ router.post(
       [cardId, user_id]
     );
 
+    // Fetch card assigners to identify assigners vs assignees
+    const assignerRows = await req.db.query(
+      'SELECT user_id FROM card_assigners WHERE card_id = ?',
+      [cardId]
+    );
+    const isCallerAssigner = assignerRows.some((a) => Number(a.user_id) === Number(req.user.id));
+
+    // Fetch caller's workspace role to check for top-level admin/owner privilege
+    const callerRoleRows = await req.db.query(
+      `SELECT r.rank, r.name 
+       FROM workspace_members wm 
+       JOIN roles r ON wm.role_id = r.id 
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    const callerRoleRow = callerRoleRows && callerRoleRows[0];
+    const callerRank = Number(callerRoleRow?.rank || 30);
+    const roleName = String(callerRoleRow?.name || '').toLowerCase();
+    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
+    const hasFullAssigneeControl = isCallerAssigner || isTopLevel;
+
     let action = '';
     if (existing.length > 0) {
+      // Removing an assignee
+      if (!hasFullAssigneeControl) {
+        // 1. Assignee cannot remove themselves from assignee
+        if (Number(user_id) === Number(req.user.id)) {
+          return res.status(403).json({
+            error: {
+              message: 'You cannot remove yourself as an assignee from this card.',
+              code: 'FORBIDDEN'
+            }
+          });
+        }
+        // 2. Assignee can only remove extra assignees that they themselves added
+        const memberAssignedBy = existing[0].assigned_by_user_id;
+        if (memberAssignedBy && Number(memberAssignedBy) !== Number(req.user.id)) {
+          return res.status(403).json({
+            error: {
+              message: 'Only the assigner who assigned this member or administrators can remove them.',
+              code: 'FORBIDDEN'
+            }
+          });
+        }
+      }
+
       await req.db.execute('DELETE FROM card_members WHERE card_id = ? AND user_id = ?', [cardId, user_id]);
       action = 'removed';
       if (boardId) {
@@ -1055,7 +1099,24 @@ router.post(
         );
       }
     } else {
-      await req.db.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardId, user_id]);
+      // Adding a new assignee
+      if (!hasFullAssigneeControl) {
+        // Team member cannot assign an existing card assigner as an assignee
+        const isTargetAssigner = assignerRows.some((a) => Number(a.user_id) === Number(user_id));
+        if (isTargetAssigner) {
+          return res.status(403).json({
+            error: {
+              message: 'Card assigners cannot be assigned as assignees by team members.',
+              code: 'FORBIDDEN'
+            }
+          });
+        }
+      }
+
+      await req.db.execute(
+        'INSERT INTO card_members (card_id, user_id, assigned_by_user_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE assigned_by_user_id = COALESCE(assigned_by_user_id, VALUES(assigned_by_user_id))',
+        [cardId, user_id, req.user.id]
+      );
       await req.db.execute(
         'UPDATE cards SET first_moved_or_assigned_at = COALESCE(first_moved_or_assigned_at, NOW()) WHERE id = ?',
         [cardId]
@@ -1106,13 +1167,14 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
 
   try {
     const cardRes = await req.db.query(
-      'SELECT c.title, l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
+      'SELECT c.title, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
       [cardId]
     );
     if (cardRes.length === 0) {
       return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
     }
     const boardId = cardRes[0]?.board_id;
+    const workspaceId = cardRes[0]?.workspace_id;
     const cardTitle = cardRes[0]?.title || 'Card';
 
     const targetUserRes = await req.db.query('SELECT name, email FROM users WHERE id = ?', [user_id]);
@@ -1123,6 +1185,29 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
       'SELECT u.id, u.name FROM card_assigners ca JOIN users u ON ca.user_id = u.id WHERE ca.card_id = ?',
       [cardId]
     )).map((u) => ({ id: u.id, name: u.name }));
+
+    // Authorization check: Only existing assigners of this card or top-level workspace roles (rank >= 50 or owner/admin/manager) can modify card assigners
+    const callerRoleRows = await req.db.query(
+      `SELECT r.rank, r.name 
+       FROM workspace_members wm 
+       JOIN roles r ON wm.role_id = r.id 
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, req.user.id]
+    );
+    const callerRoleRow = callerRoleRows && callerRoleRows[0];
+    const callerRank = Number(callerRoleRow?.rank || 30);
+    const roleName = String(callerRoleRow?.name || '').toLowerCase();
+    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
+    const isCallerAssigner = beforeAssigners.some((a) => Number(a.id) === Number(req.user.id));
+
+    if (!isTopLevel && !isCallerAssigner) {
+      return res.status(403).json({
+        error: {
+          message: 'Only card assigners or administrators can modify card assigners.',
+          code: 'FORBIDDEN'
+        }
+      });
+    }
 
     const existing = await req.db.query(
       'SELECT * FROM card_assigners WHERE card_id = ? AND user_id = ?',

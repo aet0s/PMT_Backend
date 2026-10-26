@@ -3932,7 +3932,7 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
 
       // Fetch Members / Assignees
       const cmRes = await req.db.query(
-        `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url 
+        `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url, cm.assigned_by_user_id 
          FROM card_members cm
          JOIN users u ON cm.user_id = u.id
          WHERE cm.card_id IN (?)
@@ -3941,7 +3941,7 @@ router.get('/:id/issues', requireAuth, requirePermission('task.view'), async (re
       );
       cmRes.forEach((row) => {
         if (!cardMembersMap[row.card_id]) cardMembersMap[row.card_id] = [];
-        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url });
+        cardMembersMap[row.card_id].push({ id: row.id, name: row.name, email: row.email, avatar_url: row.avatar_url, assigned_by_user_id: row.assigned_by_user_id });
       });
 
       // Fetch Labels
