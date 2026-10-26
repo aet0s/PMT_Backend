@@ -4130,11 +4130,13 @@ function getWorkingDaysBetween(startDate, endDate, workingDays = [1, 2, 3, 4, 5]
 // GET /api/workspaces/:id/my-tasks - Comprehensive personal work hub for any user (supports all workspaces aggregation and single workspace scoping)
 router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
   const currentUserId = Number(req.user.id);
-  const paramId = req.params.id;
-  const queryWs = req.query.workspaceId;
-  const isAllWorkspaces = queryWs === 'all' || (paramId === 'all' && (!queryWs || queryWs === 'all'));
-  const specificWorkspaceId = !isAllWorkspaces
-    ? Number(queryWs && queryWs !== 'all' ? queryWs : paramId)
+  const paramId = String(req.params.id || '');
+  const queryWs = req.query.workspaceId ? String(req.query.workspaceId) : '';
+  const isAllWorkspaces = queryWs === 'all' || paramId === 'all';
+  const targetRawId = (!isAllWorkspaces && queryWs && queryWs !== 'all') ? queryWs : paramId;
+  const parsedTargetId = Number(targetRawId);
+  const specificWorkspaceId = (!isAllWorkspaces && !isNaN(parsedTargetId) && parsedTargetId > 0)
+    ? parsedTargetId
     : null;
 
   try {
@@ -4158,10 +4160,12 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
     let activeWsIds = [];
     let activeMember = null;
-    if (isAllWorkspaces) {
-      activeWsIds = userWorkspaces.map((w) => Number(w.id));
+    if (isAllWorkspaces || !specificWorkspaceId) {
+      activeWsIds = userWorkspaces
+        .map((w) => Number(w.id || w.workspace_id))
+        .filter((id) => !isNaN(id) && id > 0);
     } else {
-      activeMember = userWorkspaces.find((w) => Number(w.id) === specificWorkspaceId);
+      activeMember = userWorkspaces.find((w) => Number(w.id || w.workspace_id) === specificWorkspaceId);
       if (!activeMember) {
         return res.status(403).json({ error: { message: 'Access denied: You are not a member of this workspace', code: 'FORBIDDEN' } });
       }
@@ -4169,7 +4173,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
     }
 
     // Strictly Owner only can switch and inspect other members
-    const isOwner = isAllWorkspaces
+    const isOwner = (isAllWorkspaces || !specificWorkspaceId)
       ? userWorkspaces.some((w) => ['owner', 'super admin'].includes((w.role_name || '').toLowerCase()))
       : ['owner', 'super admin'].includes((activeMember?.role_name || '').toLowerCase());
     const canSwitchMember = isOwner;
@@ -4222,10 +4226,12 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
     // 5. Check accessible boards across all active workspaces
     let allAllowedBoardIds = [];
     for (const wsId of activeWsIds) {
-      const bIds = await accessibleBoardIds(currentUserId, wsId, 'project.view', req.db);
-      allAllowedBoardIds = allAllowedBoardIds.concat(bIds);
+      if (!isNaN(wsId) && wsId > 0) {
+        const bIds = await accessibleBoardIds(currentUserId, wsId, 'project.view', req.db);
+        allAllowedBoardIds = allAllowedBoardIds.concat(bIds);
+      }
     }
-    allAllowedBoardIds = Array.from(new Set(allAllowedBoardIds));
+    allAllowedBoardIds = Array.from(new Set(allAllowedBoardIds.map(Number).filter((id) => !isNaN(id) && id > 0)));
 
     if (allAllowedBoardIds.length === 0) {
       return res.json({
