@@ -4555,22 +4555,30 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
 // GET /api/workspaces/:id/daily-tracker - Server-side paginated & filtered daily task tracking (v2)
 router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.view'), async (req, res, next) => {
-  const routeWsId = Number(req.params.id);
+  const paramWsId = req.params.id;
+  const isAllRoute = paramWsId === 'all';
+  const routeWsId = !isAllRoute ? Number(paramWsId) : null;
+
+  if (!isAllRoute && (isNaN(routeWsId) || routeWsId <= 0)) {
+    return res.status(400).json({ error: { message: 'Invalid workspace ID', code: 'BAD_REQUEST' } });
+  }
 
   try {
     await syncCompanyOwners(req.db, req.user.id);
 
-    const isMember = await req.db.query(
-      'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-      [routeWsId, req.user.id]
-    );
-    if (isMember.length === 0) {
-      return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
-    }
+    if (routeWsId) {
+      const isMember = await req.db.query(
+        'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+        [routeWsId, req.user.id]
+      );
+      if (isMember.length === 0) {
+        return res.status(403).json({ error: { message: 'Access denied to workspace', code: 'FORBIDDEN' } });
+      }
 
-    const hasPerm = await userHasPermission(req.user.id, routeWsId, 'daily_tracker.view', req.db);
-    if (!hasPerm) {
-      return res.status(403).json({ error: { message: 'Permission denied: daily_tracker.view required', code: 'FORBIDDEN' } });
+      const hasPerm = await userHasPermission(req.user.id, routeWsId, 'daily_tracker.view', req.db);
+      if (!hasPerm) {
+        return res.status(403).json({ error: { message: 'Permission denied: daily_tracker.view required', code: 'FORBIDDEN' } });
+      }
     }
 
     // 1. Date parameter: default to today (YYYY-MM-DD)
@@ -5329,8 +5337,13 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
 // GET /api/workspaces/:id/daily-tracker/people - People view with Focus + Check-in states
 router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tracker.view_people'), async (req, res, next) => {
   const routeWsId = Number(req.params.id);
+  if (isNaN(routeWsId) || routeWsId <= 0) {
+    return res.status(400).json({ error: { message: 'Invalid workspace ID', code: 'BAD_REQUEST' } });
+  }
 
   try {
+    await syncCompanyOwners(req.db, req.user.id);
+
     const isMember = await req.db.query(
       'SELECT role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
       [routeWsId, req.user.id]
@@ -5340,6 +5353,9 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
     }
 
     const hasViewPeople = await userHasPermission(req.user.id, routeWsId, 'daily_tracker.view_people', req.db);
+    if (!hasViewPeople) {
+      return res.status(403).json({ error: { message: 'Permission denied: daily_tracker.view_people required', code: 'FORBIDDEN' } });
+    }
 
     const targetDate = req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date).trim())
       ? String(req.query.date).trim()
