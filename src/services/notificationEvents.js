@@ -246,6 +246,26 @@ const NOTIFICATION_EVENTS = {
     deepLink: '/b/{boardId}?card={cardId}',
     notifiable: false
   },
+  'card.submitted_for_review': {
+    category: 'Cards',
+    recipients: 'cardAssignersOnly',
+    requiredPermission: 'task.view',
+    template: '{actor} submitted task "{cardTitle}" for your review',
+    metaFields: ['cardTitle', 'fromList', 'toList', 'boardName'],
+    coalescingPolicy: 'immediate',
+    deepLink: '/b/{boardId}?card={cardId}',
+    notifiable: true
+  },
+  'card.changes_requested': {
+    category: 'Cards',
+    recipients: 'cardAssigneesOnly',
+    requiredPermission: 'task.view',
+    template: '{actor} returned "{cardTitle}" to In Progress for revision{feedbackText}',
+    metaFields: ['cardTitle', 'fromList', 'toList', 'boardName', 'feedbackText'],
+    coalescingPolicy: 'immediate',
+    deepLink: '/b/{boardId}?card={cardId}',
+    notifiable: true
+  },
   'card.archived': {
     category: 'Cards',
     recipients: 'cardAssigneesAndCreator',

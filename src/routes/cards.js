@@ -84,6 +84,24 @@ function calculateWorkingDaysOpen(startDate, endDate = new Date(), workingDays =
   return count;
 }
 
+function detectListStage(listName) {
+  if (!listName || typeof listName !== 'string') return null;
+  const name = listName.toLowerCase().trim();
+  if (name.includes('done') || name.includes('complete') || name.includes('finished') || name.includes('closed') || name.includes('resolved')) {
+    return 'done';
+  }
+  if (name.includes('review') || name.includes('qa') || name.includes('test') || name.includes('verify') || name.includes('audit')) {
+    return 'review';
+  }
+  if (name.includes('progress') || name.includes('doing') || name.includes('wip') || name.includes('working') || name.includes('dev') || name.includes('active')) {
+    return 'in_progress';
+  }
+  if (name.includes('todo') || name.includes('to do') || name.includes('to-do') || name.includes('backlog') || name.includes('open') || name.includes('new') || name.includes('ready') || name.includes('pending')) {
+    return 'todo';
+  }
+  return null;
+}
+
 const createCardSchema = z.object({
   list_id: z.number(),
   title: z.string().min(1, 'Card title is required').transform((v) => sanitizePlain(v)),
@@ -416,7 +434,7 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
 
   try {
     const oldCardRes = await req.db.query(
-      `SELECT c.*, l.board_id, l.name as list_name, b.workspace_id 
+      `SELECT c.*, l.board_id, l.name as list_name, b.name as board_name, b.workspace_id 
        FROM cards c 
        JOIN lists l ON c.list_id = l.id 
        JOIN boards b ON l.board_id = b.id 
@@ -685,10 +703,71 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
             boardId: oldCard.board_id,
             cardId,
             tenantId: req.tenant?.id || null,
-            meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName }
+            meta: { cardTitle: updatedCard.title, fromList: oldCard.list_name, toList: newListName, boardName: oldCard.board_name }
           },
           tx
         );
+
+        // Targeted Review Workflow Notifications between Assigner and Assignee ONLY
+        const fromStage = detectListStage(oldCard.list_name);
+        const toStage = detectListStage(newListName);
+
+        // 1. Assignee puts card in Review list -> Assigner gets notification
+        if (toStage === 'review' && fromStage !== 'review') {
+          await notify(
+            {
+              eventType: 'card.submitted_for_review',
+              actorUserId: req.user.id,
+              boardId: oldCard.board_id,
+              cardId,
+              tenantId: req.tenant?.id || null,
+              meta: {
+                cardTitle: updatedCard.title,
+                fromList: oldCard.list_name,
+                toList: newListName,
+                boardName: oldCard.board_name
+              }
+            },
+            tx
+          );
+        }
+
+        // 2. Assigner puts card back in In Progress / To Do -> Assignee gets notification (with recent comment feedback if present)
+        if (fromStage === 'review' && (toStage === 'in_progress' || toStage === 'todo')) {
+          let feedbackText = '';
+          try {
+            const recentComments = await tx.query(
+              `SELECT body FROM comments 
+               WHERE card_id = ? AND user_id = ? 
+               ORDER BY created_at DESC LIMIT 1`,
+              [cardId, req.user.id]
+            );
+            if (recentComments.length > 0 && recentComments[0].body) {
+              const cleanSnippet = recentComments[0].body.replace(/<[^>]*>/g, '').trim();
+              if (cleanSnippet) {
+                feedbackText = ` with note: "${cleanSnippet.substring(0, 80)}${cleanSnippet.length > 80 ? '...' : ''}"`;
+              }
+            }
+          } catch (e) {}
+
+          await notify(
+            {
+              eventType: 'card.changes_requested',
+              actorUserId: req.user.id,
+              boardId: oldCard.board_id,
+              cardId,
+              tenantId: req.tenant?.id || null,
+              meta: {
+                cardTitle: updatedCard.title,
+                fromList: oldCard.list_name,
+                toList: newListName,
+                boardName: oldCard.board_name,
+                feedbackText
+              }
+            },
+            tx
+          );
+        }
       }
 
       if (title !== undefined && title !== oldCard.title) {

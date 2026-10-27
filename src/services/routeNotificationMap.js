@@ -26,8 +26,8 @@ const ROUTE_NOTIFICATION_MAP = {
     description: 'Removes member from board'
   },
   'PATCH /api/cards/:id': {
-    events: ['card.completed', 'card.archived'],
-    description: 'Updates card attributes, status, completion, archive'
+    events: ['card.completed', 'card.archived', 'card.submitted_for_review', 'card.changes_requested'],
+    description: 'Updates card attributes, status, completion, review, archive'
   },
   'DELETE /api/cards/:id': {
     events: ['card.deleted'],

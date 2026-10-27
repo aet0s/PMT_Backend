@@ -64,6 +64,38 @@ async function resolveRecipients(eventType, ctx = {}, dbInstance = null) {
         break;
       }
 
+      case 'cardAssignersOnly': {
+        if (ctx.cardId) {
+          const assignerRows = await db.query(
+            `SELECT user_id FROM card_assigners WHERE card_id = ?
+             UNION
+             SELECT assigned_by_user_id as user_id FROM card_members WHERE card_id = ? AND assigned_by_user_id IS NOT NULL`,
+            [ctx.cardId, ctx.cardId]
+          );
+          candidates = assignerRows.map((r) => r.user_id);
+
+          // If no explicit assigner on card, fallback to card creator
+          if (candidates.length === 0) {
+            const cardRes = await db.query('SELECT created_by FROM cards WHERE id = ?', [ctx.cardId]);
+            if (cardRes[0]?.created_by) {
+              candidates = [cardRes[0].created_by];
+            }
+          }
+        }
+        break;
+      }
+
+      case 'cardAssigneesOnly': {
+        if (ctx.cardId) {
+          const assigneeRows = await db.query(
+            'SELECT user_id FROM card_members WHERE card_id = ?',
+            [ctx.cardId]
+          );
+          candidates = assigneeRows.map((r) => r.user_id);
+        }
+        break;
+      }
+
       case 'workspaceProjectAccessAll': {
         if (ctx.workspaceId) {
           const wRes = await db.query('SELECT user_id FROM workspace_members WHERE workspace_id = ?', [ctx.workspaceId]);
