@@ -208,6 +208,16 @@ async function safeQuery(db, sql, params = []) {
           );
         }
       }
+
+      // Explicitly enforce that Project Manager cannot have member.* or role.* permissions
+      if (roleName === 'Project Manager') {
+        await db.execute(
+          `DELETE rp FROM role_permissions rp
+           JOIN permissions p ON rp.permission_id = p.id
+           WHERE rp.role_id = ? AND (p.\`key\` LIKE 'member.%' OR p.\`key\` LIKE 'role.%')`,
+          [rRow.id]
+        );
+      }
     }
 
     return {

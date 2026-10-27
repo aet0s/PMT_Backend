@@ -26,7 +26,7 @@ const SECTION_4_SPEC = {
   Owner: PERMISSIONS.map((p) => p.key),
   Admin: PERMISSIONS.filter((p) => !['workspace.delete', 'company.delete', 'company.export_data', 'billing.manage', 'company.manage_billing'].includes(p.key)).map((p) => p.key),
   'Project Manager': [
-    'workspace.view', 'company.view', 'member.view', 'member.invite_guest', 'role.view', 'team.view',
+    'workspace.view', 'company.view', 'team.view',
     'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
     'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
     'list.create', 'list.edit', 'list.reorder', 'list.delete',

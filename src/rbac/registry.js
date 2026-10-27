@@ -265,9 +265,9 @@ const SYSTEM_ROLES = {
     rank: 60,
     is_system: 1,
     is_editable: 1,
-    description: 'Manages projects, tasks, workflows, and team members. Cannot manage company settings or security.',
+    description: 'Manages projects, tasks, workflows, and board execution. Cannot view member directory, manage roles, or access company settings.',
     permissions: [
-      'workspace.view', 'company.view', 'member.view', 'member.invite_guest', 'role.view', 'team.view',
+      'workspace.view', 'company.view', 'team.view',
       'project.view', 'project.create', 'project.edit_settings', 'project.archive', 'project.manage_members', 'project.assign_role',
       'project.manage_templates', 'project.change_status', 'project.duplicate', 'project.change_visibility',
       'list.create', 'list.edit', 'list.reorder', 'list.delete',
