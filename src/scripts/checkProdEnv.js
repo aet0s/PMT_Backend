@@ -142,18 +142,29 @@ function checkProdEnv(env = process.env) {
     if (!env.FIREBASE_PROJECT_ID) {
       addError('FIREBASE_PROJECT_ID', 'PUSH_ENABLED=true but FIREBASE_PROJECT_ID is missing', 'Set FIREBASE_PROJECT_ID or disable push with PUSH_ENABLED=false');
     }
-    const hasFilePath = !!env.FIREBASE_SERVICE_ACCOUNT_PATH;
-    const hasBase64 = !!env.FIREBASE_SERVICE_ACCOUNT_JSON_B64;
+    const filePathVal = env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH || env.FIREBASE_SERVICE_ACCOUNT_PATH;
+    const base64Val = env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 || env.FIREBASE_SERVICE_ACCOUNT_JSON_B64;
+    const hasFilePath = !!filePathVal;
+    const hasBase64 = !!base64Val;
     if (!hasFilePath && !hasBase64) {
-      addError('FIREBASE_SERVICE_ACCOUNT', 'PUSH_ENABLED=true but no Firebase service account credentials found', 'Configure FIREBASE_SERVICE_ACCOUNT_PATH (file outside repo) or FIREBASE_SERVICE_ACCOUNT_JSON_B64');
+      addError('FIREBASE_SERVICE_ACCOUNT', 'PUSH_ENABLED=true but no Firebase service account credentials found', 'Configure FIREBASE_SERVICE_ACCOUNT_KEY_PATH (file outside repo) or FIREBASE_SERVICE_ACCOUNT_KEY_BASE64');
     }
     if (hasFilePath) {
-      const saPath = path.resolve(env.FIREBASE_SERVICE_ACCOUNT_PATH);
-      const repoRoot = path.resolve(__dirname, '../../../');
-      if (saPath.startsWith(repoRoot) && !saPath.includes('node_modules')) {
-        addError('FIREBASE_SERVICE_ACCOUNT_PATH', `Service account key (${saPath}) resides inside project repository`, 'Move the service account JSON file outside the repository (e.g. /etc/pmt/firebase-service-account.json)');
+      const saPath = path.resolve(filePathVal);
+      const serverRoot = path.resolve(__dirname, '../../');
+      const clientRoot = path.resolve(__dirname, '../../../client');
+      let gitRoot = null;
+      try {
+        const { execSync } = require('child_process');
+        gitRoot = execSync('git rev-parse --show-toplevel', { cwd: serverRoot, stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
+      } catch (_) {}
+
+      const isInsideRepo = (gitRoot && saPath.startsWith(gitRoot)) || saPath.startsWith(serverRoot) || saPath.startsWith(clientRoot);
+
+      if (isInsideRepo && !saPath.includes('node_modules')) {
+        addError('FIREBASE_SERVICE_ACCOUNT_KEY_PATH', `Service account key (${saPath}) resides inside server or client repository`, 'Move the service account JSON file outside the git repository (e.g. into the sibling firebase/ folder or /etc/pmt/firebase-service-account.json)');
       } else if (!fs.existsSync(saPath)) {
-        addError('FIREBASE_SERVICE_ACCOUNT_PATH', `Service account file not found at '${saPath}'`, 'Verify the file exists and is accessible with chmod 600');
+        addError('FIREBASE_SERVICE_ACCOUNT_KEY_PATH', `Service account file not found at '${saPath}'`, 'Verify the file exists and is accessible with chmod 600');
       }
     }
   }
