@@ -4478,11 +4478,12 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
     let candidateList = [];
     if (tab === 'delegated') {
-      candidateList = formattedDelegated;
+      candidateList = formattedDelegated.filter((t) => !t.is_complete);
     } else if (tab === 'completed') {
       candidateList = completedAssigned;
     } else {
-      candidateList = formattedAssigned;
+      // 'assigned': exclude completed tasks because they are already in the dedicated 'completed' tab
+      candidateList = stage === 'done' ? completedAssigned : activeAssigned;
     }
 
     let filteredCards = candidateList.filter((c) => {
@@ -4537,7 +4538,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         completed: completedAssigned.length,
         overdue: overdueCount,
         due_soon: dueSoonCount,
-        assigned_by_me: formattedDelegated.length,
+        assigned_by_me: formattedDelegated.filter((t) => !t.is_complete).length,
         completion_rate: completionRate
       },
       cards: pagedCards,
