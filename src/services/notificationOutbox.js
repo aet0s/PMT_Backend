@@ -253,6 +253,21 @@ async function processOutbox(db, tenantId = 'single') {
               createdNotif.unread_total = unreadTotal;
               createdNotif.unread_board = unreadBoard;
               sendUserNotification(recipientId, createdNotif, tenantId);
+
+              // Web Push delivery integration through existing outbox pattern
+              try {
+                const { sendPushNotification } = require('./pushService');
+                sendPushNotification(db, {
+                  notification: createdNotif,
+                  recipientId,
+                  eventType: row.event_type,
+                  message,
+                  meta,
+                  ctx,
+                  actorName,
+                  tenantId
+                }).catch(() => {});
+              } catch (_) {}
             }
           }
         }

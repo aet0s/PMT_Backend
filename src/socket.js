@@ -10,6 +10,23 @@ let io = null;
 // Store active board users: roomKey -> Map(socketId -> { userId, userName, email })
 const boardUsersMap = new Map();
 
+// Store user activity heartbeat: userId -> timestamp (ms) of last visible & focused activity
+const userActiveHeartbeatMap = new Map();
+
+function recordUserActivity(userId, isVisible = true) {
+  if (!userId) return;
+  if (isVisible) {
+    userActiveHeartbeatMap.set(Number(userId), Date.now());
+  }
+}
+
+function isUserActive(userId, withinSeconds = 60) {
+  if (!userId) return false;
+  const lastActive = userActiveHeartbeatMap.get(Number(userId));
+  if (!lastActive) return false;
+  return (Date.now() - lastActive) <= (withinSeconds * 1000);
+}
+
 function parseCookies(cookieHeader) {
   const list = {};
   if (!cookieHeader) return list;
@@ -353,6 +370,13 @@ function initSocket(server) {
       });
     });
 
+    // Client visibility/focus heartbeat for push suppression (skip push when active)
+    recordUserActivity(socket.userId, true);
+    socket.on('activity:heartbeat', (data) => {
+      const isVisible = data?.isVisible !== false && data?.isFocused !== false;
+      recordUserActivity(socket.userId, isVisible);
+    });
+
     // Disconnect cleanup
     socket.on('disconnect', () => {
       const room = socket.currentBoardRoom;
@@ -510,5 +534,7 @@ module.exports = {
   disconnectTenantSockets,
   getBoardRoom,
   getWorkspaceRoom,
-  getUserRoom
+  getUserRoom,
+  recordUserActivity,
+  isUserActive
 };

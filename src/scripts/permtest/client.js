@@ -123,7 +123,7 @@ class PermtestClient {
         });
 
         // Handle 429 rate limit backoff
-        if (res.status === 429 && attempts < maxAttempts) {
+        if (!options.noRetryOn429 && res.status === 429 && attempts < maxAttempts) {
           const retryAfter = Number(res.headers.get('retry-after') || 1);
           console.warn(`[PERMTEST] 429 Rate limited on ${url}, backing off for ${retryAfter}s (attempt ${attempts}/${maxAttempts})...`);
           await new Promise((r) => setTimeout(r, retryAfter * 1000 + 200));

@@ -76,6 +76,21 @@ async function insertAndDeliverNotification(userId, eventType, message, meta, ct
       notification.actor_name = actorName || 'Someone';
       notification.meta = meta;
       sendUserNotification(userId, notification, tenantId);
+
+      // Web Push delivery integration
+      try {
+        const { sendPushNotification } = require('./pushService');
+        sendPushNotification(db, {
+          notification,
+          recipientId: userId,
+          eventType,
+          message,
+          meta,
+          ctx,
+          actorName,
+          tenantId
+        }).catch(() => {});
+      } catch (_) {}
     }
   } catch (err) {
     console.error(`[NOTIFY_DELIVERY_ERROR] Failed to insert/emit notification to user ${userId}:`, err);

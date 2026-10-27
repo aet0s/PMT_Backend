@@ -828,4 +828,6 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
   }
 });
 
+router.createInvitationHelper = createInvitationHelper;
 module.exports = router;
+module.exports.createInvitationHelper = createInvitationHelper;

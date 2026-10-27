@@ -347,8 +347,8 @@ async function resolveWorkspaceId(req) {
     if (rawWs && !isNaN(Number(rawWs))) derivedWorkspaceId = Number(rawWs);
   }
 
-  // Fallback for notifications
-  if (!derivedWorkspaceId && routePath.includes('/notifications') && req.user?.id) {
+  // Fallback for notifications and push
+  if (!derivedWorkspaceId && (routePath.includes('/notifications') || routePath.includes('/push')) && req.user?.id) {
     const wmRes = await db.query(
       'SELECT workspace_id FROM workspace_members WHERE user_id = ? ORDER BY workspace_id ASC LIMIT 1',
       [req.user.id]

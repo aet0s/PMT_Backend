@@ -10,6 +10,14 @@ jspm_packages/
 *.key
 *.cert
 *.crt
+*firebase*service-account*.json
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json
+firebase-adminsdk*.json
+serviceAccountKey.json
+*.service-account.json
+*.serviceAccount.json
 
 # Test suites, test runners, and test files (Do not upload to server)
 test_*.js

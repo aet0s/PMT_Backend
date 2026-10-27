@@ -211,6 +211,13 @@ const ROUTE_PERMISSIONS = new Map([
   ['DELETE /api/notifications/:id',         { selfScoped: 'notification.manage_own — user deletes their own notification',       scope: 'company' }],
   ['DELETE /api/notifications/clear/read',  { selfScoped: 'notification.manage_own — user clears all read notifications',        scope: 'company' }],
 
+  // ─── Web Push Notifications ────────────────────────────────────────────────
+  ['POST /api/push/subscriptions',          { selfScoped: 'notification.manage_own — user registers or updates push device subscription', scope: 'company' }],
+  ['GET /api/push/subscriptions',           { selfScoped: 'notification.manage_own — user lists own push device subscriptions',          scope: 'company' }],
+  ['DELETE /api/push/subscriptions/:id',     { selfScoped: 'notification.manage_own — user revokes specific push device subscription',    scope: 'company' }],
+  ['DELETE /api/push/subscriptions/current', { selfScoped: 'notification.manage_own — user revokes current device subscription on logout',scope: 'company' }],
+  ['POST /api/push/test',                   { selfScoped: 'notification.manage_own — user dispatches test notification to own devices',   scope: 'company' }],
+
   // ─── Permissions Catalog & Self-Evaluation ────────────────────────────────
   // GET /api/permissions: returns the catalog; any authenticated user should see it
   ['GET /api/permissions',                  { permission: 'role.view', scope: 'company' }],

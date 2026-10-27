@@ -372,6 +372,26 @@ const ROUTE_AUDIT_MAP = {
   },
 
   // ==========================================
+  // --- PUSH NOTIFICATIONS ---
+  // ==========================================
+  'POST /api/push/subscriptions': {
+    auditEvents: ['push.subscription_created'],
+    description: 'Registers or updates push subscription device'
+  },
+  'DELETE /api/push/subscriptions/:id': {
+    auditEvents: ['push.subscription_revoked'],
+    description: 'Revokes specific push subscription device'
+  },
+  'DELETE /api/push/subscriptions/current': {
+    auditEvents: ['push.subscription_revoked'],
+    description: 'Revokes current device push subscription on logout'
+  },
+  'POST /api/push/test': {
+    auditEvents: ['push.test_sent'],
+    description: 'Dispatches test push notification to caller devices'
+  },
+
+  // ==========================================
   // --- ROLES ---
   // ==========================================
   'POST /api/roles': {

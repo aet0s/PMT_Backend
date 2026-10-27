@@ -136,6 +136,28 @@ function checkProdEnv(env = process.env) {
     addError('BACKUP_JOB_CONFIGURED', 'Automated backup job is not confirmed', "Configure daily cron backup ('npm run backup') and set BACKUP_JOB_CONFIGURED=true");
   }
 
+  // 13. Web Push Notifications (Firebase Cloud Messaging)
+  const pushEnabled = env.PUSH_ENABLED === 'true' || env.PUSH_ENABLED === '1';
+  if (pushEnabled) {
+    if (!env.FIREBASE_PROJECT_ID) {
+      addError('FIREBASE_PROJECT_ID', 'PUSH_ENABLED=true but FIREBASE_PROJECT_ID is missing', 'Set FIREBASE_PROJECT_ID or disable push with PUSH_ENABLED=false');
+    }
+    const hasFilePath = !!env.FIREBASE_SERVICE_ACCOUNT_PATH;
+    const hasBase64 = !!env.FIREBASE_SERVICE_ACCOUNT_JSON_B64;
+    if (!hasFilePath && !hasBase64) {
+      addError('FIREBASE_SERVICE_ACCOUNT', 'PUSH_ENABLED=true but no Firebase service account credentials found', 'Configure FIREBASE_SERVICE_ACCOUNT_PATH (file outside repo) or FIREBASE_SERVICE_ACCOUNT_JSON_B64');
+    }
+    if (hasFilePath) {
+      const saPath = path.resolve(env.FIREBASE_SERVICE_ACCOUNT_PATH);
+      const repoRoot = path.resolve(__dirname, '../../../');
+      if (saPath.startsWith(repoRoot) && !saPath.includes('node_modules')) {
+        addError('FIREBASE_SERVICE_ACCOUNT_PATH', `Service account key (${saPath}) resides inside project repository`, 'Move the service account JSON file outside the repository (e.g. /etc/pmt/firebase-service-account.json)');
+      } else if (!fs.existsSync(saPath)) {
+        addError('FIREBASE_SERVICE_ACCOUNT_PATH', `Service account file not found at '${saPath}'`, 'Verify the file exists and is accessible with chmod 600');
+      }
+    }
+  }
+
   const errors = issues.map((i) => i.message);
   return { errors, warnings, issues };
 }

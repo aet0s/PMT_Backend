@@ -25,6 +25,7 @@ const {
   verifyAuditIntegrity
 } = require('./auditEventsController');
 const { revokeAllSessions } = require('../services/sessionService');
+const { deactivateUserSubscriptions } = require('../services/pushService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
 const { canResetTarget, isOwnerRole, getRoleRank, isReservedRoleName } = require('../utils/roleRank');
@@ -1483,6 +1484,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
     }
 
     // Check remaining workspaces in the tenant for this user
+    await deactivateUserSubscriptions(req.db, targetUserId, 'MEMBER_REMOVED');
     const remainingWs = await req.db.query(
       'SELECT COUNT(*) as count FROM workspace_members WHERE user_id = ?',
       [targetUserId]
@@ -1572,6 +1574,7 @@ router.post('/:id/members/:userId/deactivate', requireAuth, requirePermission('m
       'UPDATE sessions SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
       [targetUserId]
     );
+    await deactivateUserSubscriptions(req.db, targetUserId, 'MEMBER_DEACTIVATED');
 
     try {
       const { invalidateSessionCache } = require('../middleware/auth');
@@ -1710,6 +1713,7 @@ router.post('/:workspaceId/members/:userId/reset-password', requireAuth, require
 
     // Revoke all existing sessions for the target user and disconnect sockets
     await revokeAllSessions(req.db, targetUserId, 'ADMIN_PASSWORD_RESET', req);
+    await deactivateUserSubscriptions(req.db, targetUserId, 'ADMIN_PASSWORD_RESET');
     disconnectUserSockets(targetUserId, req.tenant ? req.tenant.id : null, 'ADMIN_PASSWORD_RESET');
 
     // Record auth audit log (Item 4: temp password NEVER appears in audit log)

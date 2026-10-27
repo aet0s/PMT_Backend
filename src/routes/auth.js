@@ -32,6 +32,7 @@ const {
   disableTwoFactor
 } = require('../services/twoFactorService');
 const { encryptSecret, decryptSecret } = require('../utils/cryptoVault');
+const { deactivateUserSubscriptions } = require('../services/pushService');
 
 const router = express.Router();
 
@@ -1823,6 +1824,7 @@ router.post('/forgot-password/reset', validate(resetPasswordWithOtpSchema), asyn
         [passwordHash, user.id]
       );
       await revokeAllSessions(devDb, user.id, 'PASSWORD_RESET', req);
+      await deactivateUserSubscriptions(devDb, user.id, 'PASSWORD_RESET');
       await logAuthEvent(devDb, {
         userId: user.id,
         email: user.email,
@@ -1863,6 +1865,7 @@ router.post('/forgot-password/reset', validate(resetPasswordWithOtpSchema), asyn
                 [passwordHash, u.id]
               );
               await revokeAllSessions(tenantDb, u.id, 'PASSWORD_RESET', req);
+              await deactivateUserSubscriptions(tenantDb, u.id, 'PASSWORD_RESET');
             }
           } catch (tErr) {
             console.error('Failed updating tenant password during reset:', tErr.message);
@@ -2163,6 +2166,7 @@ router.post('/logout-all', requireAuth, async (req, res, next) => {
       blacklistToken(token);
     }
     await revokeAllSessions(req.db, req.user.id, 'LOGOUT_ALL', req);
+    await deactivateUserSubscriptions(req.db, req.user.id, 'LOGOUT_ALL');
     const clearOptions = getClearCookieOptions();
     res.clearCookie('token', clearOptions);
     res.clearCookie('refreshToken', clearOptions);
@@ -2742,6 +2746,7 @@ const handlePasswordChange = async (req, res, next) => {
 
     // Revoke all sessions for this user (they must log in with new password or use new session)
     await revokeAllSessions(req.db, req.user.id, 'PASSWORD_CHANGE', req);
+    await deactivateUserSubscriptions(req.db, req.user.id, 'PASSWORD_CHANGE');
 
     await logAuthEvent(req.db, {
       userId: req.user.id,

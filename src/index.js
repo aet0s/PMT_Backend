@@ -37,6 +37,7 @@ const rolesRouter = require('./routes/roles');
 const filesRouter = require('./routes/files');
 const attachmentsRouter = require('./routes/attachments');
 const checkinsRouter = require('./routes/checkins');
+const pushRouter = require('./routes/push');
 const upload = require('./middleware/upload');
 const localStorage = require('./storage');
 const { requireAuth } = require('./middleware/auth');
@@ -196,6 +197,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/permissions', permissionsRouter);
 app.use('/api/roles', rolesRouter);
 app.use('/api/files', filesRouter);
+app.use('/api/push', pushRouter);
 app.use('/api', checkinsRouter);
 
 // POST /api/upload - Standalone file upload endpoint

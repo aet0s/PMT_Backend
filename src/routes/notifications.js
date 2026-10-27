@@ -244,14 +244,18 @@ router.get('/preferences', requireAuth, requirePermission('notification.view_own
   try {
     const categories = await getUserPreferences(req.user.id, req.db);
 
-    // Fetch user settings (mode: all | only_mine, play_sound: 0 | 1)
+    // Fetch user settings (mode: all | only_mine, play_sound: 0 | 1, push_show_details: 0 | 1)
     let mode = 'all';
     let playSound = true;
+    let pushShowDetails = true;
     try {
-      const [uSet] = await req.db.query('SELECT mode, play_sound FROM notification_user_settings WHERE user_id = ?', [req.user.id]);
+      const [uSet] = await req.db.query('SELECT mode, play_sound, push_show_details FROM notification_user_settings WHERE user_id = ?', [req.user.id]);
       if (uSet?.mode) mode = uSet.mode;
       if (uSet && uSet.play_sound !== null && uSet.play_sound !== undefined) {
         playSound = Boolean(uSet.play_sound);
+      }
+      if (uSet && uSet.push_show_details !== null && uSet.push_show_details !== undefined) {
+        pushShowDetails = Boolean(uSet.push_show_details);
       }
     } catch (e) {}
 
@@ -272,6 +276,7 @@ router.get('/preferences', requireAuth, requirePermission('notification.view_own
       mode,
       play_sound: playSound,
       sound_effects: playSound,
+      push_show_details: pushShowDetails,
       workspace_settings: workspaceSettings
     });
   } catch (err) {
@@ -281,24 +286,27 @@ router.get('/preferences', requireAuth, requirePermission('notification.view_own
 
 // PATCH /api/notifications/preferences
 router.patch('/preferences', requireAuth, requirePermission('notification.manage_own'), async (req, res, next) => {
-  const { updates, mode, play_sound, sound_effects, workspace_id, notify_all_boards } = req.body;
+  const { updates, mode, play_sound, sound_effects, push_show_details, workspace_id, notify_all_boards } = req.body;
   try {
     if (Array.isArray(updates) && updates.length > 0) {
       await updateUserPreferences(req.user.id, updates, req.db);
     }
 
     const soundVal = play_sound !== undefined ? play_sound : sound_effects;
-    if ((mode && ['all', 'only_mine'].includes(mode)) || soundVal !== undefined) {
+    if ((mode && ['all', 'only_mine'].includes(mode)) || soundVal !== undefined || push_show_details !== undefined) {
       try {
         const m = (mode && ['all', 'only_mine'].includes(mode)) ? mode : 'all';
         const ps = soundVal !== undefined ? (soundVal ? 1 : 0) : 1;
+        const psd = push_show_details !== undefined ? (push_show_details ? 1 : 0) : 1;
         await req.db.execute(
-          `INSERT INTO notification_user_settings (user_id, mode, play_sound)
-           VALUES (?, ?, ?)
+          `INSERT INTO notification_user_settings (user_id, mode, play_sound, push_show_details)
+           VALUES (?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              ${mode ? 'mode = VALUES(mode),' : ''}
-             ${soundVal !== undefined ? 'play_sound = VALUES(play_sound)' : 'play_sound = play_sound'}`,
-          [req.user.id, m, ps]
+             ${soundVal !== undefined ? 'play_sound = VALUES(play_sound),' : ''}
+             ${push_show_details !== undefined ? 'push_show_details = VALUES(push_show_details),' : ''}
+             user_id = VALUES(user_id)`,
+          [req.user.id, m, ps, psd]
         );
       } catch (e) {}
     }
@@ -319,7 +327,8 @@ router.patch('/preferences', requireAuth, requirePermission('notification.manage
       message: 'Notification preferences updated successfully',
       preferences: categories,
       play_sound: soundVal !== undefined ? Boolean(soundVal) : undefined,
-      sound_effects: soundVal !== undefined ? Boolean(soundVal) : undefined
+      sound_effects: soundVal !== undefined ? Boolean(soundVal) : undefined,
+      push_show_details: push_show_details !== undefined ? Boolean(push_show_details) : undefined
     });
   } catch (err) {
     next(err);

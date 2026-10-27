@@ -620,6 +620,24 @@ const AUDIT_EVENT_CATALOGUE = {
     entityType: 'user_preferences',
     description: 'User notification preferences updated'
   },
+  'push.subscription_created': {
+    category: 'settings',
+    severity: 'info',
+    entityType: 'push_subscription',
+    description: 'Web push notification device subscription registered'
+  },
+  'push.subscription_revoked': {
+    category: 'settings',
+    severity: 'info',
+    entityType: 'push_subscription',
+    description: 'Web push notification device subscription revoked'
+  },
+  'push.test_sent': {
+    category: 'settings',
+    severity: 'info',
+    entityType: 'push_subscription',
+    description: 'Test web push notification dispatched to user devices'
+  },
 
   // Export Events
   'export.generated': {

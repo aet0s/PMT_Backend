@@ -389,13 +389,13 @@ function runAudit() {
   console.log(`- Test (Single-Tenant) Route Count:       ${testSingleResult.count}`);
   console.log(`----------------------------------------------------------------\n`);
 
-  if (prodMultiResult.count !== 165 || prodSingleResult.count !== 165) {
-    console.error(`[AUDIT FAILED] Expected exactly 165 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
+  if (prodMultiResult.count !== 170 || prodSingleResult.count !== 170) {
+    console.error(`[AUDIT FAILED] Expected exactly 170 routes in production mode, got ${prodMultiResult.count} / ${prodSingleResult.count}`);
     process.exit(1);
   }
 
-  if (testMultiResult.count !== 166 || testSingleResult.count !== 166) {
-    console.error(`[AUDIT FAILED] Expected exactly 166 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
+  if (testMultiResult.count !== 171 || testSingleResult.count !== 171) {
+    console.error(`[AUDIT FAILED] Expected exactly 171 routes in test mode, got ${testMultiResult.count} / ${testSingleResult.count}`);
     process.exit(1);
   }
 
@@ -486,6 +486,7 @@ function runAudit() {
   console.log(`✓ Successfully regenerated ${matrixDocPath}`);
 
   console.log('\n[RBAC AUDIT PASSED] System permissions and route catalog are 100% verified bidirectionally.\n');
+  process.exit(0);
 }
 
 if (require.main === module) {

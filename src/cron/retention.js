@@ -7,7 +7,12 @@ const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenant
 
 async function runTenantRetention(db, tenantId = null) {
   if (!db) return 0;
-  return await cleanOldNotifications(db);
+  const notifPurged = await cleanOldNotifications(db);
+  try {
+    const { cleanOldPushData } = require('../services/pushService');
+    await cleanOldPushData(db);
+  } catch (_) {}
+  return notifPurged;
 }
 
 async function processAllTenantsRetention() {

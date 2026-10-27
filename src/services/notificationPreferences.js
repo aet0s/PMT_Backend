@@ -3,12 +3,32 @@
 const { getDevSingleDb } = require('./tenantPools');
 const { NOTIFICATION_EVENTS, EVENT_CATEGORIES } = require('./notificationEvents');
 
+const PUSH_DEFAULT_ON_EVENTS = new Set([
+  'card.assigned',
+  'card.unassigned',
+  'comment.mention',
+  'comment.added',
+  'card.due_soon',
+  'card.overdue',
+  'checkin.due',
+  'card.submitted_for_review',
+  'card.changes_requested',
+  'board.member_added',
+  'workspace.member_added',
+  'workspace.member_removed',
+  'workspace.member_role_changed'
+]);
+
 /**
  * Default fallback rules if user hasn't explicitly set a preference
  */
 function getDefaultPreference(eventType, channel = 'in_app') {
   if (channel === 'in_app') {
     return true; // All in-app notifications enabled by default
+  }
+
+  if (channel === 'push') {
+    return PUSH_DEFAULT_ON_EVENTS.has(eventType);
   }
 
   // Email channel defaults: only invites and overdue cards default to true
@@ -37,7 +57,7 @@ async function isEventEnabledForUser(userId, eventType, channel = 'in_app', dbIn
     );
 
     if (res.length > 0) {
-      return res[0].is_enabled;
+      return Boolean(res[0].is_enabled);
     }
 
     return getDefaultPreference(eventType, channel);
@@ -64,7 +84,7 @@ async function getUserPreferences(userId, dbInstance = null) {
     const userPrefMap = {};
     prefsRes.forEach((row) => {
       if (!userPrefMap[row.event_type]) userPrefMap[row.event_type] = {};
-      userPrefMap[row.event_type][row.channel] = row.is_enabled;
+      userPrefMap[row.event_type][row.channel] = Boolean(row.is_enabled);
     });
 
     const categoryGroups = {};
@@ -82,11 +102,16 @@ async function getUserPreferences(userId, dbInstance = null) {
           ? userPrefMap[key].in_app
           : getDefaultPreference(key, 'in_app');
 
-      // Email channel is hidden and omitted from user-facing preferences
+      const pushVal =
+        userPrefMap[key]?.push !== undefined
+          ? userPrefMap[key].push
+          : getDefaultPreference(key, 'push');
+
       categoryGroups[cat].push({
         eventType: key,
         template: config.template,
-        in_app: inAppVal
+        in_app: inAppVal,
+        push: pushVal
       });
     });
 
@@ -108,6 +133,7 @@ async function updateUserPreferences(userId, updates = [], dbInstance = null) {
     for (const update of updates) {
       const { eventType, channel, is_enabled } = update;
       if (!eventType || !channel || channel === 'email') continue;
+      if (channel !== 'in_app' && channel !== 'push') continue;
 
       await db.execute(
         `INSERT INTO notification_preferences (user_id, event_type, channel, is_enabled)
@@ -127,5 +153,6 @@ module.exports = {
   isEventEnabledForUser,
   getUserPreferences,
   updateUserPreferences,
-  getDefaultPreference
+  getDefaultPreference,
+  PUSH_DEFAULT_ON_EVENTS
 };

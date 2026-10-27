@@ -413,6 +413,24 @@ const ROUTE_NOTIFICATION_MAP = {
     reason: 'Self notification cleanup for read items'
   },
 
+  // --- Push Notifications ---
+  'POST /api/push/subscriptions': {
+    noNotify: true,
+    reason: 'Self push subscription device registration'
+  },
+  'DELETE /api/push/subscriptions/:id': {
+    noNotify: true,
+    reason: 'Self push subscription device revocation'
+  },
+  'DELETE /api/push/subscriptions/current': {
+    noNotify: true,
+    reason: 'Self current device push subscription revocation on logout'
+  },
+  'POST /api/push/test': {
+    noNotify: true,
+    reason: 'Self test push notification dispatch'
+  },
+
   // --- Files & Dev Helpers ---
   'POST /api/files/avatar': {
     noNotify: true,
