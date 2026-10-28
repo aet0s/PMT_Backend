@@ -22,6 +22,7 @@
     "audit:coverage": "node src/scripts/auditCoverage.js",
     "audit:backfill": "node src/scripts/backfillAuditEvents.js",
     "audit:archive": "node src/scripts/auditArchive.js",
+    "archive:old": "node src/scripts/archiveOldCompletedCards.js",
     "audit:triggers": "node src/scripts/auditTriggers.js",
     "audit:anchor": "node src/scripts/auditAnchor.js",
     "notifications:cleanup": "node src/scripts/notificationsCleanup.js",
