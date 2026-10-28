@@ -128,11 +128,11 @@ router.post('/', requireAuth, requirePermission('project.create'), validate(crea
 
     // Create default lists for the new board
     await req.db.execute(
-      `INSERT INTO lists (board_id, name, position, wip_limit_enabled) VALUES 
-       (?, 'To Do', 1000.0, 1),
-       (?, 'In Progress', 2000.0, 1),
-       (?, 'Review', 3000.0, 1),
-       (?, 'Done', 4000.0, 0)`,
+      `INSERT INTO lists (board_id, name, position, wip_limit_enabled, is_done_list) VALUES 
+       (?, 'To Do', 1000.0, 1, 0),
+       (?, 'In Progress', 2000.0, 1, 0),
+       (?, 'Review', 3000.0, 1, 0),
+       (?, 'Done', 4000.0, 0, 1)`,
       [board.id, board.id, board.id, board.id]
     );
 

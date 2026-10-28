@@ -23,6 +23,7 @@ const db = require('./db');
 const { initSocket } = require('./socket');
 const { initReminderCron } = require('./cron/reminders');
 const { initRetentionCron } = require('./cron/retention');
+const { initAutoArchiveCron } = require('./cron/autoArchive');
 
 const authRouter = require('./routes/auth');
 const workspacesRouter = require('./routes/workspaces');
@@ -371,6 +372,7 @@ async function start() {
   initSocket(server);
   initReminderCron();
   initRetentionCron();
+  initAutoArchiveCron();
   const { startCleanupWorker } = require('./utils/fileCleanupQueue');
   startCleanupWorker();
 

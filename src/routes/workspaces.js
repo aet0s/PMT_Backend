@@ -17,6 +17,7 @@ const { sendUserEvent, disconnectUserSockets, broadcastWorkspaceEvent } = requir
 const { notify } = require('../services/notify');
 const { logActivity } = require('../utils/activity');
 const auditService = require('../services/audit');
+const { executeAutoArchiveSweep } = require('../cron/autoArchive');
 const {
   getAuditEvents,
   getAuditEventById,
@@ -891,61 +892,22 @@ router.post('/:id/auto-archive', requireAuth, requirePermission('task.archive'),
       return res.status(403).json({ error: { message: 'Permission denied to archive tasks', code: 'PERMISSION_DENIED' } });
     }
 
-    let intervalClause = '';
-    const params = [workspaceId];
-    if (days > 0) {
-      intervalClause = 'AND COALESCE(c.completed_at, c.created_at) < DATE_SUB(NOW(), INTERVAL ? DAY)';
-      params.push(days);
-    }
+    const sweepResult = await executeAutoArchiveSweep({
+      db: req.db,
+      workspaceId,
+      days,
+      actorId: req.user?.id,
+      originId: req.headers['x-origin-id'],
+      tenantId: req.tenant?.id
+    });
 
-    const cardsToArchive = await req.db.query(
-      `SELECT c.id, c.title, l.board_id
-       FROM cards c
-       JOIN lists l ON c.list_id = l.id
-       JOIN boards b ON l.board_id = b.id
-       WHERE b.workspace_id = ?
-         AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'finished', 'closed', 'archive', 'archived'))
-         AND c.is_archived = 0
-         ${intervalClause}`,
-      params
-    );
-
-    if (cardsToArchive.length > 0) {
-      const cardIds = cardsToArchive.map((c) => c.id);
-      await req.db.query(
-        `UPDATE cards SET is_archived = 1 WHERE id IN (${cardIds.map(() => '?').join(',')})`,
-        cardIds
-      );
-
-      for (const card of cardsToArchive) {
-        broadcastWorkspaceEvent(workspaceId, 'card:archived', { cardId: card.id, boardId: card.board_id }, req.headers['x-origin-id'], req.tenant?.id);
-      }
-
-      await auditService.record({
-        action: 'workspace.auto_archive',
-        category: 'task',
-        entityType: 'workspace',
-        entityId: workspaceId,
-        entityLabel: `Auto-archived ${cardsToArchive.length} completed task(s)`,
-        outcome: 'success',
-        severity: 'info',
-        actorId: req.user?.id,
-        meta: {
-          archivedCount: cardsToArchive.length,
-          days,
-          cardIds
-        },
-        db: req.db
-      }).catch(() => { });
-      res.locals._auditRecorded = true;
-    } else {
-      res.locals._auditRecorded = true; // Mark recorded so safety net skips logging empty routine checks
-    }
+    res.locals._auditRecorded = true;
 
     return res.json({
       success: true,
-      archived_count: cardsToArchive.length,
-      days
+      archived_count: sweepResult.archived_count,
+      card_ids: sweepResult.card_ids,
+      days: sweepResult.days
     });
   } catch (err) {
     next(err);

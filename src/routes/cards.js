@@ -569,17 +569,16 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       updates.push('due_date = ?');
       values.push(formattedDue);
     }
-    if (is_complete !== undefined) {
-      updates.push('is_complete = ?');
-      values.push(is_complete ? 1 : 0);
-    }
-
     let targetList = null;
+    let isTargetDone = false;
     if (list_id !== undefined) {
       const tlRes = await req.db.query('SELECT * FROM lists WHERE id = ?', [list_id]);
       targetList = tlRes[0] || null;
+      if (targetList) {
+        isTargetDone = Boolean(targetList.is_done_list || ['done', 'completed', 'finished', 'closed', 'archive', 'archived'].includes(String(targetList.name || '').trim().toLowerCase()));
+      }
 
-      if (targetList && targetList.is_done_list && Number(oldCard.list_id) !== Number(list_id)) {
+      if (isTargetDone && Number(oldCard.list_id) !== Number(list_id)) {
         const canComplete = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
         if (!canComplete) {
           const assignerRows = await req.db.query(
@@ -599,7 +598,25 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       }
     }
 
-    const isCompleting = Boolean(is_complete) || Boolean(targetList && targetList.is_done_list);
+    // Determine completion state:
+    // 1) Explicit is_complete in body takes precedence.
+    // 2) If moving into a done list and is_complete was not passed: marks card complete.
+    // 3) If moving out of a done list into an active list and is_complete was not passed: marks card active.
+    let effectiveIsComplete = is_complete;
+    if (effectiveIsComplete === undefined && targetList) {
+      if (isTargetDone) {
+        effectiveIsComplete = true;
+      } else if (Number(oldCard.list_id) !== Number(list_id) && oldCard.is_complete) {
+        effectiveIsComplete = false;
+      }
+    }
+
+    if (effectiveIsComplete !== undefined) {
+      updates.push('is_complete = ?');
+      values.push(effectiveIsComplete ? 1 : 0);
+    }
+
+    const isCompleting = Boolean(effectiveIsComplete);
     if (isCompleting) {
       // Requirement 4: a card that was open more than 2 working days asks for a one-line result (min 20 characters, optional link) when moved to a done list. Cards open 2 days or less need nothing.
       try {
@@ -640,7 +657,7 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         updates.push('completed_by = ?');
         values.push(req.user.id);
       }
-    } else if (is_complete === false) {
+    } else if (effectiveIsComplete === false) {
       updates.push('completed_at = NULL');
       updates.push('completed_by = NULL');
     }
