@@ -4679,6 +4679,8 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
       candidateList = formattedAssigned;
     }
 
+    const hideCompleted = req.query.hideCompleted === 'true' || req.query.hide_completed === 'true';
+
     let filteredCards = candidateList.filter((c) => {
       // Workspace filter
       const wsFilter = req.query.workspaceId;
@@ -4708,7 +4710,16 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
       return true;
     });
 
-    // 10. Server-Side Pagination (exactly 20 per page by default)
+    // Counts for the current filtered tab view before hideCompleted exclusion
+    const matchingCompletedCount = filteredCards.filter((c) => c.is_complete).length;
+    const matchingActiveCount = filteredCards.filter((c) => !c.is_complete).length;
+
+    // If hideCompleted is true and the user didn't specifically request 'done'/'completed' stage or tab
+    if (hideCompleted && stage !== 'done' && stage !== 'completed' && tab !== 'completed') {
+      filteredCards = filteredCards.filter((c) => !c.is_complete);
+    }
+
+    // 10. Server-Side Pagination
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
     const totalMatching = filteredCards.length;
@@ -4730,6 +4741,9 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         in_progress: inProgressCount,
         review: reviewCount,
         completed: completedAssigned.length,
+        tab_completed: matchingCompletedCount,
+        tab_active: matchingActiveCount,
+        tab_total: matchingCompletedCount + matchingActiveCount,
         overdue: overdueCount,
         due_soon: dueSoonCount,
         assigned_by_me: formattedDelegated.length,
