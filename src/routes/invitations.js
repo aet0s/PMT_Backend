@@ -5,7 +5,7 @@ const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenant
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { notify } = require('../services/notify');
-const { userHasPermission } = require('../middleware/permissions');
+const { requirePermission, userHasPermission } = require('../middleware/permissions');
 const { broadcastWorkspaceEvent } = require('../socket');
 const { logActivity } = require('../utils/activity');
 const { logAuthEvent } = require('../services/authAudit');
@@ -250,6 +250,12 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
       const err = new Error('Cannot invite a member with Owner role');
       err.status = 403;
       err.code = 'FORBIDDEN';
+      throw err;
+    }
+    if (!selRole.is_system && Number(selRole.rank) >= 80) {
+      const err = new Error('Custom roles cannot have rank 80 or higher');
+      err.status = 403;
+      err.code = 'INVALID_ROLE_RANK';
       throw err;
     }
     resolvedRoleName = roleRes[0].name;
@@ -643,7 +649,7 @@ router.post('/accept', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/invitations/:id/regenerate (Regenerate invitation token & extend expiry)
-router.post('/:id/regenerate', requireAuth, async (req, res, next) => {
+router.post('/:id/regenerate', requireAuth, requirePermission('member.invite'), async (req, res, next) => {
   const inviteId = Number(req.params.id);
 
   try {
@@ -715,7 +721,7 @@ router.post('/:id/regenerate', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/invitations/:id/resend (Explicitly resend invitation email to member)
-router.post('/:id/resend', requireAuth, async (req, res, next) => {
+router.post('/:id/resend', requireAuth, requirePermission('member.invite'), async (req, res, next) => {
   const inviteId = Number(req.params.id);
 
   try {
@@ -777,7 +783,7 @@ router.post('/:id/resend', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/invitations/:id (Revoke pending invitation)
-router.delete('/:id', requireAuth, async (req, res, next) => {
+router.delete('/:id', requireAuth, requirePermission('member.remove'), async (req, res, next) => {
   const inviteId = Number(req.params.id);
 
   try {

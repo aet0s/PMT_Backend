@@ -816,6 +816,17 @@ async function runRegressionTests(fixture) {
     record('REG-1.14', 'Fresh Team Member workspace.create test', false, { expected: 'HTTP 403', actual: err.message });
   }
 
+  // --------------------------------------------------------------------------
+  // REG-1.15 to REG-1.26: Workspace Creation Role Escalation Prevention Suite
+  // --------------------------------------------------------------------------
+  try {
+    const { runWorkspaceCreationRoleSuite } = require('./workspaceCreationRoles');
+    const wcrOutcome = await runWorkspaceCreationRoleSuite(fixture);
+    wcrOutcome.results.forEach((r) => results.push(r));
+  } catch (err) {
+    record('REG-1.15', 'Workspace Creation Role Suite Execution', false, { expected: 'Suite succeeds', actual: err.message });
+  }
+
   console.log('\n================================================================');
   const failCount = results.filter((r) => !r.passed).length;
   const passCount = results.filter((r) => r.passed).length;

@@ -17,6 +17,7 @@
     "db:clean": "node src/scripts/cleanLocalDb.js",
     "rbac:audit": "node src/scripts/rbacAudit.js",
     "rbac:sync-check": "node src/scripts/rbacSyncCheck.js",
+    "rbac:remediate-owners": "node src/scripts/remediateCompanyOwners.js",
     "notify:audit": "node src/scripts/notifyAudit.js",
     "audit:coverage": "node src/scripts/auditCoverage.js",
     "audit:backfill": "node src/scripts/backfillAuditEvents.js",
@@ -43,8 +44,9 @@
     "permcheck": "node src/scripts/permcheck.js",
     "test:perm": "node src/scripts/permtest/index.js",
     "test:perm:fast": "node src/scripts/permtest/index.js --fast",
-    "test:perm:static": "node src/scripts/permtest/static.js",
-    "test:perm:reg": "node src/scripts/permtest/runRegressions.js"
+    "test:perm:static": "node src/scripts/noRoleNameAuth.js",
+    "test:perm:reg": "node src/scripts/permtest/runRegressions.js",
+    "test:catalog": "node src/scripts/permtest/rbacCatalogAndRoleSaving.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

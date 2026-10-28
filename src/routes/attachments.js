@@ -89,7 +89,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 });
 
 // GET /api/attachments/:id - Fetch attachment by ID
-router.get('/:id', requireAuth, async (req, res, next) => {
+router.get('/:id', requireAuth, requirePermission({ any: ['attachment.view', 'file.view'] }), async (req, res, next) => {
   const attachmentId = Number(req.params.id);
 
   try {

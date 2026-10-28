@@ -79,6 +79,29 @@ async function safeQuery(db, sql, params = []) {
   return res || [];
 }
 
+    // 2b. Remap legacy role.assign -> member.assign_role and purge obsolete duplicate keys
+    try {
+      await db.execute(`
+        INSERT IGNORE INTO role_permissions (role_id, permission_id)
+        SELECT rp.role_id, p_new.id
+        FROM role_permissions rp
+        JOIN permissions p_old ON rp.permission_id = p_old.id AND p_old.\`key\` = 'role.assign'
+        CROSS JOIN permissions p_new ON p_new.\`key\` = 'member.assign_role'
+      `);
+      const OBSOLETE_KEYS = ['project.view_dashboard', 'company.manage_billing', 'role.assign', 'task.export', 'task.import'];
+      const placeholders = OBSOLETE_KEYS.map(() => '?').join(',');
+      await db.execute(
+        `DELETE rp FROM role_permissions rp
+         JOIN permissions p ON rp.permission_id = p.id
+         WHERE p.\`key\` IN (${placeholders})`,
+        OBSOLETE_KEYS
+      );
+      await db.execute(
+        `DELETE FROM permissions WHERE \`key\` IN (${placeholders})`,
+        OBSOLETE_KEYS
+      );
+    } catch (_) {}
+
     // 3. Clean up role_permissions for any planned permissions (planned keys must never be granted)
     await db.execute(
       `DELETE rp FROM role_permissions rp

@@ -17,6 +17,10 @@ const router = express.Router();
 const validPermMap = new Map();
 PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
 
+const LEGACY_KEY_REMAP = {
+  'role.assign': 'member.assign_role'
+};
+
 const updateRoleSchema = z.object({
   name: z.string().min(1).optional(),
   permission_keys: z.array(z.string()).optional(),
@@ -24,7 +28,7 @@ const updateRoleSchema = z.object({
 });
 
 // PATCH /api/roles/:id - Edit custom role name and permissions
-router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, next) => {
+router.patch('/:id', requireAuth, requirePermission('role.edit'), validate(updateRoleSchema), async (req, res, next) => {
   const roleId = Number(req.params.id);
   const { name, permission_keys } = req.body;
 
@@ -138,12 +142,15 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
           [roleId]
         );
         const existingPlannedKeys = new Set(
-          existingRolePermsRes.filter((p) => p.planned).map((p) => p.key)
+          existingRolePermsRes
+            .filter((p) => p.planned && validPermMap.has(p.key))
+            .map((p) => p.key)
         );
 
         const activeKeysOnly = [];
         for (const rawKey of permission_keys) {
-          const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
+          const remapped = LEGACY_KEY_REMAP[rawKey] || rawKey;
+          const canonical = LEGACY_PERMISSION_ALIASES[remapped] || remapped;
           const meta = validPermMap.get(canonical);
           if (!meta) {
             const err = new Error(`Unknown permission key: ${rawKey}`);
@@ -223,8 +230,11 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
       );
 
       const updatedRole = updatedRoleRes[0];
-      const keys = updatedRole.permission_keys_str ? updatedRole.permission_keys_str.split(',') : [];
-      rolePayload = { ...updatedRole, permission_keys: keys };
+      const rawKeys = updatedRole.permission_keys_str ? updatedRole.permission_keys_str.split(',') : [];
+      const keys = rawKeys
+        .map((k) => LEGACY_KEY_REMAP[k] || LEGACY_PERMISSION_ALIASES[k] || k)
+        .filter((k) => validPermMap.has(k) && !validPermMap.get(k).planned);
+      rolePayload = { ...updatedRole, permission_keys: Array.from(new Set(keys)) };
 
       // Atomic Audit Log inside same transaction (Item 2a, Item 2b)
       await logAuthEvent(tx, {
@@ -270,7 +280,7 @@ router.patch('/:id', requireAuth, validate(updateRoleSchema), async (req, res, n
 });
 
 // DELETE /api/roles/:id - Delete custom role (blocked if in use by members or is system role)
-router.delete('/:id', requireAuth, async (req, res, next) => {
+router.delete('/:id', requireAuth, requirePermission('role.delete'), async (req, res, next) => {
   const roleId = Number(req.params.id);
 
   try {

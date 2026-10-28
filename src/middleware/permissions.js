@@ -6,6 +6,7 @@ const { getTenantDb, getDevSingleDb } = require('../services/tenantPools');
 const { expandPermissionKeys, PERMISSIONS } = require('../rbac/registry');
 const { evaluatePermission, getPermissionScope } = require('../rbac/evaluate');
 const { isOwnerRole } = require('../utils/roleRank');
+const { isCompanyOwner } = require('../utils/syncCompanyOwners');
 
 function getActiveDb(reqOrDb) {
   if (reqOrDb && reqOrDb.db && typeof reqOrDb.db.query === 'function') {
@@ -222,11 +223,41 @@ async function resolveWorkspaceId(req) {
         err.code = 'NOT_FOUND';
         throw err;
       }
-    } else if (routePath.includes('/roles')) {
-      const res = await db.query('SELECT workspace_id FROM roles WHERE id = ?', [paramId]);
+    } else if (routePath.includes('/invitations')) {
+      const res = await db.query('SELECT workspace_id FROM pending_invitations WHERE id = ?', [paramId]);
       if (res[0]) {
         derivedWorkspaceId = res[0].workspace_id;
         resourceMatched = true;
+      } else {
+        const err = new Error('Invitation not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+    } else if (routePath.includes('/roles')) {
+      const res = await db.query('SELECT workspace_id FROM roles WHERE id = ?', [paramId]);
+      if (res.length === 0) {
+        const err = new Error('Role not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+      if (res[0].workspace_id) {
+        derivedWorkspaceId = res[0].workspace_id;
+        resourceMatched = true;
+      } else {
+        // System roles have workspace_id = NULL
+        const headerWs = req.headers['x-workspace-id'] || req.body?.workspace_id;
+        if (headerWs) {
+          derivedWorkspaceId = Number(headerWs);
+          resourceMatched = true;
+        } else if (req.user?.id) {
+          const memberWs = await db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]);
+          if (memberWs.length > 0) {
+            derivedWorkspaceId = memberWs[0].workspace_id;
+            resourceMatched = true;
+          }
+        }
       }
     } else if (routePath.includes('/workspaces')) {
       derivedWorkspaceId = paramId;
@@ -398,21 +429,15 @@ async function resolveWorkspaceId(req) {
     throw err;
   }
 
-  // 5. Visibility check: Actor must belong to the resource's workspace or be a company Owner/Admin
+  // 5. Visibility check: Actor must belong to the resource's workspace or be a verified Company Owner
   if (req.user?.id) {
     const memRows = await db.query(
       'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? LIMIT 1',
       [derivedWorkspaceId, req.user.id]
     );
     if (memRows.length === 0) {
-      const companyAdminRows = await db.query(
-        `SELECT 1 FROM workspace_members wm
-         JOIN roles r ON wm.role_id = r.id
-         WHERE wm.user_id = ? AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)) OR wm.role IN ('Owner', 'Super Admin', 'Admin'))
-         LIMIT 1`,
-        [req.user.id]
-      );
-      if (companyAdminRows.length === 0) {
+      const isOwner = await isCompanyOwner(db, req.user.id);
+      if (!isOwner) {
         const err = new Error('Resource not found');
         err.status = 404;
         err.code = 'NOT_FOUND';
@@ -470,7 +495,7 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
         permissions: perms
       };
 
-      if (isOwnerRole(wsRole) || wsRole.name === 'Owner' || wsRole.name === 'Super Admin' || wsRole.rank >= 100) {
+      if (isOwnerRole(wsRole)) {
         PERMISSIONS.filter((p) => !p.planned).forEach((p) => wsRole.permissions.add(p.key));
       }
     }
@@ -482,29 +507,11 @@ async function userHasPermission(userId, workspaceId, permissionKey, dbInstance 
   }
 
   if (!wsRole) {
-    // Check if user has company-level Owner or Admin standing across tenant
-    const companyRoleRows = await db.query(
-      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank, r.is_system, r.is_editable
-       FROM workspace_members wm
-       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-       WHERE wm.user_id = ? AND ((r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80)) OR wm.role IN ('Owner', 'Super Admin', 'Admin'))
-       ORDER BY COALESCE(r.rank, 0) DESC LIMIT 1`,
-      [userId]
-    );
-    if (companyRoleRows.length > 0) {
-      const cRole = companyRoleRows[0];
-      const isOwner = isOwnerRole(cRole) || cRole.role_name === 'Owner' || cRole.role_name === 'Super Admin' || Number(cRole.rank) >= 100;
-      if (isOwner) {
-        if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, true);
-        return true;
-      }
-      if (Number(cRole.rank) >= 80 || cRole.role_name === 'Admin') {
-        const disallowedForAdmin = ['workspace.delete', 'company.delete', 'company.export_data', 'billing.manage'];
-        if (!disallowedForAdmin.includes(permissionKey)) {
-          if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, true);
-          return true;
-        }
-      }
+    // Check if user is an authoritative Company Owner across tenant
+    const isOwner = await isCompanyOwner(db, userId);
+    if (isOwner) {
+      if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, true);
+      return true;
     }
 
     if (req && req._rbacPermCache) req._rbacPermCache.set(`${userId}:${workspaceId}:${projectId || 'null'}:${permissionKey}`, false);
@@ -729,7 +736,7 @@ async function getUserPermissions(userId, workspaceId, dbInstance = null, projec
     is_editable: wsRows[0].is_editable
   };
 
-  const isOwner = isOwnerRole(role) || role.name === 'Owner' || role.name === 'Super Admin' || role.rank >= 100;
+  const isOwner = isOwnerRole(role);
   if (isOwner) {
     const allKeys = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);
     return {
@@ -840,7 +847,7 @@ async function accessibleBoardIds(userId, workspaceId, key = 'project.view', dbI
     is_editable: wsRows[0].is_editable
   };
 
-  const isOwner = isOwnerRole(wsRole) || wsRole.name === 'Owner' || wsRole.name === 'Super Admin' || wsRole.rank >= 100;
+  const isOwner = isOwnerRole(wsRole);
   if (isOwner) {
     const allBoards = await db.query(
       'SELECT id FROM boards WHERE workspace_id = ? AND is_archived = 0',

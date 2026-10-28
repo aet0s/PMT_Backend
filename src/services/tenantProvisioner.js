@@ -164,6 +164,16 @@ async function provisionTenant({
     );
     const workspaceId = wsRes.insertId;
 
+    // Ensure company_owners table exists and register initial authoritative owner
+    await tenantDb.execute(`
+      CREATE TABLE IF NOT EXISTS company_owners (
+        user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        CONSTRAINT fk_co_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    await tenantDb.execute('INSERT IGNORE INTO company_owners (user_id) VALUES (?)', [ownerUserId]);
+
     // Add owner as Owner in workspace
     await tenantDb.execute(
       `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)

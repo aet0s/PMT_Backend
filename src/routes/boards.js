@@ -438,8 +438,8 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
 // PATCH /api/boards/:id
 router.patch('/:id', requireAuth, requirePermissionForBody((req) => {
   const { name, background_color, is_archived } = req.body;
-  if (is_archived === true) return { any: ['project.archive', 'project.edit_settings'] };
-  if (is_archived === false) return { any: ['archive.restore', 'project.archive', 'project.edit_settings'] };
+  if (is_archived === true) return 'project.archive';
+  if (is_archived === false) return 'archive.restore';
   return 'project.edit_settings';
 }), validate(updateBoardSchema), async (req, res, next) => {
   const boardId = Number(req.params.id);
@@ -1111,7 +1111,7 @@ router.get('/:id/archived', requireAuth, requirePermission(['archive.view', 'pro
 });
 
 // POST /api/boards/:id/archive - Archive board
-router.post('/:id/archive', requireAuth, requirePermission({ any: ['project.archive', 'project.edit_settings'] }), async (req, res, next) => {
+router.post('/:id/archive', requireAuth, requirePermission('project.archive'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);
@@ -1139,7 +1139,7 @@ router.post('/:id/archive', requireAuth, requirePermission({ any: ['project.arch
 });
 
 // POST /api/boards/:id/restore - Restore archived board
-router.post('/:id/restore', requireAuth, requirePermission({ any: ['archive.restore', 'project.archive', 'project.edit_settings'] }), async (req, res, next) => {
+router.post('/:id/restore', requireAuth, requirePermission('archive.restore'), async (req, res, next) => {
   const boardId = Number(req.params.id);
   try {
     const [board] = await req.db.query('SELECT * FROM boards WHERE id = ?', [boardId]);

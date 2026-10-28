@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { z } = require('zod');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, invalidateUserAuthCache } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const {
   requirePermission,
@@ -29,18 +29,23 @@ const { deactivateUserSubscriptions } = require('../services/pushService');
 const { logAuthEvent } = require('../services/authAudit');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
 const { canResetTarget, isOwnerRole, getRoleRank, isReservedRoleName } = require('../utils/roleRank');
-const { syncCompanyOwners } = require('../utils/syncCompanyOwners');
+const { syncCompanyOwners, isCompanyOwner } = require('../utils/syncCompanyOwners');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { createInvitationHelper } = require('./invitations');
 const {
   PERMISSIONS,
   LEGACY_PERMISSION_ALIASES,
+  TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS,
   getTransitivePrerequisites
 } = require('../rbac/registry');
 const { evaluatePermission } = require('../rbac/evaluate');
 
 const validPermMap = new Map();
 PERMISSIONS.forEach((p) => validPermMap.set(p.key, p));
+
+const LEGACY_KEY_REMAP = {
+  'role.assign': 'member.assign_role'
+};
 
 const multer = require('multer');
 const storage = require('../storage');
@@ -211,7 +216,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     const workspacesWithParsedSettings = wsRes.map((w) => {
       let parsed = w.settings;
       if (typeof parsed === 'string') {
-        try { parsed = JSON.parse(parsed); } catch {}
+        try { parsed = JSON.parse(parsed); } catch { }
       }
       const iconUrl = w.icon_url || parsed?.icon_url || null;
       return {
@@ -245,7 +250,7 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
     const w = wsRes[0];
     let parsed = w.settings;
     if (typeof parsed === 'string') {
-      try { parsed = JSON.parse(parsed); } catch {}
+      try { parsed = JSON.parse(parsed); } catch { }
     }
     const iconUrl = w.icon_url || parsed?.icon_url || null;
 
@@ -287,17 +292,19 @@ router.get('/:id', requireAuth, requirePermission('workspace.view'), async (req,
 router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, next) => {
   const name = sanitizePlain(req.body.name);
   try {
-    // Check permission to create workspace:
-    // User must hold workspace.create in at least one of their workspaces in this tenant, evaluated through evaluate.js.
+    // 1. Authoritative Company Owner check
+    const userIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
+
+    // 2. Determine authorizing memberships that grant workspace.create
     const userMemberships = await req.db.query(
-      `SELECT wm.workspace_id, wm.role_id, r.is_system, r.is_editable, r.rank, r.name as role_name
+      `SELECT wm.workspace_id, wm.role_id, r.is_system, r.is_editable, r.rank, r.name as role_name, r.workspace_id as role_workspace_id
        FROM workspace_members wm
        JOIN roles r ON wm.role_id = r.id
        WHERE wm.user_id = ?`,
       [req.user.id]
     );
 
-    let canCreateWorkspace = false;
+    const authorizingMemberships = [];
     for (const m of userMemberships) {
       const permData = await getUserPermissions(req.user.id, m.workspace_id, req.db);
       const evalRes = evaluatePermission({
@@ -311,16 +318,161 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
         }
       });
       if (evalRes.allowed) {
-        canCreateWorkspace = true;
-        break;
+        authorizingMemberships.push(m);
       }
     }
 
+    // 3. First-workspace bootstrap check:
+    // Do not allow arbitrary authenticated users to bypass authorization.
+    // Initial workspace bootstrap is strictly restricted to verified provisioning owners.
     const existingWsCount = (await req.db.query('SELECT COUNT(*) as count FROM workspaces'))[0]?.count || 0;
-    if (existingWsCount > 0 && !canCreateWorkspace) {
-      return res.status(403).json({
-        error: { message: 'You do not have permission to create workspaces', code: 'PERMISSION_DENIED' }
+    if (existingWsCount === 0) {
+      if (!userIsCompanyOwner) {
+        return res.status(403).json({
+          error: {
+            message: 'Initial workspace provisioning is restricted to verified provisioning owners',
+            code: 'PERMISSION_DENIED'
+          }
+        });
+      }
+    } else {
+      // For existing tenants, creator must either be Company Owner or hold workspace.create in an authorizing membership
+      if (!userIsCompanyOwner && authorizingMemberships.length === 0) {
+        return res.status(403).json({
+          error: { message: 'You do not have permission to create workspaces', code: 'PERMISSION_DENIED' }
+        });
+      }
+    }
+
+    // 4. Resolve creator role deterministically via least-privilege rule
+    // Fetch system role definitions ordered by rank DESC
+    const sysRoles = await req.db.query(
+      "SELECT id, name, rank FROM roles WHERE is_system = 1 AND workspace_id IS NULL ORDER BY rank DESC"
+    );
+    const roleIdMap = {};
+    const roleObjMap = {};
+    sysRoles.forEach((r) => {
+      roleIdMap[r.name] = r.id;
+      roleObjMap[r.name] = r;
+    });
+    const ownerRoleId = roleIdMap['Owner'] || roleIdMap['Super Admin'];
+
+    let creatorRole = 'Owner';
+    let creatorRoleId = ownerRoleId;
+    let customRoleToCreate = null;
+
+    if (!userIsCompanyOwner) {
+      // Deterministic least-privilege resolution among authorizing memberships only:
+      // Sort authorizing memberships by rank ASCENDING to pick least privileged role.
+      // Tie-break deterministically by role_name ASC, then workspace_id ASC.
+      authorizingMemberships.sort((a, b) => {
+        const rankDiff = (Number(a.rank) || 30) - (Number(b.rank) || 30);
+        if (rankDiff !== 0) return rankDiff;
+        const nameDiff = String(a.role_name || '').localeCompare(String(b.role_name || ''));
+        if (nameDiff !== 0) return nameDiff;
+        return (Number(a.workspace_id) || 0) - (Number(b.workspace_id) || 0);
       });
+      const authMem = authorizingMemberships[0];
+
+      const authRank = Number(authMem.rank) || 30;
+      const isCanonicalSystemRole = Boolean(authMem.is_system && !authMem.role_workspace_id);
+
+      if (authRank < 10 || (!isCanonicalSystemRole && authRank < 11)) {
+        return res.status(403).json({
+          error: {
+            message: 'No valid workspace creator role could be assigned',
+            code: 'NO_VALID_WORKSPACE_CREATOR_ROLE'
+          }
+        });
+      }
+
+      if (isCanonicalSystemRole) {
+        // Canonical system roles retain their exact corresponding system role.
+        // A lower-ranked user (Team Member, Viewer, Guest, etc.) does NOT receive Project Manager or higher.
+        const nonOwnerSysRoles = sysRoles.filter((item) => Number(item.rank) < 100);
+        let matchedRole = null;
+
+        if (Number(authMem.rank) < 100 && roleObjMap[authMem.role_name]) {
+          matchedRole = roleObjMap[authMem.role_name];
+        } else {
+          // If a non-company-owner held an Owner role row, cap at Admin (rank 80)
+          matchedRole = roleObjMap['Admin'] || nonOwnerSysRoles[0];
+        }
+
+        if (!matchedRole || !matchedRole.id) {
+          return res.status(403).json({
+            error: {
+              message: 'No valid workspace creator role could be assigned',
+              code: 'NO_VALID_WORKSPACE_CREATOR_ROLE'
+            }
+          });
+        }
+
+        creatorRole = matchedRole.name;
+        creatorRoleId = matchedRole.id;
+      } else {
+        // Authorizing membership is a custom role (or workspace-scoped role).
+        // Custom roles MUST NOT be mapped to canonical roles (Team Member, PM, Admin) purely by rank,
+        // because rank is a delegation constraint, not proof of subset permissions.
+        // Instead, define a destination workspace-scoped role containing ONLY the source user's
+        // approved, transferable permissions after validating scope and prerequisites.
+
+        const sourcePermRows = await req.db.query(
+          `SELECT p.id, p.key, p.scope, p.dangerous, p.planned, p.module
+           FROM role_permissions rp
+           JOIN permissions p ON rp.permission_id = p.id
+           WHERE rp.role_id = ?`,
+          [authMem.role_id]
+        );
+        const sourceKeys = new Set(sourcePermRows.map((p) => p.key));
+
+        // Explicit Safe Policy for Custom Role Permission Transfer:
+        // Only permissions in TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS that are not dangerous,
+        // not planned, and not administrative/company-wide are approved for transfer.
+        // All member administration, role administration, company/billing administration,
+        // and workspace-lifecycle mutation permissions are excluded.
+        const candidateKeys = new Set();
+        for (const p of sourcePermRows) {
+          if (
+            TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS.has(p.key) &&
+            !p.planned &&
+            !p.dangerous &&
+            p.key !== 'workspace.create'
+          ) {
+            candidateKeys.add(p.key);
+          }
+        }
+
+        // workspace.view is transferable if held or authorized via workspace.create
+        if (sourceKeys.has('workspace.create') || sourceKeys.has('workspace.view')) {
+          candidateKeys.add('workspace.view');
+        }
+
+        // Validate prerequisite integrity:
+        // Every transferred permission must have all of its transitive prerequisites also present.
+        // If an operational permission has missing prerequisites, fail closed with 403 UNSAFE_CUSTOM_ROLE_MAPPING.
+        for (const key of candidateKeys) {
+          const transReqs = getTransitivePrerequisites(key);
+          for (const reqKey of transReqs) {
+            if (!candidateKeys.has(reqKey)) {
+              return res.status(403).json({
+                error: {
+                  message: `Custom role permission "${key}" requires prerequisite "${reqKey}" which was not granted`,
+                  code: 'UNSAFE_CUSTOM_ROLE_MAPPING'
+                }
+              });
+            }
+          }
+        }
+
+        // Custom role rank is strictly capped below Admin rank 80 (between 11 and 79)
+        const destRank = Math.min(Math.max(authRank, 11), 79);
+        customRoleToCreate = {
+          name: authMem.role_name || 'Custom Creator',
+          rank: destRank,
+          permissionKeys: Array.from(candidateKeys)
+        };
+      }
     }
 
     const wsExec = await req.db.execute(
@@ -330,34 +482,66 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
     const workspaceId = wsExec.insertId;
     const [workspace] = await req.db.query('SELECT id, name, created_at FROM workspaces WHERE id = ?', [workspaceId]);
 
-    // Fetch system role IDs
-    const sysRoles = await req.db.query(
-      "SELECT id, name FROM roles WHERE is_system = 1 AND workspace_id IS NULL"
-    );
-    const roleIdMap = {};
-    sysRoles.forEach((r) => { roleIdMap[r.name] = r.id; });
-    const ownerRoleId = roleIdMap['Owner'] || roleIdMap['Super Admin'];
-    const adminRoleId = roleIdMap['Admin'];
-    const pmRoleId = roleIdMap['Project Manager'];
+    // If creator was authorized via a custom role, instantiate the destination workspace-scoped role
+    if (customRoleToCreate) {
+      const crExec = await req.db.execute(
+        'INSERT INTO roles (name, is_system, is_editable, rank, workspace_id) VALUES (?, 0, 1, ?, ?)',
+        [customRoleToCreate.name, customRoleToCreate.rank, workspaceId]
+      );
+      const destRoleId = crExec.insertId;
 
-    // Automatically enrol ALL Company Owners in the new workspace
-    const companyOwnersRes = await req.db.query(
-      `SELECT DISTINCT wm.user_id
-       FROM workspace_members wm
-       JOIN roles r ON wm.role_id = r.id
-       WHERE (r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100))
-          OR wm.role IN ('Owner', 'Super Admin')`
-    );
+      if (customRoleToCreate.permissionKeys.length > 0) {
+        const placeholders = customRoleToCreate.permissionKeys.map(() => '?').join(',');
+        const pRows = await req.db.query(
+          `SELECT id FROM permissions WHERE \`key\` IN (${placeholders})`,
+          customRoleToCreate.permissionKeys
+        );
+        for (const pr of pRows) {
+          await req.db.execute(
+            'INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+            [destRoleId, pr.id]
+          );
+        }
+      }
+
+      creatorRole = customRoleToCreate.name;
+      creatorRoleId = destRoleId;
+    }
+
+    // Automatically enrol ALL verified Company Owners in the new workspace as Owner
+    let companyOwnersRes = [];
+    try {
+      companyOwnersRes = await req.db.query('SELECT user_id FROM company_owners');
+    } catch (_) { }
+
+    if (companyOwnersRes.length === 0) {
+      companyOwnersRes = await req.db.query(
+        `SELECT DISTINCT wm.user_id
+         FROM workspace_members wm
+         JOIN roles r ON wm.role_id = r.id
+         WHERE (r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100))
+            OR wm.role IN ('Owner', 'Super Admin')`
+      );
+    }
     const ownerUserIds = new Set(companyOwnersRes.map((o) => Number(o.user_id)));
-    ownerUserIds.add(Number(req.user.id));
 
     for (const uid of ownerUserIds) {
       await req.db.execute(
         'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
         [workspaceId, uid, 'Owner', ownerRoleId]
       );
-      sendUserEvent(uid, 'workspace:created', { workspace: { ...workspace, role: 'Owner' } }, req.tenant?.id);
+      sendUserEvent(uid, 'workspace:created', { workspace: { ...workspace, role: 'Owner', role_id: ownerRoleId } }, req.tenant?.id);
       sendUserEvent(uid, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
+    }
+
+    // Enrol creator if not already enrolled as Company Owner
+    if (!userIsCompanyOwner) {
+      await req.db.execute(
+        'INSERT IGNORE INTO workspace_members (workspace_id, user_id, role, role_id) VALUES (?, ?, ?, ?)',
+        [workspaceId, req.user.id, creatorRole, creatorRoleId]
+      );
+      sendUserEvent(req.user.id, 'workspace:created', { workspace: { ...workspace, role: creatorRole, role_id: creatorRoleId } }, req.tenant?.id);
+      sendUserEvent(req.user.id, 'user:workspaces_updated', { workspaceId }, req.tenant?.id);
     }
 
     await logAuthEvent(req.db, {
@@ -365,10 +549,10 @@ router.post('/', requireAuth, validate(createWorkspaceSchema), async (req, res, 
       email: req.user.email,
       eventType: 'workspace.created',
       req,
-      metadata: { workspace_id: workspaceId, name }
+      metadata: { workspace_id: workspaceId, name, role: creatorRole, role_id: creatorRoleId }
     });
 
-    return res.status(201).json({ workspace: { ...workspace, role: 'Owner', role_id: ownerRoleId } });
+    return res.status(201).json({ workspace: { ...workspace, role: creatorRole, role_id: creatorRoleId } });
   } catch (err) {
     next(err);
   }
@@ -390,104 +574,104 @@ router.patch(
   },
   requirePermissionForBody((req) => {
     const { is_archived } = req.body;
-    if (is_archived === true) return { any: ['workspace.archive', 'workspace.edit'] };
-    if (is_archived === false) return { any: ['workspace.archive', 'workspace.restore', 'workspace.edit', 'archive.restore'] };
+    if (is_archived === true) return 'workspace.archive';
+    if (is_archived === false) return { any: ['workspace.restore', 'archive.restore'] };
     return { any: ['workspace.edit', 'workspace.edit_settings'] };
   }),
   validate(updateWorkspaceSchema),
   async (req, res, next) => {
-  const workspaceId = Number(req.params.id);
-  const { name, description, icon_url, settings, is_archived, require_2fa_for_admins } = req.body;
+    const workspaceId = Number(req.params.id);
+    const { name, description, icon_url, settings, is_archived, require_2fa_for_admins } = req.body;
 
-  try {
-    const isArchive = is_archived !== undefined;
-    const updates = [];
-    const values = [];
-
-    if (name !== undefined) {
-      updates.push('name = ?');
-      values.push(sanitizePlain(name));
-    }
-    if (description !== undefined) {
-      updates.push('description = ?');
-      values.push(sanitizePlain(description));
-    }
-    if (icon_url !== undefined) {
-      updates.push('icon_url = ?');
-      values.push(icon_url);
-    }
-    if (settings !== undefined) {
-      updates.push('settings = ?');
-      values.push(typeof settings === 'object' && settings !== null ? JSON.stringify(settings) : settings);
-    }
-    if (is_archived !== undefined) {
-      updates.push('is_archived = ?');
-      values.push(is_archived ? 1 : 0);
-    }
-    if (require_2fa_for_admins !== undefined) {
-      updates.push('require_2fa_for_admins = ?');
-      values.push(require_2fa_for_admins ? 1 : 0);
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({ error: { message: 'No fields to update', code: 'BAD_REQUEST' } });
-    }
-
-    values.push(workspaceId);
-    let execRes;
     try {
-      execRes = await req.db.execute(
-        `UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`,
-        values
-      );
-    } catch (dbErr) {
-      // If icon_url column is not yet present on legacy DB schema, fallback gracefully
-      if (icon_url !== undefined) {
-        const fallbackUpdates = updates.filter(u => u !== 'icon_url = ?');
-        const fallbackValues = values.filter((_, idx) => idx !== updates.indexOf('icon_url = ?'));
-        if (fallbackUpdates.length > 0) {
-          execRes = await req.db.execute(
-            `UPDATE workspaces SET ${fallbackUpdates.join(', ')} WHERE id = ?`,
-            fallbackValues
-          );
-        }
-      } else {
-        throw dbErr;
+      const isArchive = is_archived !== undefined;
+      const updates = [];
+      const values = [];
+
+      if (name !== undefined) {
+        updates.push('name = ?');
+        values.push(sanitizePlain(name));
       }
+      if (description !== undefined) {
+        updates.push('description = ?');
+        values.push(sanitizePlain(description));
+      }
+      if (icon_url !== undefined) {
+        updates.push('icon_url = ?');
+        values.push(icon_url);
+      }
+      if (settings !== undefined) {
+        updates.push('settings = ?');
+        values.push(typeof settings === 'object' && settings !== null ? JSON.stringify(settings) : settings);
+      }
+      if (is_archived !== undefined) {
+        updates.push('is_archived = ?');
+        values.push(is_archived ? 1 : 0);
+      }
+      if (require_2fa_for_admins !== undefined) {
+        updates.push('require_2fa_for_admins = ?');
+        values.push(require_2fa_for_admins ? 1 : 0);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: { message: 'No fields to update', code: 'BAD_REQUEST' } });
+      }
+
+      values.push(workspaceId);
+      let execRes;
+      try {
+        execRes = await req.db.execute(
+          `UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`,
+          values
+        );
+      } catch (dbErr) {
+        // If icon_url column is not yet present on legacy DB schema, fallback gracefully
+        if (icon_url !== undefined) {
+          const fallbackUpdates = updates.filter(u => u !== 'icon_url = ?');
+          const fallbackValues = values.filter((_, idx) => idx !== updates.indexOf('icon_url = ?'));
+          if (fallbackUpdates.length > 0) {
+            execRes = await req.db.execute(
+              `UPDATE workspaces SET ${fallbackUpdates.join(', ')} WHERE id = ?`,
+              fallbackValues
+            );
+          }
+        } else {
+          throw dbErr;
+        }
+      }
+
+      if (execRes && execRes.affectedRows === 0) {
+        return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+      }
+
+      const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
+      let parsedSettings = updatedWs.settings;
+      if (typeof parsedSettings === 'string') {
+        try { parsedSettings = JSON.parse(parsedSettings); } catch { }
+      }
+      const finalIconUrl = updatedWs.icon_url || parsedSettings?.icon_url || null;
+      const wsPayload = {
+        ...updatedWs,
+        icon_url: finalIconUrl,
+        settings: parsedSettings,
+        require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
+      };
+      broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
+
+      await logActivity({
+        workspaceId,
+        userId: req.user.id,
+        actionType: isArchive ? (is_archived ? 'workspace_archived' : 'workspace_restored') : 'workspace_updated',
+        metaJson: { workspace_name: updatedWs.name, updates: req.body },
+        dbInstance: req.db,
+        tenantId: req.tenant?.id
+      });
+
+      return res.json({ workspace: wsPayload });
+    } catch (err) {
+      next(err);
     }
-
-    if (execRes && execRes.affectedRows === 0) {
-      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
-    }
-
-    const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
-    let parsedSettings = updatedWs.settings;
-    if (typeof parsedSettings === 'string') {
-      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
-    }
-    const finalIconUrl = updatedWs.icon_url || parsedSettings?.icon_url || null;
-    const wsPayload = {
-      ...updatedWs,
-      icon_url: finalIconUrl,
-      settings: parsedSettings,
-      require_2fa_for_admins: !!updatedWs.require_2fa_for_admins
-    };
-    broadcastWorkspaceEvent(workspaceId, 'workspace:updated', { workspace: wsPayload }, req.headers['x-origin-id'], req.tenant?.id);
-
-    await logActivity({
-      workspaceId,
-      userId: req.user.id,
-      actionType: isArchive ? (is_archived ? 'workspace_archived' : 'workspace_restored') : 'workspace_updated',
-      metaJson: { workspace_name: updatedWs.name, updates: req.body },
-      dbInstance: req.db,
-      tenantId: req.tenant?.id
-    });
-
-    return res.json({ workspace: wsPayload });
-  } catch (err) {
-    next(err);
-  }
-});
+  });
 
 // POST /api/workspaces/:id/icon - Upload workspace icon
 router.post('/:id/icon', requireAuth, requirePermission('workspace.edit'), (req, res, next) => {
@@ -524,7 +708,7 @@ router.post('/:id/icon', requireAuth, requirePermission('workspace.edit'), (req,
       if (existingWs?.settings) {
         try {
           settingsObj = typeof existingWs.settings === 'string' ? JSON.parse(existingWs.settings) : existingWs.settings;
-        } catch {}
+        } catch { }
       }
       settingsObj.icon_url = saveRes.file_url;
 
@@ -544,7 +728,7 @@ router.post('/:id/icon', requireAuth, requirePermission('workspace.edit'), (req,
       const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
       let parsedSettings = updatedWs.settings;
       if (typeof parsedSettings === 'string') {
-        try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+        try { parsedSettings = JSON.parse(parsedSettings); } catch { }
       }
       const wsPayload = {
         ...updatedWs,
@@ -584,7 +768,7 @@ router.delete('/:id/icon', requireAuth, requirePermission('workspace.edit'), asy
     if (existingWs?.settings) {
       try {
         settingsObj = typeof existingWs.settings === 'string' ? JSON.parse(existingWs.settings) : existingWs.settings;
-      } catch {}
+      } catch { }
     }
     delete settingsObj.icon_url;
 
@@ -603,7 +787,7 @@ router.delete('/:id/icon', requireAuth, requirePermission('workspace.edit'), asy
     const [updatedWs] = await req.db.query('SELECT w.* FROM workspaces w WHERE w.id = ?', [workspaceId]);
     let parsedSettings = updatedWs.settings;
     if (typeof parsedSettings === 'string') {
-      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+      try { parsedSettings = JSON.parse(parsedSettings); } catch { }
     }
     const wsPayload = {
       ...updatedWs,
@@ -645,7 +829,7 @@ router.get('/:id/security', requireAuth, requirePermission('company.manage_secur
     }
     let parsedSettings = ws.settings;
     if (typeof parsedSettings === 'string') {
-      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+      try { parsedSettings = JSON.parse(parsedSettings); } catch { }
     }
     const settings = parsedSettings || {};
     return res.json({
@@ -668,7 +852,7 @@ router.patch('/:id/security', requireAuth, requirePermission('company.manage_sec
     }
     let parsedSettings = ws.settings;
     if (typeof parsedSettings === 'string') {
-      try { parsedSettings = JSON.parse(parsedSettings); } catch {}
+      try { parsedSettings = JSON.parse(parsedSettings); } catch { }
     }
     const settings = parsedSettings || {};
     if (require_2fa !== undefined) {
@@ -684,6 +868,8 @@ router.patch('/:id/security', requireAuth, requirePermission('company.manage_sec
       [JSON.stringify(settings), req2faAdmins, workspaceId]
     );
 
+    invalidateUserAuthCache(req.tenant?.id);
+
     return res.json({
       message: 'Security settings updated',
       require_2fa: Boolean(settings.require_2fa),
@@ -695,13 +881,12 @@ router.patch('/:id/security', requireAuth, requirePermission('company.manage_sec
 });
 
 // POST /api/workspaces/:id/auto-archive - Auto-archive completed tasks older than N days
-router.post('/:id/auto-archive', requireAuth, requirePermission(['task.archive', 'workspace.edit_settings']), async (req, res, next) => {
+router.post('/:id/auto-archive', requireAuth, requirePermission('task.archive'), async (req, res, next) => {
   const workspaceId = Number(req.params.id);
   const days = req.body.days !== undefined ? Number(req.body.days) : 7;
 
   try {
-    const canArchive = (await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db)) ||
-                       (await userHasPermission(req.user.id, workspaceId, 'workspace.edit', req.db));
+    const canArchive = await userHasPermission(req.user.id, workspaceId, 'task.archive', req.db);
     if (!canArchive) {
       return res.status(403).json({ error: { message: 'Permission denied to archive tasks', code: 'PERMISSION_DENIED' } });
     }
@@ -751,7 +936,7 @@ router.post('/:id/auto-archive', requireAuth, requirePermission(['task.archive',
           cardIds
         },
         db: req.db
-      }).catch(() => {});
+      }).catch(() => { });
       res.locals._auditRecorded = true;
     } else {
       res.locals._auditRecorded = true; // Mark recorded so safety net skips logging empty routine checks
@@ -838,7 +1023,7 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
 
     // Expand Super Admin / Owner role permissions array if null
     const allPermsRes = await req.db.query('SELECT `key` FROM permissions');
-    const allPermKeys = allPermsRes.map((p) => p.key);
+    const allPermKeys = allPermsRes.map((p) => p.key).filter((k) => validPermMap.has(k) && !validPermMap.get(k).planned);
 
     const seenSystemRoleNames = new Set();
     const roles = [];
@@ -848,7 +1033,11 @@ router.get('/:id/roles', requireAuth, requirePermission('role.view'), async (req
         if (seenSystemRoleNames.has(r.name)) continue;
         seenSystemRoleNames.add(r.name);
       }
-      const keys = r.permission_keys_str ? r.permission_keys_str.split(',') : [];
+      const rawKeys = r.permission_keys_str ? r.permission_keys_str.split(',') : [];
+      const keys = rawKeys
+        .map((k) => LEGACY_KEY_REMAP[k] || LEGACY_PERMISSION_ALIASES[k] || k)
+        .filter((k) => validPermMap.has(k) && !validPermMap.get(k).planned);
+
       if (isOwnerRole(r)) {
         roles.push({ ...r, permission_keys: allPermKeys });
       } else {
@@ -897,8 +1086,11 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
       rawKeys = Array.from(new Set([...cloneKeys, ...rawKeys]));
     }
 
+    // Remap documented legacy keys (e.g. role.assign -> member.assign_role)
+    const sanitizedRawKeys = rawKeys.map((rawKey) => LEGACY_KEY_REMAP[rawKey] || rawKey);
+
     // Validate unknown and planned keys
-    for (const rawKey of rawKeys) {
+    for (const rawKey of sanitizedRawKeys) {
       const canonical = LEGACY_PERMISSION_ALIASES[rawKey] || rawKey;
       const meta = validPermMap.get(canonical);
       if (!meta) {
@@ -915,7 +1107,7 @@ router.post('/:id/roles', requireAuth, requirePermission('role.create'), validat
 
     // Auto-include transitive prerequisites
     const requestedKeys = new Set(
-      rawKeys.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
+      sanitizedRawKeys.map((k) => LEGACY_PERMISSION_ALIASES[k] || k)
     );
     for (const k of Array.from(requestedKeys)) {
       const prereqs = getTransitivePrerequisites(k);
@@ -1198,6 +1390,16 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
     const newRoleIsOwner = isOwnerRole(newRole);
     const newRank = getRoleRank(newRole);
 
+    // Strict custom role rank limit: Custom roles cannot have rank 80 or higher
+    if (!newRole.is_system && Number(newRole.rank) >= 80) {
+      return res.status(403).json({
+        error: {
+          message: 'Custom roles cannot have rank 80 or higher',
+          code: 'INVALID_ROLE_RANK'
+        }
+      });
+    }
+
     // Anti-escalation Rule 4: Cannot assign a role with higher or equal rank than caller's own rank
     if (!callerIsOwner && newRank >= callerRank) {
       return res.status(403).json({
@@ -1343,7 +1545,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
             meta: { boardName: bRes[0]?.name || 'Board' }
           },
           req.db
-        ).catch(() => {});
+        ).catch(() => { });
       }
 
       for (const bId of removedBoardIds) {
@@ -1359,7 +1561,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
             meta: { boardName: bRes[0]?.name || 'Board' }
           },
           req.db
-        ).catch(() => {});
+        ).catch(() => { });
       }
     }
 
@@ -1384,7 +1586,7 @@ router.patch('/:id/members/:userId/role', requireAuth, requirePermission(['membe
           meta: { roleName: roleRes[0]?.name || 'Member', workspaceName: wsRes[0]?.name || 'Workspace' }
         },
         req.db
-      ).catch(() => {});
+      ).catch(() => { });
     }
 
     broadcastWorkspaceEvent(workspaceId, 'workspace:member_updated', { workspaceId, targetUserId, roleId: role_id }, req.headers['x-origin-id'], req.tenant?.id);
@@ -1501,7 +1703,7 @@ router.delete('/:id/members/:userId', requireAuth, requirePermission('member.rem
           const { getMasterDb } = require('../services/tenantPools');
           const masterDb = getMasterDb();
           await masterDb.execute('DELETE FROM tenant_user_directory WHERE email = ? AND tenant_id = ?', [targetUserEmail, req.tenant.id]);
-        } catch (e) {}
+        } catch (e) { }
       }
     }
 
@@ -1579,7 +1781,7 @@ router.post('/:id/members/:userId/deactivate', requireAuth, requirePermission('m
     try {
       const { invalidateSessionCache } = require('../middleware/auth');
       invalidateSessionCache(req.tenant?.id);
-    } catch (e) {}
+    } catch (e) { }
 
     await logActivity({
       workspaceId,
@@ -3202,7 +3404,14 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
     const targetIsOwner = targetRoles.some((r) => isOwnerRole(r));
     const newIsOwner = isOwnerRole(roleRow);
 
-    if (targetIsOwner && !callerIsOwner) {
+    const callerIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
+    if (newIsOwner && !callerIsCompanyOwner) {
+      return res.status(403).json({
+        error: { message: 'Only authoritative Company Owners can promote to Owner', code: 'ONLY_COMPANY_OWNER_MAY_PROMOTE_OWNER' }
+      });
+    }
+
+    if (targetIsOwner && !callerIsCompanyOwner) {
       return res.status(403).json({
         error: { message: 'Only an Owner may modify the Owner role', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
       });
@@ -3210,13 +3419,12 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
 
     // Safety Floor: Cannot demote the last Owner in the company
     if (targetIsOwner && !newIsOwner) {
-      const allOwnerRows = await req.db.query(
-        `SELECT DISTINCT wm.user_id
-         FROM workspace_members wm
-         JOIN roles r ON wm.role_id = r.id
-         WHERE r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100)`
-      );
-      if (allOwnerRows.length <= 1) {
+      let ownerCount = 0;
+      try {
+        const coRes = await req.db.query('SELECT COUNT(*) as count FROM company_owners');
+        ownerCount = Number(coRes[0]?.count || 0);
+      } catch (_) { }
+      if (ownerCount <= 1) {
         return res.status(400).json({
           error: { message: 'Cannot demote the last Owner of the organization', code: 'SAFETY_FLOOR_VIOLATION' }
         });
@@ -3229,7 +3437,10 @@ router.patch('/:id/company-members/:userId/role', requireAuth, requirePermission
     );
 
     if (newIsOwner) {
+      await req.db.execute('INSERT IGNORE INTO company_owners (user_id) VALUES (?)', [targetUserId]);
       await syncCompanyOwners(req.db, targetUserId);
+    } else if (targetIsOwner) {
+      await req.db.execute('DELETE FROM company_owners WHERE user_id = ?', [targetUserId]);
     }
 
     // Notify user of permission update across workspaces
@@ -3446,9 +3657,20 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
           error: { message: 'Only an Owner may remove an Owner from the organization', code: 'ONLY_OWNER_MAY_MODIFY_OWNER' }
         });
       }
-      return res.status(400).json({
-        error: { message: 'Organization owners cannot be removed from company directory', code: 'CANNOT_REMOVE_OWNER' }
-      });
+
+      // Safety Floor: Cannot remove the last Owner in the company
+      const allOwnerRows = await req.db.query(
+        `SELECT DISTINCT wm.user_id
+         FROM workspace_members wm
+         JOIN roles r ON wm.role_id = r.id
+         WHERE (r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 100))
+            OR wm.role IN ('Owner', 'Super Admin')`
+      );
+      if (allOwnerRows.length <= 1) {
+        return res.status(400).json({
+          error: { message: 'Cannot remove the last Owner of the organization', code: 'SAFETY_FLOOR_VIOLATION' }
+        });
+      }
     }
 
     // Revoke all sessions, invalidate session cache, and disconnect user sockets immediately
@@ -3494,7 +3716,7 @@ router.delete('/:id/company-members/:userId', requireAuth, requirePermission('me
         dbInstance: req.db,
         tenantId: req.tenant?.id
       });
-    } catch (e) {}
+    } catch (e) { }
 
     broadcastWorkspaceEvent(workspaceId, 'workspace:member_removed', { workspaceId, targetUserId }, req.headers['x-origin-id'], req.tenant?.id);
 
@@ -3627,7 +3849,7 @@ router.patch('/:id/company-members/:userId/credentials', requireAuth, async (req
           'UPDATE pending_invitations SET email = ? WHERE LOWER(email) = ?',
           [normalizedNewEmail, targetUser.email.toLowerCase()]
         );
-      } catch {}
+      } catch { }
     }
 
     // 6. Invalidate active sessions and disconnect sockets
@@ -4482,12 +4704,17 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
     let candidateList = [];
     if (tab === 'delegated') {
-      candidateList = formattedDelegated.filter((t) => !t.is_complete);
+      candidateList = formattedDelegated;
+    } else if (tab === 'total') {
+      const totalMap = new Map();
+      formattedAssigned.forEach((t) => totalMap.set(t.id, t));
+      formattedDelegated.forEach((t) => totalMap.set(t.id, t));
+      candidateList = Array.from(totalMap.values());
     } else if (tab === 'completed') {
       candidateList = completedAssigned;
     } else {
-      // 'assigned': exclude completed tasks because they are already in the dedicated 'completed' tab
-      candidateList = stage === 'done' ? completedAssigned : activeAssigned;
+      // 'assigned': show all cards assigned to user (both active and completed)
+      candidateList = formattedAssigned;
     }
 
     let filteredCards = candidateList.filter((c) => {
@@ -4506,7 +4733,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         if (stage === 'in_progress' && c.stage !== 'in_progress') return false;
         if (stage === 'todo' && c.stage !== 'todo') return false;
         if (stage === 'review' && c.stage !== 'review') return false;
-        if (stage === 'done' && !c.is_complete) return false;
+        if ((stage === 'done' || stage === 'completed') && !c.is_complete) return false;
       }
       // Search query filter
       if (search) {
@@ -4534,6 +4761,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
       workspaces: userWorkspaces.map((w) => ({ id: w.id, name: w.name })),
       boards: distinctBoards,
       summary: {
+        total_all: new Set([...formattedAssigned.map((c) => c.id), ...formattedDelegated.map((c) => c.id)]).size,
         total_assigned: totalAssignedCount,
         active_count: activeAssigned.length,
         todo: todoCount,
@@ -4542,7 +4770,7 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
         completed: completedAssigned.length,
         overdue: overdueCount,
         due_soon: dueSoonCount,
-        assigned_by_me: formattedDelegated.filter((t) => !t.is_complete).length,
+        assigned_by_me: formattedDelegated.length,
         completion_rate: completionRate
       },
       cards: pagedCards,
@@ -4666,7 +4894,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     let wsSettings = {};
     try {
       wsSettings = typeof currentWs?.settings === 'string' ? JSON.parse(currentWs.settings) : (currentWs?.settings || {});
-    } catch {}
+    } catch { }
     const timezone = wsSettings?.timezone || 'Asia/Kolkata';
     const { startUtc, endUtc } = getUtcRangeForDate(targetDate, timezone);
 
@@ -5031,7 +5259,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       let wsSettingsObj = {};
       try {
         wsSettingsObj = typeof currentWs?.settings === 'string' ? JSON.parse(currentWs.settings) : (currentWs?.settings || {});
-      } catch {}
+      } catch { }
       const wsWorkingDays = wsSettingsObj?.working_days || [1, 2, 3, 4, 5];
       const wsHolidays = wsSettingsObj?.holidays || [];
 
@@ -5077,7 +5305,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       for (const a of checklistToggles) {
         let meta = a.meta_json;
         if (typeof meta === 'string') {
-          try { meta = JSON.parse(meta); } catch {}
+          try { meta = JSON.parse(meta); } catch { }
         }
         const itemId = meta?.item_id ? Number(meta.item_id) : null;
         const itemText = meta?.item_text ? String(meta.item_text).trim() : '';
@@ -5164,7 +5392,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       if (movedAct) {
         let meta = movedAct.meta_json;
         if (typeof meta === 'string') {
-          try { meta = JSON.parse(meta); } catch {}
+          try { meta = JSON.parse(meta); } catch { }
         }
         const toCol = meta?.to || c.list_name || 'column';
         const actor = movedAct.user_name ? ` by ${movedAct.user_name}` : '';
@@ -5370,7 +5598,7 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
     let wsSettings = {};
     try {
       wsSettings = typeof wsRow?.settings === 'string' ? JSON.parse(wsRow.settings) : (wsRow?.settings || {});
-    } catch {}
+    } catch { }
     const timezone = wsSettings?.timezone || 'Asia/Kolkata';
     const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5]; // 1=Mon, 7=Sun
     const holidays = wsSettings?.holidays || [];
@@ -5573,13 +5801,13 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
       for (const a of userActs) {
         if (a.action_type === 'checklist_toggled') {
           let meta = a.meta_json;
-          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch {} }
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { } }
           if (meta?.item_text && (meta.is_checked === true || meta.is_checked === 1 || String(meta.is_checked) === 'true')) {
             checkedItems.push(meta.item_text);
           }
         } else if (a.action_type === 'attachment_uploaded' || a.action_type === 'attachment_added') {
           let meta = a.meta_json;
-          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch {} }
+          if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { } }
           files.push({ name: meta?.file_name || 'File', url: meta?.file_url || null });
         } else if (['ping_pong', 'bulk_ticking', 'created_and_ticked', 'completed_with_open_checklist'].includes(a.action_type)) {
           internalFlags.push(a.action_type);
@@ -5682,7 +5910,7 @@ router.get('/:id/daily-tracker/people', requireAuth, requirePermission('daily_tr
 
       const hasRepeated = userCheckins.some((ci) => {
         let fl = ci.flags;
-        if (typeof fl === 'string') { try { fl = JSON.parse(fl); } catch {} }
+        if (typeof fl === 'string') { try { fl = JSON.parse(fl); } catch { } }
         const hasFlagRepeat = Array.isArray(fl) && (fl.includes('repeat') || fl.includes('same_update_repeated'));
         return ci.flag_repeat === 1 || ci.flag_repeat === true || hasFlagRepeat || (ci.flag_reason && /repeat|similarity/i.test(ci.flag_reason));
       });
@@ -5794,7 +6022,7 @@ router.get('/:id/checkins/pending', requireAuth, requirePermission('checkin.crea
     let wsSettings = {};
     try {
       wsSettings = typeof wsRow?.settings === 'string' ? JSON.parse(wsRow.settings) : (wsRow?.settings || {});
-    } catch {}
+    } catch { }
     const timezone = wsSettings?.timezone || 'Asia/Kolkata';
     const workingDays = wsSettings?.working_days || [1, 2, 3, 4, 5];
     const holidays = wsSettings?.holidays || [];

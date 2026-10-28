@@ -392,10 +392,7 @@ const SYSTEM_ROLES = {
 /**
  * Legacy permission key mapping eliminated for Section 7 / Phase E
  */
-const LEGACY_PERMISSION_ALIASES = {
-  'workspace.restore': 'workspace.archive',
-  'project.restore': 'project.archive'
-};
+const LEGACY_PERMISSION_ALIASES = {};
 
 // Reverse map
 const REVERSE_ALIASES = {};
@@ -551,12 +548,105 @@ function getTransitivePrerequisites(permissionKey) {
   return Array.from(result);
 }
 
+/**
+ * Policy: Approved Transferable Permissions for Workspace-Scoped Custom Roles
+ * 
+ * When a user whose authorizing membership is a custom role creates a new workspace,
+ * only permissions that represent legitimate, project/board-scoped collaboration
+ * capabilities may transfer into the new workspace.
+ * 
+ * Explicitly Excluded (Non-transferable):
+ * - Company / tenant administration: company.*, billing.*, audit.*, api_key.*, integration.*, team.*
+ * - Member administration: member.view, member.invite, member.invite_guest, member.assign_role, member.remove, etc.
+ * - Role administration: role.view, role.create, role.edit, role.delete, role.assign
+ * - Workspace administration: workspace.edit, workspace.delete, workspace.archive, workspace.restore
+ * - Broad cross-board bypass: project.access_all
+ * - Managerial / people approvals: leave.approve, daily_tracker.view_people, time.approve_timesheet
+ * - Dangerous / destructive mutations: *.delete_any, *.permanent_delete, etc.
+ */
+const TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS = new Set([
+  // Workspace visibility (essential for viewing destination workspace)
+  'workspace.view',
+
+  // Project / Board operations (strictly scoped within destination workspace)
+  'project.view',
+  'project.create',
+  'project.edit_settings',
+  'project.archive',
+
+  // Columns / Lists (scoped to boards)
+  'list.create',
+  'list.edit',
+  'list.reorder',
+
+  // Tasks / Cards
+  'task.view',
+  'task.create',
+  'task.edit',
+  'task.move',
+  'task.assign',
+  'task.assign_self',
+  'task.complete',
+  'task.delete_own',
+  'task.duplicate',
+  'task.archive',
+  'task.restore',
+
+  // Checklists
+  'checklist.create',
+  'checklist.edit',
+  'checklist.delete',
+
+  // Comments
+  'comment.view',
+  'comment.create',
+  'comment.edit_own',
+  'comment.delete_own',
+
+  // Attachments
+  'attachment.view',
+  'attachment.upload',
+  'attachment.delete_own',
+
+  // Check-ins
+  'checkin.create',
+  'checkin.view',
+  'checkin.review',
+
+  // Files
+  'file.view',
+
+  // Labels
+  'label.view',
+  'label.create',
+  'label.edit',
+  'label.delete',
+  'label.delete_own',
+
+  // Activity, Archive, Search, Reports, Daily tracker within workspace
+  'activity.view',
+  'archive.view',
+  'archive.restore',
+  'search.use',
+  'report.view_project',
+  'daily_tracker.view',
+
+  // Self operations
+  'leave.request',
+  'notification.view_own',
+  'notification.manage_own',
+  'session.view_own',
+  'session.revoke_own'
+]);
+
 module.exports = {
   PERMISSIONS,
   SYSTEM_ROLES,
   LEGACY_PERMISSION_ALIASES,
   PREREQUISITE_PERMISSIONS,
+  TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS,
   expandPermissionKeys,
   getPrerequisites,
   getTransitivePrerequisites
 };
+

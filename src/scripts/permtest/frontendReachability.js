@@ -97,6 +97,7 @@ async function runFrontendReachability() {
       '/w/1/activity',
       '/w/1/archive'
     ],
+    '/b/:boardId': ['/b/1'],
     '/403': ['/403'],
     '/404': ['/404'],
     '*': ['/404']

@@ -168,6 +168,13 @@ class PermtestFixture {
     });
     const attachmentBId = attBRes.data?.attachment?.id || attBRes.data?.id;
 
+    await this.tenantDb.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardBId, this.ownerClient.user.id]);
+    const chkInBRes = await this.ownerClient.post(`/api/cards/${cardBId}/checkins`, {
+      did: 'Initial checkin on Board B for testing review workflow',
+      next_step: 'Next step on Board B checkin'
+    });
+    const checkinBId = chkInBRes.data?.checkin?.id || chkInBRes.data?.id;
+
     const labelBRes = await this.ownerClient.post(`/api/boards/${boardBId}/labels`, {
       name: `Label B`,
       color: '#10b981'
@@ -228,6 +235,13 @@ class PermtestFixture {
     });
     const attachment1Id = attRes.data?.attachment?.id || attRes.data?.id;
 
+    await this.tenantDb.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [card1Id, this.ownerClient.user.id]);
+    const chkIn1Res = await this.ownerClient.post(`/api/cards/${card1Id}/checkins`, {
+      did: 'Initial checkin on Board A for testing review workflow',
+      next_step: 'Next step on Board A checkin'
+    });
+    const checkin1Id = chkIn1Res.data?.checkin?.id || chkIn1Res.data?.id;
+
     const labelRes = await this.ownerClient.post(`/api/boards/${boardAId}/labels`, {
       name: `Label 1`,
       color: '#3b82f6'
@@ -246,6 +260,13 @@ class PermtestFixture {
       title: 'Card W2'
     });
     const cardW2Id = cardW2Res.data?.card?.id || cardW2Res.data?.id;
+
+    await this.tenantDb.execute('INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', [cardW2Id, this.ownerClient.user.id]);
+    const chkInW2Res = await this.ownerClient.post(`/api/cards/${cardW2Id}/checkins`, {
+      did: 'Initial checkin on Workspace 2 for testing review workflow',
+      next_step: 'Next step on Workspace 2 checkin'
+    });
+    const checkinW2Id = chkInW2Res.data?.checkin?.id || chkInW2Res.data?.id;
 
     const chkW2Res = await this.ownerClient.post(`/api/cards/${cardW2Id}/checklists`, {
       title: 'Checklist W2'
@@ -474,6 +495,9 @@ class PermtestFixture {
       creatorCommentId,
       attachment1Id,
       label1Id,
+      checkin1Id,
+      checkinBId,
+      checkinW2Id,
       listBId,
       cardBId,
       checklistBId,
@@ -481,6 +505,9 @@ class PermtestFixture {
       commentBId,
       attachmentBId,
       labelBId,
+      checkin1Id,
+      checkinBId,
+      checkinW2Id,
       listW2Id,
       cardW2Id,
       checklistW2Id,

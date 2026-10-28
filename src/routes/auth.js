@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
-const { requireAuth, getJwtSecret, extractToken } = require('../middleware/auth');
+const { requireAuth, getJwtSecret, extractToken, invalidateUserAuthCache } = require('../middleware/auth');
 const { blacklistToken } = require('../utils/tokenBlacklist');
 const validate = require('../middleware/validate');
 const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenantPools');
@@ -2218,6 +2218,8 @@ const handle2FaConfirm = async (req, res, next) => {
       [encryptedSecret, req.user.id]
     );
 
+    invalidateUserAuthCache(req.tenant?.id, req.user.id);
+
     // Generate 10 single-use recovery codes
     const recoveryCodes = await generateRecoveryCodes(req.db, req.user.id);
 
@@ -2271,6 +2273,7 @@ router.post('/2fa/disable', requireAuth, validate(disable2FaSchema), async (req,
     }
 
     await disableTwoFactor(req.db, req.user.id);
+    invalidateUserAuthCache(req.tenant?.id, req.user.id);
 
     await logAuthEvent(req.db, {
       userId: req.user.id,

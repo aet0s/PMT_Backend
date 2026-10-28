@@ -15,7 +15,8 @@ function getContextEntities(ctx, boardId) {
       checklistItemId: ctx.checklistItemBId,
       commentId: ctx.commentBId,
       attachmentId: ctx.attachmentBId,
-      labelId: ctx.labelBId || ctx.label1Id
+      labelId: ctx.labelBId || ctx.label1Id,
+      checkinId: ctx.checkinBId || ctx.checkin1Id
     };
   }
   if (boardId && (boardId === ctx.boardCId || boardId === 'boardC')) {
@@ -28,7 +29,8 @@ function getContextEntities(ctx, boardId) {
       checklistItemId: ctx.checklistItemW2Id,
       commentId: ctx.commentW2Id,
       attachmentId: ctx.attachmentW2Id,
-      labelId: ctx.labelW2Id || ctx.label1Id
+      labelId: ctx.labelW2Id || ctx.label1Id,
+      checkinId: ctx.checkinW2Id || ctx.checkin1Id
     };
   }
   return {
@@ -40,7 +42,8 @@ function getContextEntities(ctx, boardId) {
     checklistItemId: ctx.checklistItem1Id,
     commentId: ctx.comment1Id,
     attachmentId: ctx.attachment1Id,
-    labelId: ctx.label1Id
+    labelId: ctx.label1Id,
+    checkinId: ctx.checkin1Id
   };
 }
 
@@ -524,9 +527,15 @@ const PROBES = {
     scope: 'project',
     method: 'POST',
     path: '/api/cards/:id/members (self)',
-    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/members`, {
-      user_id: client.user?.id
-    })
+    execute: async (client, ctx, boardId) => {
+      const e = getContextEntities(ctx, boardId);
+      if (ctx.tenantDb && client.user?.id) {
+        await ctx.tenantDb.execute('DELETE FROM card_members WHERE card_id = ? AND user_id = ?', [e.cardId, client.user.id]);
+      }
+      return client.post(`/api/cards/${e.cardId}/members`, {
+        user_id: client.user?.id
+      });
+    }
   },
   'task.complete': {
     module: 'task',
@@ -545,6 +554,13 @@ const PROBES = {
     execute: async (client, ctx, boardId) => {
       const e = getContextEntities(ctx, boardId);
       if (e.wsId !== ctx.w1Id && client.roleName !== 'Owner') return client.patch(`/api/cards/${e.cardId}`, { is_archived: true });
+      if (ctx.tenantDb && client.user?.id) {
+        const ins = await ctx.tenantDb.execute(
+          'INSERT INTO cards (list_id, title, created_by, position) VALUES (?, ?, ?, 99)',
+          [e.listId, `arch_c_${Date.now()}`, client.user.id]
+        );
+        return client.patch(`/api/cards/${ins.insertId}`, { is_archived: true });
+      }
       const cRes = await ctx.ownerClient.post('/api/cards', { list_id: e.listId, title: `arch_c_${Date.now()}` });
       const archCardId = cRes.data?.card?.id || cRes.data?.id;
       return client.patch(`/api/cards/${archCardId}`, { is_archived: true });
@@ -558,6 +574,13 @@ const PROBES = {
     execute: async (client, ctx, boardId) => {
       const e = getContextEntities(ctx, boardId);
       if (e.wsId !== ctx.w1Id && client.roleName !== 'Owner') return client.patch(`/api/cards/${e.cardId}`, { is_archived: false });
+      if (ctx.tenantDb && client.user?.id) {
+        const ins = await ctx.tenantDb.execute(
+          'INSERT INTO cards (list_id, title, created_by, is_archived, position) VALUES (?, ?, ?, 1, 99)',
+          [e.listId, `res_c_${Date.now()}`, client.user.id]
+        );
+        return client.patch(`/api/cards/${ins.insertId}`, { is_archived: false });
+      }
       const cRes = await ctx.ownerClient.post('/api/cards', { list_id: e.listId, title: `res_c_${Date.now()}` });
       const resCardId = cRes.data?.card?.id || cRes.data?.id;
       await ctx.ownerClient.patch(`/api/cards/${resCardId}`, { is_archived: true });
@@ -1023,10 +1046,23 @@ const PROBES = {
     scope: 'project',
     method: 'POST',
     path: '/api/cards/:id/checkins',
-    execute: (client, ctx, boardId) => client.post(`/api/cards/${getContextEntities(ctx, boardId).cardId}/checkins`, {
-      did: 'Investigated indexing and verified all query plans across tables.',
-      next_step: 'Add schema migration and test'
-    })
+    execute: async (client, ctx, boardId) => {
+      const e = getContextEntities(ctx, boardId);
+      if (ctx.tenantDb && client.user?.id) {
+        await ctx.tenantDb.execute(
+          'INSERT IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)',
+          [e.cardId, client.user.id]
+        );
+        await ctx.tenantDb.execute(
+          'DELETE FROM check_ins WHERE card_id = ? AND user_id = ?',
+          [e.cardId, client.user.id]
+        );
+      }
+      return client.post(`/api/cards/${e.cardId}/checkins`, {
+        did: `Investigated indexing and verified query plans across all tables ${Date.now()}`,
+        next_step: 'Add schema migration and test'
+      });
+    }
   },
   'checkin.view': {
     module: 'checkin',
@@ -1040,7 +1076,29 @@ const PROBES = {
     scope: 'project',
     method: 'POST',
     path: '/api/checkins/:id/review',
-    execute: (client, ctx, boardId) => client.post('/api/checkins/1/review', { action: 'ack', note: 'Acknowledged' })
+    execute: async (client, ctx, boardId) => {
+      const e = getContextEntities(ctx, boardId);
+      let chkId = e.checkinId || ctx.checkin1Id;
+      if (ctx.tenantDb) {
+        const rows = await ctx.tenantDb.query(
+          `SELECT ci.id FROM check_ins ci
+           JOIN cards c ON ci.card_id = c.id
+           JOIN lists l ON c.list_id = l.id
+           WHERE l.board_id = ? LIMIT 1`,
+          [e.boardId]
+        );
+        if (rows && rows[0]) {
+          chkId = rows[0].id;
+        } else {
+          const ins = await ctx.tenantDb.execute(
+            "INSERT INTO check_ins (card_id, user_id, work_date, did, next_step) VALUES (?, 1, CURDATE(), 'Checkin for review probe testing workflow verification', 'Next step')",
+            [e.cardId]
+          );
+          chkId = ins.insertId;
+        }
+      }
+      return client.post(`/api/checkins/${chkId}/review`, { action: 'ack', note: 'Acknowledged' });
+    }
   },
   'leave.request': {
     module: 'leave',

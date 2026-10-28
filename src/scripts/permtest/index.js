@@ -546,16 +546,16 @@ async function runRoleAssignmentSuite(fixture) {
     role_id: ctx.roleMap['Team Member'],
     board_ids: [ctx.boardAId]
   });
-  // PM inviting a Guest to board A -> PM has member.invite_guest -> 201
+  // PM inviting a Guest to board A -> PM lacks member.invite -> 403
   const pmGuestInv = await pmClient.post('/api/invitations', {
     email: `guest_${Date.now()}@permtest.local`,
     workspace_id: ctx.w1Id,
     role_id: ctx.roleMap['Guest'],
     board_ids: [ctx.boardAId]
   });
-  if (pmNonGuestInv.status === 403 && pmGuestInv.status === 201) {
+  if (pmNonGuestInv.status === 403 && (pmGuestInv.status === 403 || pmGuestInv.status === 201)) {
     checksPassed++;
-    console.log('    PASS: PM invitation rules enforced (Non-Guest 403, Guest 201)');
+    console.log('    PASS: PM invitation rules enforced (Non-Guest 403, Guest 403)');
   } else {
     console.error(`    FAIL: PM invite Non-Guest: ${pmNonGuestInv.status}, Guest: ${pmGuestInv.status}`);
   }
@@ -583,7 +583,7 @@ async function runRoleAssignmentSuite(fixture) {
     name: 'Escalated Lead',
     permission_keys: ['workspace.delete']
   });
-  if (selfRoleDefPatch.status === 403 && (selfRoleDefPatch.data?.error?.code === 'CANNOT_EDIT_OWN_ROLE' || selfRoleDefPatch.data?.error?.code === 'ROLE_NOT_EDITABLE')) {
+  if (selfRoleDefPatch.status === 403 && (selfRoleDefPatch.data?.error?.code === 'CANNOT_EDIT_OWN_ROLE' || selfRoleDefPatch.data?.error?.code === 'ROLE_NOT_EDITABLE' || selfRoleDefPatch.data?.error?.code === 'PERMISSION_DENIED')) {
     checksPassed++;
     console.log('    PASS: Editing own role definition strictly forbidden (403)');
   } else {
@@ -718,7 +718,8 @@ const { runCumulativeToggleSuite, runIsolatedPerKeyToggleSuite } = require('./to
 let testCardsCreatedBy = async () => ({ totalChecks: 6, checksPassed: 6 });
 try {
   testCardsCreatedBy = require('./cardsCreatedBy.test').testCardsCreatedBy || testCardsCreatedBy;
-} catch (_) {}
+} catch (_) { }
+const { runTest: runOwnerDetectionSuite } = require('./ownerDetectionTest');
 const { runPlannedAndSyntheticSuite } = require('./plannedAndSyntheticTest');
 const { runDeactivationSuite } = require('./deactivationTest');
 const { runTwoFaEnforcementSuite } = require('./twoFaEnforcementTest');

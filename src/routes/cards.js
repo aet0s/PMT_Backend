@@ -409,8 +409,8 @@ router.post('/', requireAuth, requirePermission('task.create'), validate(createC
 router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     const { list_id, title, description, position, start_date, due_date, is_complete, is_archived, priority } = req.body;
     const reqs = [];
-    if (is_archived === true) reqs.push({ any: ['task.archive', 'task.edit'] });
-    if (is_archived === false) reqs.push({ any: ['task.restore', 'task.archive', 'archive.restore', 'task.edit'] });
+    if (is_archived === true) reqs.push('task.archive');
+    if (is_archived === false) reqs.push({ any: ['task.restore', 'archive.restore'] });
     if (list_id !== undefined || position !== undefined) reqs.push('task.move');
     if (priority !== undefined) reqs.push({ any: ['task.set_priority', 'task.edit'] });
 
@@ -450,18 +450,11 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     // Bug 5: Permission enforcement for card edits:
     // Owner, Admin, Project Manager, Team Lead (rank >= 50) can modify any card.
     // Team Members and lower roles may only modify cards they created OR are assigned to.
-    const callerRoleRows = await req.db.query(
-      `SELECT r.rank, r.name FROM workspace_members wm 
-       LEFT JOIN roles r ON wm.role_id = r.id 
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [oldCard.workspace_id, req.user.id]
-    );
-    const callerRoleRow = callerRoleRows && callerRoleRows[0];
-    const callerRank = Number(callerRoleRow?.rank || 30);
-    const roleName = String(callerRoleRow?.name || '').toLowerCase();
-    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
+    const isToggleCompleteOnly = is_complete !== undefined && title === undefined && description === undefined && start_date === undefined && due_date === undefined && req.body.cover_url === undefined && req.body.priority === undefined && list_id === undefined && position === undefined && is_archived === undefined;
+    const hasComplete = isToggleCompleteOnly && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
+    const hasGeneralEdit = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.edit', req.db, oldCard.board_id, req);
 
-    if (!isTopLevel) {
+    if (!hasGeneralEdit && !hasComplete) {
       const isCreator = Number(oldCard.created_by) === Number(req.user.id);
       const assigneeRows = await req.db.query(
         'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ? UNION SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
@@ -1121,19 +1114,8 @@ router.post(
     );
     const isCallerAssigner = assignerRows.some((a) => Number(a.user_id) === Number(req.user.id));
 
-    // Fetch caller's workspace role to check for top-level admin/owner privilege
-    const callerRoleRows = await req.db.query(
-      `SELECT r.rank, r.name 
-       FROM workspace_members wm 
-       JOIN roles r ON wm.role_id = r.id 
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [workspaceId, req.user.id]
-    );
-    const callerRoleRow = callerRoleRows && callerRoleRows[0];
-    const callerRank = Number(callerRoleRow?.rank || 30);
-    const roleName = String(callerRoleRow?.name || '').toLowerCase();
-    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
-    const hasFullAssigneeControl = isCallerAssigner || isTopLevel;
+    const hasGeneralAssign = await userHasPermission(req.user.id, workspaceId, 'task.assign', req.db, boardId, req);
+    const hasFullAssigneeControl = isCallerAssigner || hasGeneralAssign;
 
     let action = '';
     if (existing.length > 0) {
@@ -1265,21 +1247,11 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
       [cardId]
     )).map((u) => ({ id: u.id, name: u.name }));
 
-    // Authorization check: Only existing assigners of this card or top-level workspace roles (rank >= 50 or owner/admin/manager) can modify card assigners
-    const callerRoleRows = await req.db.query(
-      `SELECT r.rank, r.name 
-       FROM workspace_members wm 
-       JOIN roles r ON wm.role_id = r.id 
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [workspaceId, req.user.id]
-    );
-    const callerRoleRow = callerRoleRows && callerRoleRows[0];
-    const callerRank = Number(callerRoleRow?.rank || 30);
-    const roleName = String(callerRoleRow?.name || '').toLowerCase();
-    const isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(roleName);
+    // Authorization check: Only existing assigners of this card or users with task.assign can modify card assigners
+    const hasGeneralAssign = await userHasPermission(req.user.id, workspaceId, 'task.assign', req.db, boardId, req);
     const isCallerAssigner = beforeAssigners.some((a) => Number(a.id) === Number(req.user.id));
 
-    if (!isTopLevel && !isCallerAssigner) {
+    if (!hasGeneralAssign && !isCallerAssigner) {
       return res.status(403).json({
         error: {
           message: 'Only card assigners or administrators can modify card assigners.',
