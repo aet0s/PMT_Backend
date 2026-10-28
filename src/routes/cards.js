@@ -453,8 +453,9 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     const isToggleCompleteOnly = is_complete !== undefined && title === undefined && description === undefined && start_date === undefined && due_date === undefined && req.body.cover_url === undefined && req.body.priority === undefined && list_id === undefined && position === undefined && is_archived === undefined;
     const hasComplete = isToggleCompleteOnly && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
     const hasGeneralEdit = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.edit', req.db, oldCard.board_id, req);
+    const hasMove = (list_id !== undefined || position !== undefined) && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.move', req.db, oldCard.board_id, req);
 
-    if (!hasGeneralEdit && !hasComplete) {
+    if (!hasGeneralEdit && !hasComplete && !hasMove) {
       const isCreator = Number(oldCard.created_by) === Number(req.user.id);
       const assigneeRows = await req.db.query(
         'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ? UNION SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
@@ -578,19 +579,22 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       const tlRes = await req.db.query('SELECT * FROM lists WHERE id = ?', [list_id]);
       targetList = tlRes[0] || null;
 
-      if (!isTopLevel && targetList && targetList.is_done_list && Number(oldCard.list_id) !== Number(list_id)) {
-        const assignerRows = await req.db.query(
-          'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
-          [cardId, req.user.id]
-        );
-        const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
-        if (!isAssigner) {
-          return res.status(403).json({
-            error: {
-              message: 'Cards can only be marked as completed by assigners.',
-              code: 'FORBIDDEN'
-            }
-          });
+      if (targetList && targetList.is_done_list && Number(oldCard.list_id) !== Number(list_id)) {
+        const canComplete = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
+        if (!canComplete) {
+          const assignerRows = await req.db.query(
+            'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
+            [cardId, req.user.id]
+          );
+          const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
+          if (!isAssigner) {
+            return res.status(403).json({
+              error: {
+                message: 'Cards can only be marked as completed by assigners.',
+                code: 'FORBIDDEN'
+              }
+            });
+          }
         }
       }
     }
