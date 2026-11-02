@@ -42,8 +42,8 @@ const ROUTE_NOTIFICATION_MAP = {
     description: 'Assigns member on card'
   },
   'POST /api/cards/:id/comments': {
-    events: ['comment.added', 'comment.mention'],
-    description: 'Posts discussion comment and notifies assignees/creator/mentions'
+    events: ['comment.added', 'comment.mention', 'comment.reply', 'comment.thread_reply'],
+    description: 'Posts discussion comment or reply and notifies assignees/thread author/parent/mentions'
   },
   'POST /api/workspaces/:id/members': {
     events: ['workspace.member_added'],
@@ -241,6 +241,10 @@ const ROUTE_NOTIFICATION_MAP = {
   'PATCH /api/roles/:id': {
     noNotify: true,
     reason: 'Role update is non-notifiable (recorded in audit logs)'
+  },
+  'POST /api/roles/:id/reset-default': {
+    noNotify: true,
+    reason: 'Role permissions reset to system default (recorded in audit logs)'
   },
   'DELETE /api/roles/:id': {
     noNotify: true,

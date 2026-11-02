@@ -1,3 +1,4 @@
+const commentService = require('../services/commentService');
 const express = require('express');
 const { z } = require('zod');
 const { parseJson } = require('../db/mysql');
@@ -10,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const { queueFileCleanupRetry } = require('../utils/fileCleanupQueue');
 const { logAuthEvent } = require('../services/authAudit');
+const auditService = require('../services/audit');
 const { notify } = require('../services/notify');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
@@ -363,7 +365,7 @@ router.get('/:id', requireAuth, requirePermission('project.view'), async (req, r
     // 6. Fetch Activity Log for Board
     const activityRes = await req.db.query(
       `SELECT a.id, a.board_id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at,
-              u.name as user_name, u.email as user_email,
+              u.name as user_name, u.email as user_email, u.avatar_url as user_avatar, u.avatar_url as user_avatar_url,
               c.title as card_title
        FROM activity_log a
        LEFT JOIN users u ON a.user_id = u.id
@@ -568,6 +570,30 @@ router.delete(
       workspace_id: board.workspace_id
     }, req.db, req.tenant?.id);
 
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'board.deleted',
+        category: 'board',
+        entityType: 'board',
+        entityId: boardId,
+        entityLabel: board.name,
+        boardId,
+        workspaceId: board.workspace_id,
+        actorUserId: req.user.id,
+        meta: {
+          board_id: boardId,
+          board_name: board.name,
+          workspace_id: board.workspace_id,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for board deletion failed:', auditErr.message);
+    }
+
     await logAuthEvent(req.db, {
       userId: req.user.id,
       email: req.user.email,
@@ -627,6 +653,23 @@ router.delete(
   });
 
   return res.json({ message: 'Board deleted successfully', boardId });
+});
+
+// GET /api/boards/:id/mention-candidates
+router.get('/:id/mention-candidates', requireAuth, requirePermission('project.view'), async (req, res, next) => {
+  const boardId = Number(req.params.id);
+  const query = req.query.q || '';
+  const limit = req.query.limit || 10;
+  try {
+    const candidates = await commentService.searchMentionCandidates(req.db, {
+      boardId,
+      query,
+      limit
+    });
+    return res.json({ candidates });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/boards/:id/workspace-members (List workspace members and their access status to this board)

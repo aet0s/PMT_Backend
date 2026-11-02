@@ -919,9 +919,32 @@ router.delete('/:id', requireAuth, requirePermission('workspace.delete'), async 
   const workspaceId = Number(req.params.id);
 
   try {
-    const ws = await req.db.query('SELECT id FROM workspaces WHERE id = ?', [workspaceId]);
+    const ws = await req.db.query('SELECT id, name FROM workspaces WHERE id = ?', [workspaceId]);
     if (ws.length === 0) {
       return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+    }
+    const wsName = ws[0].name || 'Workspace';
+
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'workspace.deleted',
+        category: 'workspace',
+        entityType: 'workspace',
+        entityId: workspaceId,
+        entityLabel: wsName,
+        workspaceId,
+        actorUserId: req.user.id,
+        meta: {
+          workspace_id: workspaceId,
+          workspace_name: wsName,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for workspace deletion failed:', auditErr.message);
     }
 
     await req.db.execute('DELETE FROM workspaces WHERE id = ?', [workspaceId]);

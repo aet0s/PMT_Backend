@@ -474,6 +474,26 @@ const NOTIFICATION_EVENTS = {
     deepLink: '/b/{boardId}?card={cardId}',
     notifiable: true
   },
+  'comment.reply': {
+    category: 'Cards',
+    recipients: 'targetUser',
+    requiredPermission: 'comment.view',
+    template: '{actor} replied to your comment on "{cardTitle}"',
+    metaFields: ['cardTitle', 'boardName'],
+    coalescingPolicy: 'immediate',
+    deepLink: '/b/{boardId}?card={cardId}',
+    notifiable: true
+  },
+  'comment.thread_reply': {
+    category: 'Cards',
+    recipients: 'targetUser',
+    requiredPermission: 'comment.view',
+    template: '{actor} replied to a discussion you started on "{cardTitle}"',
+    metaFields: ['cardTitle', 'boardName'],
+    coalescingPolicy: 'immediate',
+    deepLink: '/b/{boardId}?card={cardId}',
+    notifiable: true
+  },
   'attachment.added': {
     category: 'Cards',
     recipients: 'boardMembers',
@@ -667,9 +687,22 @@ const EVENT_CATEGORIES = [
  * Function replacers are strictly used so user text containing "$&", "$`", "$'", "$1" stays 100% literal.
  */
 function renderMessage(eventType, meta = {}, actorName = 'Someone') {
+  if (meta && meta.customMessage) {
+    let customText = meta.customMessage;
+    const customData = {
+      actor: actorName || 'Someone',
+      cardTitle: meta.cardTitle || meta.card_title || 'Card',
+      boardName: meta.boardName || 'Board',
+      ...meta
+    };
+    Object.keys(customData).forEach((key) => {
+      customText = customText.replace(new RegExp(`\\{${key}\\}`, 'g'), () => String(customData[key] ?? ''));
+    });
+    return customText;
+  }
   const eventConfig = NOTIFICATION_EVENTS[eventType];
   if (!eventConfig) {
-    return meta.customMessage || `${actorName} performed an action`;
+    return `${actorName} performed an action`;
   }
 
   let text = eventConfig.template;

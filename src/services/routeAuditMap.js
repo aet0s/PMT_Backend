@@ -402,6 +402,10 @@ const ROUTE_AUDIT_MAP = {
     auditEvents: ['role.updated'],
     description: 'Updates role permissions or attributes'
   },
+  'POST /api/roles/:id/reset-default': {
+    auditEvents: ['role.updated'],
+    description: 'Resets role permissions to system defaults'
+  },
   'DELETE /api/roles/:id': {
     auditEvents: ['role.deleted'],
     description: 'Deletes custom role'

@@ -153,6 +153,8 @@ function getEventSummaryTitle(eventType) {
     'card.unassigned': 'Task Unassigned',
     'comment.mention': 'Mentioned in Comment',
     'comment.added': 'New Comment',
+    'comment.reply': 'Comment Reply',
+    'comment.thread_reply': 'Thread Reply',
     'card.due_soon': 'Task Due Soon',
     'card.overdue': 'Task Overdue',
     'checkin.due': 'Daily Check-in Reminder',

@@ -1,5 +1,6 @@
 // server/src/routes/attachments.js
 const express = require('express');
+const auditService = require('../services/audit');
 const { requireAuth } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const localStorage = require('../storage');
@@ -163,6 +164,35 @@ router.delete(
         const relativeKey = att.file_url.replace('/api/files/', '');
         await localStorage.delete(relativeKey);
       }
+    }
+
+    await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
+
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'attachment.deleted',
+        category: 'attachment',
+        entityType: 'attachment',
+        entityId: attachmentId,
+        entityLabel: att.file_name || 'Attachment',
+        cardId: att.card_id,
+        boardId: att.board_id,
+        workspaceId: att.workspace_id,
+        actorUserId: req.user.id,
+        meta: {
+          attachment_id: attachmentId,
+          file_name: att.file_name,
+          card_id: att.card_id,
+          board_id: att.board_id,
+          workspace_id: att.workspace_id,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for attachment deletion failed:', auditErr.message);
     }
 
     const fullCard = await getFullCard(att.card_id, req.db);

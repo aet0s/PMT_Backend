@@ -1,3 +1,4 @@
+const commentService = require('../services/commentService');
 const express = require('express');
 const { z } = require('zod');
 const sanitizeHtml = require('sanitize-html');
@@ -6,7 +7,7 @@ const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const upload = require('../middleware/upload');
 const localStorage = require('../storage');
-const { broadcastBoardEvent, sendUserEvent } = require('../socket');
+const { broadcastBoardEvent, broadcastWorkspaceEvent, sendUserEvent } = require('../socket');
 const { notifyOnComment, notifyOnAssignment } = require('../services/notificationService');
 const { notify } = require('../services/notify');
 const { processOutbox } = require('../services/notificationOutbox');
@@ -184,16 +185,9 @@ async function getFullCard(cardId, dbInstance = null) {
     }
     card.checklists = checklists;
 
-    const commentsRes = await db.query(
-      `SELECT c.*, u.name as author_name, u.avatar_url as author_avatar 
-       FROM comments c 
-       JOIN users u ON c.user_id = u.id 
-       WHERE c.card_id = ? 
-       ORDER BY c.created_at DESC`,
-      [cardId]
-    );
-    card.comments = commentsRes;
-    card.comments_count = commentsRes.length;
+    const commentsData = await commentService.getThreadedComments(db, cardId);
+    card.comments = commentsData.comments;
+    card.comments_count = commentsData.total_count;
 
     const attRes = await db.query(
       `SELECT a.*, u.name as uploader_name, u.avatar_url as uploader_avatar 
@@ -454,8 +448,9 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     const hasComplete = isToggleCompleteOnly && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
     const hasGeneralEdit = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.edit', req.db, oldCard.board_id, req);
     const hasMove = (list_id !== undefined || position !== undefined) && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.move', req.db, oldCard.board_id, req);
+    const hasArchive = is_archived !== undefined && await userHasPermission(req.user.id, oldCard.workspace_id, is_archived ? 'task.archive' : 'task.restore', req.db, oldCard.board_id, req);
 
-    if (!hasGeneralEdit && !hasComplete && !hasMove) {
+    if (!hasGeneralEdit && !hasComplete && !hasMove && !hasArchive) {
       const isCreator = Number(oldCard.created_by) === Number(req.user.id);
       const assigneeRows = await req.db.query(
         'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ? UNION SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
@@ -603,11 +598,14 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     // 2) If moving into a done list and is_complete was not passed: marks card complete.
     // 3) If moving out of a done list into an active list and is_complete was not passed: marks card active.
     let effectiveIsComplete = is_complete;
-    if (effectiveIsComplete === undefined && targetList) {
+    if (targetList) {
       if (isTargetDone) {
         effectiveIsComplete = true;
-      } else if (Number(oldCard.list_id) !== Number(list_id) && oldCard.is_complete) {
-        effectiveIsComplete = false;
+      } else if (Number(oldCard.list_id) !== Number(list_id)) {
+        const oldListDone = Boolean(oldCard.is_done_list || ['done', 'completed', 'finished', 'closed', 'archive', 'archived'].includes(String(oldCard.list_name || '').trim().toLowerCase()));
+        if (oldListDone || Boolean(oldCard.is_complete)) {
+          effectiveIsComplete = false;
+        }
       }
     }
 
@@ -657,9 +655,29 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         updates.push('completed_by = ?');
         values.push(req.user.id);
       }
+
+      // Immediate Auto-Archive check: if workspace policy is 0 days, automatically archive completed task immediately
+      try {
+        const [wsRow] = await req.db.query(
+          'SELECT settings FROM workspaces WHERE id = ?',
+          [oldCard.workspace_id]
+        );
+        let wsSettings = {};
+        try {
+          wsSettings = typeof wsRow?.settings === 'string' ? JSON.parse(wsRow.settings) : (wsRow?.settings || {});
+        } catch {}
+        const archiveSetting = wsSettings?.workspace_defaults?.autoArchiveDays ??
+                               wsSettings?.project_defaults?.autoArchiveDays;
+        if ((archiveSetting === '0' || archiveSetting === 0) && is_archived === undefined) {
+          is_archived = true;
+        }
+      } catch (wsErr) {}
     } else if (effectiveIsComplete === false) {
       updates.push('completed_at = NULL');
       updates.push('completed_by = NULL');
+      updates.push('completion_note = NULL');
+      updates.push('completion_evidence_url = NULL');
+      updates.push('completion_attachment_id = NULL');
     }
 
     if (req.body.completion_note !== undefined) {
@@ -940,6 +958,23 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       , req.tenant ? req.tenant.id : null);
     }
 
+    if (is_archived === true) {
+      broadcastBoardEvent(
+        oldCard.board_id,
+        'card:archived',
+        { cardId, boardId: oldCard.board_id },
+        originId,
+        req.tenant ? req.tenant.id : null
+      );
+      broadcastWorkspaceEvent(
+        oldCard.workspace_id,
+        'card:archived',
+        { cardId, boardId: oldCard.board_id },
+        originId,
+        req.tenant ? req.tenant.id : null
+      );
+    }
+
     await processOutbox(req.db, req.tenant?.id);
 
     return res.json({ card: fullCard || updatedCard });
@@ -997,6 +1032,32 @@ router.delete(
       card_title: cardTitle,
       title: cardTitle
     }, req.db);
+
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'card.deleted',
+        category: 'card',
+        entityType: 'card',
+        entityId: cardId,
+        entityLabel: cardTitle,
+        cardId,
+        boardId,
+        workspaceId,
+        actorUserId: req.user.id,
+        meta: {
+          card_id: cardId,
+          card_title: cardTitle,
+          board_id: boardId,
+          workspace_id: workspaceId,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for card deletion failed:', auditErr.message);
+    }
 
     broadcastBoardEvent(boardId, 'card:deleted', { cardId }, originId, req.tenant ? req.tenant.id : null);
 
@@ -1879,6 +1940,33 @@ router.delete(
       attachment_id: attachmentId
     }, req.db);
 
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'attachment.deleted',
+        category: 'attachment',
+        entityType: 'attachment',
+        entityId: attachmentId,
+        entityLabel: att.file_name || 'Attachment',
+        cardId: att.card_id,
+        boardId,
+        workspaceId,
+        actorUserId: req.user.id,
+        meta: {
+          attachment_id: attachmentId,
+          file_name: att.file_name,
+          card_id: att.card_id,
+          board_id: boardId,
+          workspace_id: workspaceId,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for attachment deletion failed:', auditErr.message);
+    }
+
     if (boardId) {
       const fullCard = await getFullCard(att.card_id, req.db);
       broadcastBoardEvent(boardId, 'card:updated', { cardId: att.card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
@@ -1903,15 +1991,32 @@ router.delete(
 router.get('/:id/comments', requireAuth, requirePermission('comment.view'), async (req, res, next) => {
   const cardId = Number(req.params.id);
   try {
-    const comments = await req.db.query(
-      `SELECT c.*, u.name as author_name, u.avatar_url as author_avatar 
-       FROM comments c 
-       JOIN users u ON c.user_id = u.id 
-       WHERE c.card_id = ? 
-       ORDER BY c.created_at DESC`,
+    const data = await commentService.getThreadedComments(req.db, cardId);
+    return res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cards/:id/mention-candidates
+router.get('/:id/mention-candidates', requireAuth, requirePermission('comment.view'), async (req, res, next) => {
+  const cardId = Number(req.params.id);
+  const query = req.query.q || '';
+  const limit = req.query.limit || 10;
+  try {
+    const cardRows = await req.db.query(
+      'SELECT l.board_id FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
       [cardId]
     );
-    return res.json({ comments });
+    if (cardRows.length === 0) {
+      return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+    }
+    const candidates = await commentService.searchMentionCandidates(req.db, {
+      boardId: cardRows[0].board_id,
+      query,
+      limit
+    });
+    return res.json({ candidates });
   } catch (err) {
     next(err);
   }
@@ -1920,103 +2025,20 @@ router.get('/:id/comments', requireAuth, requirePermission('comment.view'), asyn
 // POST /api/cards/:id/comments
 router.post('/:id/comments', requireAuth, requirePermission('comment.create'), async (req, res, next) => {
   const cardId = Number(req.params.id);
-  const { body } = req.body;
+  const { body, parent_comment_id, mentions } = req.body;
   const originId = req.headers['x-origin-id'];
 
-  if (!body || !body.trim()) {
-    return res.status(400).json({ error: { message: 'Comment text cannot be empty', code: 'BAD_REQUEST' } });
-  }
-
   try {
-    const cleanBody = sanitizeDescription(body.trim());
-
-    let comment;
-    let author_name = 'Unknown';
-    let boardId;
-    let fullCard;
-
-    await req.db.transaction(async (tx) => {
-      const comExec = await tx.execute(
-        'INSERT INTO comments (card_id, user_id, body) VALUES (?, ?, ?)',
-        [cardId, req.user.id, cleanBody]
-      );
-      const [resComment] = await tx.query('SELECT * FROM comments WHERE id = ?', [comExec.insertId]);
-      comment = resComment;
-
-      const userRes = await tx.query('SELECT name, avatar_url FROM users WHERE id = ?', [req.user.id]);
-      author_name = userRes[0]?.name || 'Unknown';
-      const author_avatar = userRes[0]?.avatar_url || null;
-
-      const cardRes = await tx.query(
-        'SELECT l.board_id, c.title FROM cards c JOIN lists l ON c.list_id = l.id WHERE c.id = ?',
-        [cardId]
-      );
-
-      boardId = cardRes[0]?.board_id;
-      if (boardId) {
-        await logActivity(boardId, cardId, req.user.id, 'added_comment', {
-          body: cleanBody.substring(0, 60)
-        }, tx);
-
-        // Parse @mentions
-        const mentionRegex = /@([a-zA-Z0-9._-]+)/g;
-        let match;
-        const mentionedNames = new Set();
-        while ((match = mentionRegex.exec(cleanBody)) !== null) {
-          mentionedNames.add(match[1].toLowerCase());
-        }
-
-        const mentionedUserIds = [];
-        if (mentionedNames.size > 0) {
-          const usersRes = await tx.query('SELECT id, name, email FROM users');
-          usersRes.forEach((u) => {
-            const uName = (u.name || '').toLowerCase().replace(/\s+/g, '');
-            const uEmailPrefix = (u.email || '').split('@')[0].toLowerCase();
-            if (mentionedNames.has(uName) || mentionedNames.has(uEmailPrefix)) {
-              mentionedUserIds.push(u.id);
-            }
-          });
-        }
-
-        if (mentionedUserIds.length > 0) {
-          await notify(
-            {
-              eventType: 'comment.mention',
-              actorUserId: req.user.id,
-              boardId,
-              cardId,
-              mentionedUserIds,
-              tenantId: req.tenant?.id || null,
-              meta: { cardTitle: cardRes[0]?.title || 'Card', actorName: author_name }
-            },
-            tx
-          );
-        }
-
-        await notify(
-          {
-            eventType: 'comment.added',
-            actorUserId: req.user.id,
-            boardId,
-            cardId,
-            mentionedUserIds,
-            tenantId: req.tenant?.id || null,
-            meta: { cardTitle: cardRes[0]?.title || 'Card', actorName: author_name, commentPreview: cleanBody.substring(0, 80) }
-          },
-          tx
-        );
-      }
+    const comment = await commentService.createComment(req.db, {
+      cardId,
+      userId: req.user.id,
+      body,
+      parentCommentId: parent_comment_id ? Number(parent_comment_id) : null,
+      clientMentionIds: mentions || [],
+      originId,
+      tenantId: req.tenant?.id || null
     });
-
-    if (boardId) {
-      fullCard = await getFullCard(cardId, req.db);
-      const author_avatar = (await req.db.query('SELECT avatar_url FROM users WHERE id = ?', [req.user.id]))[0]?.avatar_url || null;
-      broadcastBoardEvent(boardId, 'comment:added', { cardId, comment: { ...comment, author_name, author_avatar }, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
-    }
-    await processOutbox(req.db, req.tenant?.id);
-
-    const author_avatar = (await req.db.query('SELECT avatar_url FROM users WHERE id = ?', [req.user.id]))[0]?.avatar_url || null;
-    return res.status(201).json({ comment: { ...comment, author_name, author_avatar } });
+    return res.status(201).json({ comment });
   } catch (err) {
     next(err);
   }
@@ -2040,49 +2062,21 @@ router.patch(
   const { body } = req.body;
   const originId = req.headers['x-origin-id'];
 
-  if (!body || !body.trim()) {
-    return res.status(400).json({ error: { message: 'Comment text cannot be empty', code: 'BAD_REQUEST' } });
-  }
-
   try {
-    const comRes = await req.db.query(
-      `SELECT co.id, co.user_id, co.card_id, l.board_id, b.workspace_id 
-       FROM comments co 
-       JOIN cards c ON co.card_id = c.id 
-       JOIN lists l ON c.list_id = l.id 
-       JOIN boards b ON l.board_id = b.id 
-       WHERE co.id = ?`,
-      [commentId]
-    );
-    if (comRes.length === 0) {
-      return res.status(404).json({ error: { message: 'Comment not found', code: 'NOT_FOUND' } });
-    }
-    const com = comRes[0];
-    const cardId = com.card_id;
-    const boardId = com.board_id;
-    const workspaceId = com.workspace_id;
-
-    const cleanBody = sanitizeDescription(body.trim());
-    await req.db.execute('UPDATE comments SET body = ?, original_length = COALESCE(original_length, CHAR_LENGTH(body)) WHERE id = ?', [cleanBody, commentId]);
-
-    await logActivity(boardId, cardId, req.user.id, 'edited_comment', {
-      comment_id: commentId
-    }, req.db);
-
-    const [updatedComment] = await req.db.query('SELECT * FROM comments WHERE id = ?', [commentId]);
-
-    if (cardId) {
-      const fullCard = await getFullCard(cardId, req.db);
-      broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
-    }
-
-    return res.json({ comment: updatedComment });
+    const updated = await commentService.editComment(req.db, {
+      commentId,
+      userId: req.user.id,
+      body,
+      originId,
+      tenantId: req.tenant?.id || null
+    });
+    return res.json({ comment: updated });
   } catch (err) {
     next(err);
   }
 });
 
-// DELETE /api/comments/:id
+// DELETE /api/cards/comments/:id
 router.delete(
   '/comments/:id',
   requireAuth,
@@ -2100,43 +2094,13 @@ router.delete(
   const originId = req.headers['x-origin-id'];
 
   try {
-    const comRes = await req.db.query(
-      `SELECT co.id, co.user_id, co.card_id, l.board_id, b.workspace_id 
-       FROM comments co 
-       JOIN cards c ON co.card_id = c.id 
-       JOIN lists l ON c.list_id = l.id 
-       JOIN boards b ON l.board_id = b.id 
-       WHERE co.id = ?`,
-      [commentId]
-    );
-    if (comRes.length === 0) {
-      return res.status(404).json({ error: { message: 'Comment not found', code: 'NOT_FOUND' } });
-    }
-    const com = comRes[0];
-    const cardId = com.card_id;
-    const boardId = com.board_id;
-    const workspaceId = com.workspace_id;
-
-    await req.db.execute('DELETE FROM comments WHERE id = ? AND card_id = ?', [commentId, cardId]);
-
-    await logActivity(boardId, cardId, req.user.id, 'deleted_comment', {
-      comment_id: commentId
-    }, req.db);
-
-    if (cardId) {
-      const fullCard = await getFullCard(cardId, req.db);
-      broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
-      await notify({
-        db: req.db,
-        tenantId: req.tenant?.id,
-        boardId,
-        cardId,
-        eventType: 'comment.deleted',
-        actorId: req.user.id,
-        data: { cardTitle: fullCard?.title || 'Card' }
-      });
-    }
-
+    await commentService.deleteComment(req.db, {
+      commentId,
+      userId: req.user.id,
+      originId,
+      tenantId: req.tenant?.id || null
+    });
+    res.locals._auditRecorded = true;
     return res.json({ message: 'Comment deleted' });
   } catch (err) {
     next(err);
@@ -2223,6 +2187,32 @@ router.delete('/checklists/:id', requireAuth, requirePermission('checklist.delet
         await logActivity(boardId, cardId, req.user.id, 'checklist_removed', {
           checklist_title: chRes[0]?.title || 'Checklist'
         }, req.db);
+
+        try {
+          await auditService.record({
+            db: req.db,
+            action: 'checklist.deleted',
+            category: 'checklist',
+            entityType: 'checklist',
+            entityId: checklistId,
+            entityLabel: chRes[0]?.title || 'Checklist',
+            cardId,
+            boardId,
+            actorUserId: req.user.id,
+            meta: {
+              checklist_id: checklistId,
+              checklist_title: chRes[0]?.title || 'Checklist',
+              card_id: cardId,
+              board_id: boardId,
+              deleted_by_user_id: req.user.id,
+              deleted_at: new Date().toISOString()
+            }
+          });
+          res.locals._auditRecorded = true;
+        } catch (auditErr) {
+          console.warn('[WARN] Audit logging for checklist deletion failed:', auditErr.message);
+        }
+
         const fullCard = await getFullCard(cardId, req.db);
         broadcastBoardEvent(boardId, 'card:updated', { cardId, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
         await notify({

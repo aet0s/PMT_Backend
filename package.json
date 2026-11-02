@@ -47,7 +47,8 @@
     "test:perm:fast": "node src/scripts/permtest/index.js --fast",
     "test:perm:static": "node src/scripts/noRoleNameAuth.js",
     "test:perm:reg": "node src/scripts/permtest/runRegressions.js",
-    "test:catalog": "node src/scripts/permtest/rbacCatalogAndRoleSaving.js"
+    "test:catalog": "node src/scripts/permtest/rbacCatalogAndRoleSaving.js",
+    "test:comments": "node src/scripts/permtest/threadedCommentsAndNotifications.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

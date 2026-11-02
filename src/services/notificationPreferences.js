@@ -8,6 +8,8 @@ const PUSH_DEFAULT_ON_EVENTS = new Set([
   'card.unassigned',
   'comment.mention',
   'comment.added',
+  'comment.reply',
+  'comment.thread_reply',
   'card.due_soon',
   'card.overdue',
   'checkin.due',

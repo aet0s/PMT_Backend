@@ -23,6 +23,7 @@ serviceAccountKey.json
 test_*.js
 /test_*.js
 *.test.js
+!src/scripts/permtest/threadedCommentsAndNotifications.test.js
 *.spec.js
 tests/
 test/

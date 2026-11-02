@@ -8,6 +8,7 @@ const { broadcastWorkspaceEvent, sendUserEvent } = require('../socket');
 const { logAuthEvent } = require('../services/authAudit');
 const {
   PERMISSIONS,
+  SYSTEM_ROLES,
   LEGACY_PERMISSION_ALIASES,
   getTransitivePrerequisites
 } = require('../rbac/registry');
@@ -351,6 +352,140 @@ router.delete('/:id', requireAuth, requirePermission('role.delete'), async (req,
 
     return res.json({ message: 'Custom role deleted successfully', id: roleId });
   } catch (err) {
+    next(err);
+  }
+});
+
+
+// POST /api/roles/:id/reset-default - Reset role permissions back to system defaults
+router.post('/:id/reset-default', requireAuth, requirePermission('role.edit'), async (req, res, next) => {
+  const roleId = Number(req.params.id);
+
+  try {
+    const roleRes = await req.db.query('SELECT * FROM roles WHERE id = ?', [roleId]);
+    if (roleRes.length === 0) {
+      return res.status(404).json({ error: { message: 'Role not found', code: 'NOT_FOUND' } });
+    }
+
+    const role = roleRes[0];
+
+    if (isOwnerRole(role)) {
+      return res.status(403).json({
+        error: { message: 'Owner role permissions are locked and cannot be edited', code: 'ROLE_NOT_EDITABLE' }
+      });
+    }
+
+    const targetWsId = role.workspace_id || req.body?.workspace_id || req.headers['x-workspace-id'] ||
+      (await req.db.query('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1', [req.user.id]))[0]?.workspace_id;
+
+    if (targetWsId) {
+      const callerPerms = await getUserPermissions(req.user.id, targetWsId, req.db);
+      const callerIsOwner = isOwnerRole(callerPerms.role);
+      if (!callerIsOwner) {
+        const userRoleCheck = await req.db.query(
+          'SELECT 1 FROM workspace_members WHERE user_id = ? AND role_id = ? LIMIT 1',
+          [req.user.id, roleId]
+        );
+        if (userRoleCheck.length > 0) {
+          return res.status(403).json({
+            error: { message: 'You cannot reset your own role', code: 'CANNOT_EDIT_OWN_ROLE' }
+          });
+        }
+      }
+    }
+
+    // Find default permissions from SYSTEM_ROLES
+    let defaultRoleDef = SYSTEM_ROLES[role.name];
+    if (!defaultRoleDef) {
+      const normalized = String(role.name || '').trim().toLowerCase();
+      const matchKey = Object.keys(SYSTEM_ROLES).find((k) => k.toLowerCase() === normalized);
+      if (matchKey) {
+        defaultRoleDef = SYSTEM_ROLES[matchKey];
+      }
+    }
+
+    if (!defaultRoleDef) {
+      defaultRoleDef = SYSTEM_ROLES['Team Member'];
+    }
+
+    const defaultPermKeys = defaultRoleDef?.permissions || [];
+    let rolePayload = null;
+
+    await req.db.transaction(async (tx) => {
+      await tx.execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+
+      if (defaultPermKeys.length > 0) {
+        const permsRes = await tx.query(
+          'SELECT id, `key` FROM permissions WHERE `key` IN (?)',
+          [defaultPermKeys]
+        );
+
+        for (const p of permsRes) {
+          await tx.execute(
+            'INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+            [roleId, p.id]
+          );
+        }
+      }
+
+      const updatedRoleRes = await tx.query(
+        `SELECT r.id, r.name, r.is_system, r.is_editable, r.workspace_id, r.rank,
+                GROUP_CONCAT(DISTINCT p.key) as permission_keys_str
+         FROM roles r
+         LEFT JOIN role_permissions rp ON r.id = rp.role_id
+         LEFT JOIN permissions p ON rp.permission_id = p.id
+         WHERE r.id = ?
+         GROUP BY r.id, r.name, r.is_system, r.is_editable, r.workspace_id, r.rank`,
+        [roleId]
+      );
+
+      const updatedRole = updatedRoleRes[0];
+      const rawKeys = updatedRole.permission_keys_str ? updatedRole.permission_keys_str.split(',') : [];
+      const keys = rawKeys.filter((k) => validPermMap.has(k) && !validPermMap.get(k).planned);
+      rolePayload = { ...updatedRole, permission_keys: Array.from(new Set(keys)) };
+
+      await logAuthEvent(tx, {
+        userId: req.user.id,
+        email: req.user.email,
+        eventType: 'role.updated',
+        req,
+        metadata: {
+          workspace_id: targetWsId,
+          role_id: roleId,
+          role_name: rolePayload.name,
+          permission_count: keys.length,
+          action: 'reset_default'
+        }
+      });
+    });
+
+    if (targetWsId) {
+      broadcastWorkspaceEvent(targetWsId, 'workspace:role_updated', { role: rolePayload }, req.headers['x-origin-id'], req.tenant?.id);
+    }
+
+    try {
+      const affectedUsers = await req.db.query(
+        'SELECT DISTINCT user_id FROM workspace_members WHERE role_id = ? UNION SELECT DISTINCT user_id FROM board_members WHERE role_id = ?',
+        [roleId, roleId]
+      );
+      for (const u of affectedUsers) {
+        sendUserEvent(u.user_id, 'user:permissions_updated', {
+          roleId,
+          workspaceId: targetWsId
+        }, req.tenant?.id);
+      }
+    } catch (sockErr) {
+      console.warn('[WARN] Failed to emit user:permissions_updated on role reset:', sockErr.message);
+    }
+
+    return res.json({
+      role: rolePayload,
+      message: `Permissions for "${rolePayload.name}" have been reset to system defaults`
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return res.status(err.status).json({ error: { message: err.message, code: err.code || 'BAD_REQUEST' } });
+    }
     next(err);
   }
 });

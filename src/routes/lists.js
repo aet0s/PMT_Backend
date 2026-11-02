@@ -1,4 +1,5 @@
 const express = require('express');
+const auditService = require('../services/audit');
 const { z } = require('zod');
 const { requireAuth } = require('../middleware/auth');
 const validate = require('../middleware/validate');
@@ -214,6 +215,31 @@ router.delete('/:id', requireAuth, requirePermission('list.delete'), async (req,
 
     await req.db.execute('DELETE FROM lists WHERE id = ? AND board_id = ?', [listId, boardId]);
     await logActivity(boardId, null, req.user.id, 'list_deleted', { list_name: listRes[0]?.name }, req.db, req.tenant?.id);
+
+    try {
+      await auditService.record({
+        db: req.db,
+        action: 'list.deleted',
+        category: 'list',
+        entityType: 'list',
+        entityId: listId,
+        entityLabel: listRes[0]?.name || 'List',
+        boardId,
+        workspaceId: bRes?.workspace_id || null,
+        actorUserId: req.user.id,
+        meta: {
+          list_id: listId,
+          list_name: listRes[0]?.name,
+          board_id: boardId,
+          workspace_id: bRes?.workspace_id,
+          deleted_by_user_id: req.user.id,
+          deleted_at: new Date().toISOString()
+        }
+      });
+      res.locals._auditRecorded = true;
+    } catch (auditErr) {
+      console.warn('[WARN] Audit logging for list deletion failed:', auditErr.message);
+    }
     broadcastBoardEvent(boardId, 'list:deleted', { listId, boardId }, originId, req.tenant?.id);
 
     if (bRes) {

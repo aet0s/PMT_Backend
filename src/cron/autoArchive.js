@@ -4,7 +4,7 @@
 
 const cron = require('node-cron');
 const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenantPools');
-const { broadcastWorkspaceEvent } = require('../socket');
+const { broadcastWorkspaceEvent, broadcastBoardEvent } = require('../socket');
 const auditService = require('../services/audit');
 
 /**
@@ -54,6 +54,9 @@ async function executeAutoArchiveSweep({ db, workspaceId, days = 7, actorId = nu
 
   for (const card of cardsToArchive) {
     broadcastWorkspaceEvent(workspaceId, 'card:archived', { cardId: card.id, boardId: card.board_id }, originId, tenantId);
+    if (card.board_id) {
+      broadcastBoardEvent(card.board_id, 'card:archived', { cardId: card.id, boardId: card.board_id }, originId, tenantId);
+    }
   }
 
   await auditService.record({

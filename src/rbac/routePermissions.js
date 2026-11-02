@@ -109,6 +109,7 @@ const ROUTE_PERMISSIONS = new Map([
   // ─── Roles ────────────────────────────────────────────────────────────────
   ['PATCH /api/roles/:id',   { permission: 'role.edit',   scope: 'company', note: 'enforced inline in handler' }],
   ['DELETE /api/roles/:id',  { permission: 'role.delete', scope: 'company', note: 'enforced inline in handler' }],
+  ['POST /api/roles/:id/reset-default', { permission: 'role.edit', scope: 'company', note: 'reset role permissions to default' }],
 
   // ─── Boards (Projects) ────────────────────────────────────────────────────
   ['GET /api/boards',                        { permission: 'project.view',          scope: 'company' }],
@@ -122,6 +123,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['GET /api/boards/:id/attachments',        { permission: 'attachment.view',       scope: 'project', note: 'requires attachment.view or project.view' }],
   // workspace-members listed for board: authenticated, returns members of the parent workspace
   ['GET /api/boards/:id/workspace-members',  { permission: 'member.view',           scope: 'project', note: 'returns parent workspace members; enforced inline' }],
+  ['GET /api/boards/:id/mention-candidates', { permission: 'project.view',          scope: 'project' }],
   ['POST /api/boards/:id/members',           { permission: 'project.manage_members',scope: 'project' }],
   ['PATCH /api/boards/:id/members/:userId/role', { permission: 'project.assign_role', scope: 'project' }],
   ['DELETE /api/boards/:id/members/:userId', { permission: 'project.manage_members',scope: 'project' }],
@@ -161,6 +163,7 @@ const ROUTE_PERMISSIONS = new Map([
   ['POST /api/cards/:id/attachments/link',  { permission: 'attachment.upload',     scope: 'project' }],
   ['DELETE /api/cards/attachments/:id',     { permission: 'attachment.delete_own', scope: 'project', note: 'enforces attachment.delete_own or attachment.delete_any' }],
   ['GET /api/cards/:id/comments',           { permission: 'comment.view',          scope: 'project' }],
+  ['GET /api/cards/:id/mention-candidates',  { permission: 'comment.view',          scope: 'project' }],
   ['POST /api/cards/:id/comments',          { permission: 'comment.create',        scope: 'project' }],
   ['PATCH /api/cards/comments/:id',         { permission: 'comment.edit_own',      scope: 'project' }],
   ['DELETE /api/cards/comments/:id',        { permission: 'comment.delete_own',    scope: 'project', note: 'enforces comment.delete_own or comment.delete_any' }],
