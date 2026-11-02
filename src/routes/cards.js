@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { requirePermission, requirePermissionForBody, userHasPermission, getUserPermissions, getActiveDb } = require('../middleware/permissions');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { logActivity } = require('../utils/activity');
+const { isCompanyOwner } = require('../utils/syncCompanyOwners');
 const auditService = require('../services/audit');
 
 const router = express.Router();
@@ -441,17 +442,65 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     }
     const oldCard = oldCardRes[0];
 
-    // Bug 5: Permission enforcement for card edits:
+    // Fetch caller's board or workspace role to determine rank and authority
+    let callerRank = 30;
+    let callerRoleName = '';
+    const boardMemberRows = await req.db.query(
+      `SELECT bm.role_id, r.name as role_name, r.rank
+       FROM board_members bm
+       LEFT JOIN roles r ON bm.role_id = r.id
+       WHERE bm.board_id = ? AND bm.user_id = ?`,
+      [oldCard.board_id, req.user.id]
+    );
+    if (boardMemberRows.length > 0 && boardMemberRows[0].role_id) {
+      callerRank = Number(boardMemberRows[0].rank || 30);
+      callerRoleName = boardMemberRows[0].role_name || '';
+    } else {
+      const wsRows = await req.db.query(
+        `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank
+         FROM workspace_members wm
+         LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+         WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+        [oldCard.workspace_id, req.user.id]
+      );
+      if (wsRows.length > 0) {
+        callerRank = Number(wsRows[0].rank || (wsRows[0].role_name === 'Owner' || wsRows[0].role_name === 'Super Admin' ? 100 : 30));
+        callerRoleName = wsRows[0].role_name || '';
+      }
+    }
+    let isTopLevel = callerRank >= 50 || ['owner', 'admin', 'project manager', 'team lead'].includes(callerRoleName.toLowerCase());
+    if (!isTopLevel) {
+      const userIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
+      if (userIsCompanyOwner) isTopLevel = true;
+    }
+
+    const isCreator = Number(oldCard.created_by) === Number(req.user.id);
+
+    // Card Archive & Restore enforcement:
+    // Top-level roles (rank >= 50: Owner, Admin, Project Manager, Team Lead) can archive/restore any card.
+    // Team Members and lower roles may ONLY archive/restore cards they created.
+    if (is_archived === true && !isTopLevel && !isCreator) {
+      return res.status(403).json({
+        error: {
+          message: 'Team members can only archive cards they created.',
+          code: 'FORBIDDEN'
+        }
+      });
+    }
+
+    if (is_archived === false && !isTopLevel && !isCreator) {
+      return res.status(403).json({
+        error: {
+          message: 'Team members can only restore cards they created.',
+          code: 'FORBIDDEN'
+        }
+      });
+    }
+
+    // Permission enforcement for card edits:
     // Owner, Admin, Project Manager, Team Lead (rank >= 50) can modify any card.
     // Team Members and lower roles may only modify cards they created OR are assigned to.
-    const isToggleCompleteOnly = is_complete !== undefined && title === undefined && description === undefined && start_date === undefined && due_date === undefined && req.body.cover_url === undefined && req.body.priority === undefined && list_id === undefined && position === undefined && is_archived === undefined;
-    const hasComplete = isToggleCompleteOnly && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.complete', req.db, oldCard.board_id, req);
-    const hasGeneralEdit = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.edit', req.db, oldCard.board_id, req);
-    const hasMove = (list_id !== undefined || position !== undefined) && await userHasPermission(req.user.id, oldCard.workspace_id, 'task.move', req.db, oldCard.board_id, req);
-    const hasArchive = is_archived !== undefined && await userHasPermission(req.user.id, oldCard.workspace_id, is_archived ? 'task.archive' : 'task.restore', req.db, oldCard.board_id, req);
-
-    if (!hasGeneralEdit && !hasComplete && !hasMove && !hasArchive) {
-      const isCreator = Number(oldCard.created_by) === Number(req.user.id);
+    if (!isTopLevel) {
       const assigneeRows = await req.db.query(
         'SELECT 1 FROM card_members WHERE card_id = ? AND user_id = ? UNION SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
         [cardId, req.user.id, cardId, req.user.id]
