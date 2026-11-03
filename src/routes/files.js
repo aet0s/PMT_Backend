@@ -19,8 +19,13 @@ const UPLOADS_DIR = storage.UPLOADS_DIR || (process.env.UPLOADS_DIR
  * Strictly verifies against path traversal attacks.
  */
 function resolveUploadFilePath(tenantId, relativeSubpath) {
-  const cleanSubpath = String(relativeSubpath || '').replace(/^[/\\]+/, '');
-  const tId = String(tenantId);
+  const cleanSubpath = String(relativeSubpath || '')
+    .replace(/^https?:\/\/[^\/]+/i, '')
+    .split('?')[0]
+    .replace(/^\/?(?:api\/)?(?:files|uploads)(?:\/\d+)?\//, '')
+    .replace(/^[/\\]+/, '');
+
+  const tId = String(tenantId || 1);
 
   const candidateBases = [];
   if (storage.UPLOADS_DIR) {
@@ -32,11 +37,16 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
   candidateBases.push(path.resolve(__dirname, '../../uploads'));
   candidateBases.push(path.resolve(__dirname, '../../../uploads'));
   candidateBases.push(path.resolve(process.cwd(), 'uploads'));
+  candidateBases.push(path.resolve(process.cwd(), 'server/uploads'));
   candidateBases.push(path.resolve('/data/projects/pmt/server/uploads'));
+  candidateBases.push(path.resolve('/data/projects/pmt/uploads'));
+  candidateBases.push(path.resolve('/data/projects/uploads'));
 
-  const uniqueBases = Array.from(new Set(candidateBases));
+  const uniqueBases = Array.from(new Set(candidateBases.filter(Boolean)));
 
   for (const base of uniqueBases) {
+    if (!fs.existsSync(base)) continue;
+
     // 1. Candidate with tenant directory: <base>/<tenantId>/<cleanSubpath>
     const tenantTarget = path.resolve(base, tId, cleanSubpath);
     const tenantPrefix = path.resolve(base, tId);
@@ -49,6 +59,40 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
     const directPrefix = path.resolve(base);
     if ((directTarget.startsWith(directPrefix + path.sep) || directTarget === directPrefix) && fs.existsSync(directTarget)) {
       return directTarget;
+    }
+
+    // 3. Fallback: check across other tenant directories under base: <base>/*/<cleanSubpath>
+    try {
+      const entries = fs.readdirSync(base, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name !== tId) {
+          const crossTenantTarget = path.resolve(base, entry.name, cleanSubpath);
+          if (fs.existsSync(crossTenantTarget)) {
+            return crossTenantTarget;
+          }
+        }
+      }
+    } catch {}
+
+    // 4. Fallback for avatars/workspace icons: check by basename in subfolder across all tenant folders
+    const filename = path.basename(cleanSubpath);
+    const subfolder = cleanSubpath.split(/[\/\\]/)[0];
+    if (subfolder && (subfolder === 'avatars' || subfolder === 'workspaces')) {
+      try {
+        const entries = fs.readdirSync(base, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const candidateDeep = path.resolve(base, entry.name, subfolder, filename);
+            if (fs.existsSync(candidateDeep)) {
+              return candidateDeep;
+            }
+          }
+        }
+        const directSubfolder = path.resolve(base, subfolder, filename);
+        if (fs.existsSync(directSubfolder)) {
+          return directSubfolder;
+        }
+      } catch {}
     }
   }
 
@@ -520,4 +564,6 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   return res.sendFile(resolvedPath);
 });
 
+router.resolveUploadFilePath = resolveUploadFilePath;
 module.exports = router;
+module.exports.resolveUploadFilePath = resolveUploadFilePath;

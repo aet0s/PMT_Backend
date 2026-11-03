@@ -61,7 +61,7 @@ async function executeAutoArchiveSweep({ db, workspaceId, days = 7, actorId = nu
 
   await auditService.record({
     action: 'workspace.auto_archive',
-    category: 'task',
+    category: 'workspace',
     entityType: 'workspace',
     entityId: workspaceId,
     entityLabel: `Auto-archived ${cardsToArchive.length} completed task(s)`,

@@ -1938,8 +1938,8 @@ registerOperation('files.download', {
         if (avatarMatch) {
           const targetUserId = Number(avatarMatch[1]);
           if (targetUserId !== ctx.user.id) {
-            const [userInTenant] = await ctx.db.query('SELECT 1 FROM company_users WHERE user_id = ?', [ctx.user.id]);
-            if (!userInTenant) {
+            const userInTenant = await ctx.db.query('SELECT id FROM users WHERE id = ?', [ctx.user.id]);
+            if (!userInTenant || userInTenant.length === 0) {
               const err = new Error('Access denied: member.view required');
               err.status = 403;
               err.code = 'FORBIDDEN';
@@ -1989,9 +1989,9 @@ registerOperation('files.download', {
     }
 
     const cleanSubpath = String(filePath)
-      .replace(/^\/api\/files\/\d+\//, '')
-      .replace(/^\/uploads\/\d+\//, '')
-      .replace(/^\/uploads\//, '')
+      .replace(/^https?:\/\/[^\/]+/i, '')
+      .split('?')[0]
+      .replace(/^\/?(?:api\/)?(?:files|uploads)(?:\/\d+)?\//, '')
       .replace(/^[/\\]+/, '');
 
     if (cleanSubpath.includes('..') || path.isAbsolute(cleanSubpath)) {
@@ -2001,24 +2001,14 @@ registerOperation('files.download', {
       throw err;
     }
 
-    const storage = require('../storage');
-    const UPLOADS_DIR = storage.UPLOADS_DIR || path.resolve(__dirname, '../../uploads');
+    const pathTenantMatch = String(filePath).match(/(?:\/api\/files\/|\/uploads\/)(\d+)\//);
+    const effectiveTenantId = pathTenantMatch ? Number(pathTenantMatch[1]) : tenantId;
 
-    const candidatePath = path.resolve(UPLOADS_DIR, String(tenantId), cleanSubpath);
-    const tenantRoot = path.resolve(UPLOADS_DIR, String(tenantId));
-
-    let finalPath = null;
-    if ((candidatePath.startsWith(tenantRoot + path.sep) || candidatePath === tenantRoot) && fs.existsSync(candidatePath)) {
-      finalPath = candidatePath;
-    } else {
-      const fallbackPath = path.resolve(UPLOADS_DIR, cleanSubpath);
-      const defaultRoot = path.resolve(UPLOADS_DIR);
-      if (fallbackPath.startsWith(defaultRoot + path.sep) && fs.existsSync(fallbackPath)) {
-        finalPath = fallbackPath;
-      }
-    }
+    const { resolveUploadFilePath } = require('../routes/files');
+    const finalPath = resolveUploadFilePath(effectiveTenantId, cleanSubpath);
 
     if (!finalPath || !fs.existsSync(finalPath)) {
+      console.warn(`[FILES_DOWNLOAD_NOT_FOUND] Tenant ${effectiveTenantId}, subpath: ${cleanSubpath}, resolved: ${finalPath}`);
       const err = new Error('File not found on storage');
       err.status = 404;
       err.code = 'NOT_FOUND';

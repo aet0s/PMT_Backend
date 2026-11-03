@@ -306,7 +306,7 @@ async function record(options = {}) {
               const currentMeta = parseJson(rows[0].meta) || {};
               currentMeta.repeat_count = existingCoalesced.repeat_count;
               currentMeta.last_occurred_at = existingCoalesced.last_occurred_at;
-              const [updRes] = await db.execute(
+              const updRes = await db.execute(
                 'UPDATE audit_events SET meta = ? WHERE id = ? AND row_hash IS NULL',
                 [JSON.stringify(currentMeta), existingCoalesced.id]
               );
@@ -683,7 +683,7 @@ async function finalizeAuditChain(db, options = {}) {
       .digest('hex');
 
     const rawMetaStr = typeof row.meta === 'string' ? row.meta : JSON.stringify(row.meta);
-    const [upd] = await db.execute(
+    const upd = await db.execute(
       'UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ? AND row_hash IS NULL AND (meta <=> ? OR meta = ?)',
       [prevHash, rowHash, row.id, rawMetaStr, rawMetaStr]
     );
