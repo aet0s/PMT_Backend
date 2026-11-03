@@ -58,8 +58,22 @@ const server = isHttps
   : http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
-// Trust reverse proxy (nginx) for real client IP, protocol, and Secure cookies
-app.set('trust proxy', 1);
+// Trust reverse proxy (nginx / load balancer) for real client IP, protocol, and Secure cookies
+const trustProxyEnv = process.env.TRUST_PROXY;
+let trustProxySetting;
+if (trustProxyEnv === 'true') {
+  trustProxySetting = true;
+} else if (trustProxyEnv === 'false') {
+  trustProxySetting = false;
+} else if (trustProxyEnv && !isNaN(Number(trustProxyEnv))) {
+  trustProxySetting = Number(trustProxyEnv);
+} else if (trustProxyEnv) {
+  trustProxySetting = trustProxyEnv;
+} else {
+  // Trust loopback reverse proxies (e.g. local Nginx proxying to Node.js)
+  trustProxySetting = 'loopback';
+}
+app.set('trust proxy', trustProxySetting);
 
 const { getAllowedOrigins, isOriginAllowed } = require('./utils/corsOrigins');
 

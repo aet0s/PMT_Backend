@@ -1933,20 +1933,17 @@ registerOperation('files.download', {
         fileName = `workspace_${wsId}_icon`;
         fileType = 'image/png';
       } else {
-        // 2. Avatar check: avatars/avatar_:id_ or avatar_url
-        const avatarMatch = filePath.match(/(?:^|\/)avatars\/avatar_(\d+)_/);
+        // 2. Avatar check: any file in avatars/ directory
+        const avatarMatch = filePath.match(/(?:^|\/)avatars\/([^/?#]+)/);
         if (avatarMatch) {
-          const targetUserId = Number(avatarMatch[1]);
-          if (targetUserId !== ctx.user.id) {
-            const userInTenant = await ctx.db.query('SELECT id FROM users WHERE id = ?', [ctx.user.id]);
-            if (!userInTenant || userInTenant.length === 0) {
-              const err = new Error('Access denied: member.view required');
-              err.status = 403;
-              err.code = 'FORBIDDEN';
-              throw err;
-            }
+          const userInTenant = await ctx.db.query('SELECT id FROM users WHERE id = ?', [ctx.user.id]);
+          if (!userInTenant || userInTenant.length === 0) {
+            const err = new Error('Access denied: member.view required');
+            err.status = 403;
+            err.code = 'FORBIDDEN';
+            throw err;
           }
-          fileName = `avatar_${targetUserId}`;
+          fileName = path.basename(avatarMatch[1]);
           fileType = 'image/png';
         } else {
           // 3. Database attachment record check

@@ -468,7 +468,13 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         callerRoleName = wsRows[0].role_name || '';
       }
     }
-    let isTopLevel = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.bulk_edit', req.db, oldCard.board_id, req);
+    const normalizedRole = String(callerRoleName || '').trim().toLowerCase();
+    const isManagerRole = callerRank >= 50 || ['owner', 'super admin', 'admin', 'project manager', 'team lead', 'team leader', 'lead'].includes(normalizedRole);
+
+    let isTopLevel = isManagerRole;
+    if (!isTopLevel) {
+      isTopLevel = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.bulk_edit', req.db, oldCard.board_id, req);
+    }
     if (!isTopLevel) {
       const userIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
       if (userIsCompanyOwner) isTopLevel = true;
@@ -515,23 +521,22 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         });
       }
 
-      // Card completion enforcement: Only assigners (or top-level roles like owner) can mark a card as complete
+      // Card completion enforcement: Only assigners or top-level roles (Owner, Admin, PM, TL) can mark a card as complete
       if (is_complete === true) {
-        const isOwnerOrAdmin = await userHasPermission(req.user.id, oldCard.workspace_id, 'workspace.manage', req.db);
-        if (!isOwnerOrAdmin) {
+        if (!isTopLevel) {
           const assignerRows = await req.db.query(
-          'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
-          [cardId, req.user.id]
-        );
-        const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
-        if (!isAssigner) {
-          return res.status(403).json({
-            error: {
-              message: 'Cards can only be marked as completed by assigners.',
-              code: 'FORBIDDEN'
-            }
-          });
-        }
+            'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
+            [cardId, req.user.id]
+          );
+          const isAssigner = Array.isArray(assignerRows) && assignerRows.length > 0;
+          if (!isAssigner) {
+            return res.status(403).json({
+              error: {
+                message: 'Cards can only be marked as completed by assigners.',
+                code: 'FORBIDDEN'
+              }
+            });
+          }
         }
       }
     }
@@ -626,8 +631,7 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       }
 
       if (isTargetDone && Number(oldCard.list_id) !== Number(list_id)) {
-        const isOwnerOrAdmin = await userHasPermission(req.user.id, oldCard.workspace_id, 'workspace.manage', req.db);
-        if (!isOwnerOrAdmin) {
+        if (!isTopLevel) {
           const assignerRows = await req.db.query(
             'SELECT 1 FROM card_assigners WHERE card_id = ? AND user_id = ?',
             [cardId, req.user.id]

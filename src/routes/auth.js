@@ -12,7 +12,7 @@ const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenant
 const { provisionTenant, slugify } = require('../services/tenantProvisioner');
 const { EmailProvider } = require('../services/providers');
 const { validatePassword, generateCompliantPassword } = require('../utils/passwordPolicy');
-const { authRateLimiter, loginRateLimiter } = require('../middleware/rateLimit');
+const { authRateLimiter, loginRateLimiter, clearLoginRateLimit, clearAuthRateLimit } = require('../middleware/rateLimit');
 const { logAuthEvent } = require('../services/authAudit');
 const { userHasPermission } = require('../middleware/permissions');
 const {
@@ -1206,6 +1206,7 @@ router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, 
 
       const loginResult = await handleUserLoginVerification(devDb, userRes[0], password, req, null);
       if (loginResult.token) {
+        clearLoginRateLimit(req, normalizedEmail);
         res.cookie('token', loginResult.token, COOKIE_OPTIONS);
         res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
       }
@@ -1243,6 +1244,7 @@ router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, 
 
       const loginResult = await handleUserLoginVerification(tenantDb, userRes[0], password, req, tenant);
       if (loginResult.token) {
+        clearLoginRateLimit(req, normalizedEmail);
         res.cookie('token', loginResult.token, COOKIE_OPTIONS);
         res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
       }
@@ -1265,6 +1267,7 @@ router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, 
         if (devUser.length > 0) {
           const loginResult = await handleUserLoginVerification(devDb, devUser[0], password, req, null);
           if (loginResult.token) {
+            clearLoginRateLimit(req, normalizedEmail);
             res.cookie('token', loginResult.token, COOKIE_OPTIONS);
             res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
           }
@@ -1287,6 +1290,7 @@ router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, 
 
       const loginResult = await handleUserLoginVerification(tenantDb, userRes[0], password, req, targetTenant);
       if (loginResult.token) {
+        clearLoginRateLimit(req, normalizedEmail);
         res.cookie('token', loginResult.token, COOKIE_OPTIONS);
         res.cookie('refreshToken', loginResult.refreshToken, REFRESH_COOKIE_OPTIONS);
       }
@@ -1469,6 +1473,8 @@ router.post('/2fa/verify-login', authRateLimiter, validate(verifyLogin2FaSchema)
     res.cookie('token', session.accessToken, COOKIE_OPTIONS);
     res.cookie('refreshToken', session.refreshToken, REFRESH_COOKIE_OPTIONS);
 
+    clearLoginRateLimit(req, user.email);
+    clearAuthRateLimit(req, user.email);
     await logAuthEvent(db, {
       userId: user.id,
       email: user.email,

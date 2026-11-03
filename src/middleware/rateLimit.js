@@ -4,9 +4,27 @@
 const { getMasterDb, getDevSingleDb } = require('../services/tenantPools');
 
 function getClientIp(req) {
-  // Rely strictly on Express req.ip (configured with app.set('trust proxy', 1))
-  // Never read raw X-Forwarded-For directly to prevent spoofing
-  return req.ip || req.socket?.remoteAddress || '127.0.0.1';
+  let ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+  if (ip.startsWith('::ffff:')) {
+    ip = ip.substring(7);
+  }
+
+  // If ip resolved to loopback (proxy is on localhost / nginx container),
+  // check X-Real-IP or X-Forwarded-For explicitly set by trusted local proxy.
+  if ((ip === '127.0.0.1' || ip === '::1') && req.headers) {
+    if (req.headers['x-real-ip']) {
+      return String(req.headers['x-real-ip']).trim();
+    }
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) {
+      const parts = String(xff).split(',').map((s) => s.trim()).filter(Boolean);
+      if (parts.length > 0) {
+        return parts[0];
+      }
+    }
+  }
+
+  return ip;
 }
 
 function getActiveDbForLimits() {
@@ -25,7 +43,8 @@ function createRateLimiter({
   maxRequests = 100,
   message = 'Too many requests, please try again later.',
   code = 'RATE_LIMIT_EXCEEDED',
-  keyPrefix = 'rl'
+  keyPrefix = 'rl',
+  keyGenerator = null
 }) {
   const memoryStore = new Map();
 
@@ -47,8 +66,10 @@ function createRateLimiter({
       return next();
     }
 
-    const ip = getClientIp(req);
-    const key = `${keyPrefix}:${ip}`;
+    const key = typeof keyGenerator === 'function'
+      ? keyGenerator(req)
+      : `${keyPrefix}:${getClientIp(req)}`;
+
     const now = Date.now();
 
     let entry = memoryStore.get(key);
@@ -100,29 +121,79 @@ function createRateLimiter({
     memoryStore.clear();
   };
 
+  middleware.resetKey = (key) => {
+    if (key) {
+      memoryStore.delete(key);
+      const db = getActiveDbForLimits();
+      if (db) {
+        db.query('DELETE FROM rate_limits WHERE limiter_key = ?', [key]).catch(() => {});
+      }
+    }
+  };
+
   return middleware;
 }
 
-// REAL production rate limiters (Pass-through placeholders completely eliminated)
+// Extract normalized email from request body (supporting both REST and encrypted subReq payloads)
+function extractEmailFromReq(req) {
+  const rawEmail = req.body?.email || req.body?.data?.email || '';
+  return String(rawEmail).trim().toLowerCase();
+}
+
+// Configurable production thresholds
+const LOGIN_RATE_LIMIT_MAX = process.env.LOGIN_RATE_LIMIT_MAX
+  ? parseInt(process.env.LOGIN_RATE_LIMIT_MAX, 10)
+  : (process.env.NODE_ENV === 'production' ? 30 : 500);
+
+const AUTH_RATE_LIMIT_MAX = process.env.AUTH_RATE_LIMIT_MAX
+  ? parseInt(process.env.AUTH_RATE_LIMIT_MAX, 10)
+  : (process.env.NODE_ENV === 'production' ? 60 : 500);
+
+const API_RATE_LIMIT_MAX = process.env.API_RATE_LIMIT_MAX
+  ? parseInt(process.env.API_RATE_LIMIT_MAX, 10)
+  : 300;
+
+const UPLOAD_RATE_LIMIT_MAX = process.env.UPLOAD_RATE_LIMIT_MAX
+  ? parseInt(process.env.UPLOAD_RATE_LIMIT_MAX, 10)
+  : 60;
+
+const EXPORT_RATE_LIMIT_MAX = process.env.EXPORT_RATE_LIMIT_MAX
+  ? parseInt(process.env.EXPORT_RATE_LIMIT_MAX, 10)
+  : 30;
+
+// LOGIN RATE LIMITER:
+// Keyed by IP + normalized email to prevent single-IP office collisions while guarding against credential stuffing
 const loginRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  maxRequests: process.env.NODE_ENV === 'production' ? 10 : 500,
+  maxRequests: LOGIN_RATE_LIMIT_MAX,
   message: 'Too many login attempts. Please wait 15 minutes before trying again.',
   code: 'LOGIN_RATE_LIMIT_EXCEEDED',
-  keyPrefix: 'login'
+  keyPrefix: 'login',
+  keyGenerator: (req) => {
+    const ip = getClientIp(req);
+    const email = extractEmailFromReq(req);
+    return email ? `login:${ip}:${email}` : `login:${ip}`;
+  }
 });
 
+// AUTH RATE LIMITER:
+// Keyed by IP + normalized email for registration, OTPs, and password resets
 const authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  maxRequests: process.env.NODE_ENV === 'production' ? 15 : 500,
+  maxRequests: AUTH_RATE_LIMIT_MAX,
   message: 'Too many authentication requests. Please try again later.',
   code: 'AUTH_RATE_LIMIT_EXCEEDED',
-  keyPrefix: 'auth'
+  keyPrefix: 'auth',
+  keyGenerator: (req) => {
+    const ip = getClientIp(req);
+    const email = extractEmailFromReq(req);
+    return email ? `auth:${ip}:${email}` : `auth:${ip}`;
+  }
 });
 
 const apiRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  maxRequests: 300,
+  maxRequests: API_RATE_LIMIT_MAX,
   message: 'Too many requests. Please slow down.',
   code: 'API_RATE_LIMIT_EXCEEDED',
   keyPrefix: 'api'
@@ -130,7 +201,7 @@ const apiRateLimiter = createRateLimiter({
 
 const uploadRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  maxRequests: 30,
+  maxRequests: UPLOAD_RATE_LIMIT_MAX,
   message: 'Upload rate limit exceeded. Please wait before uploading more files.',
   code: 'UPLOAD_RATE_LIMIT_EXCEEDED',
   keyPrefix: 'upload'
@@ -138,11 +209,32 @@ const uploadRateLimiter = createRateLimiter({
 
 const exportRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  maxRequests: 10,
+  maxRequests: EXPORT_RATE_LIMIT_MAX,
   message: 'Export rate limit exceeded. Please wait before requesting additional exports.',
   code: 'EXPORT_RATE_LIMIT_EXCEEDED',
   keyPrefix: 'export'
 });
+
+/**
+ * Resets rate limit keys for a user upon successful authentication
+ */
+function clearLoginRateLimit(req, explicitEmail = null) {
+  const ip = getClientIp(req);
+  const email = (explicitEmail || extractEmailFromReq(req)).trim().toLowerCase();
+  if (email) {
+    loginRateLimiter.resetKey(`login:${ip}:${email}`);
+  }
+  loginRateLimiter.resetKey(`login:${ip}`);
+}
+
+function clearAuthRateLimit(req, explicitEmail = null) {
+  const ip = getClientIp(req);
+  const email = (explicitEmail || extractEmailFromReq(req)).trim().toLowerCase();
+  if (email) {
+    authRateLimiter.resetKey(`auth:${ip}:${email}`);
+  }
+  authRateLimiter.resetKey(`auth:${ip}`);
+}
 
 function resetAllRateLimits() {
   loginRateLimiter.reset();
@@ -159,6 +251,8 @@ module.exports = {
   apiRateLimiter,
   uploadRateLimiter,
   exportRateLimiter,
+  clearLoginRateLimit,
+  clearAuthRateLimit,
   resetAllRateLimits,
   getClientIp
 };
