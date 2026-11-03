@@ -1934,7 +1934,7 @@ registerOperation('files.download', {
         fileType = 'image/png';
       } else {
         // 2. Avatar check: any file in avatars/ directory
-        const avatarMatch = filePath.match(/(?:^|\/)avatars\/([^/?#]+)/);
+        const avatarMatch = filePath.match(/(?:^|\/)avatars\/([^/?#]+)/) || filePath.match(/(?:^|\/)(avatar_[^/?#]+)/);
         if (avatarMatch) {
           const userInTenant = await ctx.db.query('SELECT id FROM users WHERE id = ?', [ctx.user.id]);
           if (!userInTenant || userInTenant.length === 0) {

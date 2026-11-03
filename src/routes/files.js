@@ -83,18 +83,19 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
     // 4. Fallback for avatars/workspace icons: check by basename in subfolder across all tenant folders
     const filename = path.basename(cleanSubpath);
     const subfolder = cleanSubpath.split(/[\/\\]/)[0];
-    if (subfolder && (subfolder === 'avatars' || subfolder === 'workspaces')) {
+    const targetFolder = (subfolder === 'avatars' || filename.startsWith('avatar_')) ? 'avatars' : ((subfolder === 'workspaces' || filename.startsWith('ws_')) ? 'workspaces' : null);
+    if (targetFolder) {
       try {
         const entries = fs.readdirSync(base, { withFileTypes: true });
         for (const entry of entries) {
           if (entry.isDirectory()) {
-            const candidateDeep = path.resolve(base, entry.name, subfolder, filename);
+            const candidateDeep = path.resolve(base, entry.name, targetFolder, filename);
             if (fs.existsSync(candidateDeep)) {
               return candidateDeep;
             }
           }
         }
-        const directSubfolder = path.resolve(base, subfolder, filename);
+        const directSubfolder = path.resolve(base, targetFolder, filename);
         if (fs.existsSync(directSubfolder)) {
           return directSubfolder;
         }

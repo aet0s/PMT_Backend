@@ -2164,6 +2164,10 @@ router.post('/logout', requireAuth, async (req, res, next) => {
     } else if (req.user?.id) {
       await revokeAllSessions(req.db, req.user.id, 'LOGOUT', req);
     }
+    if (req.user?.email) {
+      clearLoginRateLimit(req, req.user.email);
+      clearAuthRateLimit(req, req.user.email);
+    }
     const clearOptions = getClearCookieOptions();
     res.clearCookie('token', clearOptions);
     res.clearCookie('refreshToken', clearOptions);

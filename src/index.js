@@ -70,8 +70,8 @@ if (trustProxyEnv === 'true') {
 } else if (trustProxyEnv) {
   trustProxySetting = trustProxyEnv;
 } else {
-  // Trust loopback reverse proxies (e.g. local Nginx proxying to Node.js)
-  trustProxySetting = 'loopback';
+  // Trust upstream reverse proxies (e.g. local Nginx proxying to Node.js on EC2)
+  trustProxySetting = true;
 }
 app.set('trust proxy', trustProxySetting);
 
@@ -271,7 +271,7 @@ const genericUpload = upload.fields([
   { name: 'avatar', maxCount: 1 }
 ]);
 
-app.post('/api/upload', requireAuth, (req, res, next) => {
+app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => {
   genericUpload(req, res, (err) => {
     if (err) return next(err);
     if (!req.file && req.files) {
@@ -287,10 +287,11 @@ app.post('/api/upload', requireAuth, (req, res, next) => {
 
     const tenantId = req.tenant ? req.tenant.id : 1;
     const purpose = String(req.body.purpose || '').trim();
+    const isAvatarEndpoint = req.path === '/api/files/avatar' || req.originalUrl?.includes('/api/files/avatar');
     const { userHasPermission } = require('./middleware/permissions');
 
     // 1. WORKSPACE ICON UPLOAD
-    if (purpose === 'workspace_icon' || req.body.workspace_id) {
+    if (!isAvatarEndpoint && (purpose === 'workspace_icon' || req.body.workspace_id)) {
       const workspaceId = Number(req.body.workspace_id);
       if (!workspaceId) {
         return res.status(400).json({ error: { message: 'workspace_id is required for workspace icon upload', code: 'BAD_REQUEST' } });
@@ -338,7 +339,7 @@ app.post('/api/upload', requireAuth, (req, res, next) => {
     }
 
     // 2. AVATAR UPLOAD
-    if (purpose === 'avatar' || req.body.user_id) {
+    if (isAvatarEndpoint || purpose === 'avatar' || req.body.user_id || req.files?.avatar) {
       const targetUserId = Number(req.body.user_id) || req.user.id;
       if (targetUserId !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'owner') {
         return res.status(403).json({ error: { message: 'Access denied: cannot upload avatar for another user', code: 'FORBIDDEN' } });
@@ -354,8 +355,11 @@ app.post('/api/upload', requireAuth, (req, res, next) => {
       }
 
       const saved = await localStorage.saveAvatar(tenantId, targetUserId, req.file);
+      await req.db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [saved.file_url, targetUserId]);
+
       return res.status(201).json({
         message: 'Avatar uploaded successfully',
+        avatar_url: saved.file_url,
         file: {
           file_name: req.file.originalname,
           file_url: saved.file_url,

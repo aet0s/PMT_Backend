@@ -3303,11 +3303,37 @@ router.get('/:id/company-members', requireAuth, requirePermission('member.view')
         primaryRole = userWorkspaces[0].role || 'Team Member';
       }
 
+      let effectiveAvatar = u.avatar_url;
+      if (!effectiveAvatar) {
+        try {
+          const tenantId = String(req.tenant?.id || 1);
+          const candidateBases = [
+            storage.UPLOADS_DIR,
+            process.env.UPLOADS_DIR && path.resolve(process.env.UPLOADS_DIR),
+            path.resolve('/data/projects/pmt/uploads'),
+            path.resolve(__dirname, '../../uploads')
+          ].filter(Boolean);
+
+          for (const base of Array.from(new Set(candidateBases))) {
+            const avatarDir = path.resolve(base, tenantId, 'avatars');
+            if (fs.existsSync(avatarDir)) {
+              const files = fs.readdirSync(avatarDir);
+              const userFiles = files.filter((f) => f.startsWith(`avatar_${u.id}_`)).sort().reverse();
+              if (userFiles.length > 0) {
+                effectiveAvatar = `/api/files/${tenantId}/avatars/${userFiles[0]}`;
+                req.db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [effectiveAvatar, u.id]).catch(() => {});
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       return {
         id: u.id,
         name: u.name,
         email: u.email,
-        avatar_url: u.avatar_url,
+        avatar_url: effectiveAvatar,
         created_at: u.created_at,
         role: primaryRole,
         is_owner: isOwner,

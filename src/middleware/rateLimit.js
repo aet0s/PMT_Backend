@@ -9,9 +9,16 @@ function getClientIp(req) {
     ip = ip.substring(7);
   }
 
-  // If ip resolved to loopback (proxy is on localhost / nginx container),
-  // check X-Real-IP or X-Forwarded-For explicitly set by trusted local proxy.
-  if ((ip === '127.0.0.1' || ip === '::1') && req.headers) {
+  // Check if IP is loopback or a private network address (trusted upstream Nginx proxy on EC2/Docker)
+  const isPrivateOrLoopback =
+    ip === '127.0.0.1' ||
+    ip === '::1' ||
+    ip === 'localhost' ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+
+  if (isPrivateOrLoopback && req.headers) {
     if (req.headers['x-real-ip']) {
       return String(req.headers['x-real-ip']).trim();
     }
@@ -143,11 +150,11 @@ function extractEmailFromReq(req) {
 // Configurable production thresholds
 const LOGIN_RATE_LIMIT_MAX = process.env.LOGIN_RATE_LIMIT_MAX
   ? parseInt(process.env.LOGIN_RATE_LIMIT_MAX, 10)
-  : (process.env.NODE_ENV === 'production' ? 30 : 500);
+  : (process.env.NODE_ENV === 'production' ? 100 : 500);
 
 const AUTH_RATE_LIMIT_MAX = process.env.AUTH_RATE_LIMIT_MAX
   ? parseInt(process.env.AUTH_RATE_LIMIT_MAX, 10)
-  : (process.env.NODE_ENV === 'production' ? 60 : 500);
+  : (process.env.NODE_ENV === 'production' ? 100 : 500);
 
 const API_RATE_LIMIT_MAX = process.env.API_RATE_LIMIT_MAX
   ? parseInt(process.env.API_RATE_LIMIT_MAX, 10)

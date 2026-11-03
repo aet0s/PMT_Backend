@@ -326,7 +326,7 @@ const SYSTEM_ROLES = {
     permissions: [
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view',
-      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign_self', 'task.complete', 'task.delete_own',
+      'task.view', 'task.create', 'task.edit', 'task.move', 'task.assign', 'task.assign_self', 'task.complete', 'task.delete_own',
       'task.watch', 'task.set_priority', 'task.duplicate', 'task.archive', 'task.restore',
       'subtask.create', 'subtask.edit', 'subtask.delete', 'checklist.create', 'checklist.edit', 'checklist.delete',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',

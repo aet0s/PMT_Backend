@@ -445,27 +445,44 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     // Fetch caller's board or workspace role to determine rank and authority
     let callerRank = 30;
     let callerRoleName = '';
+    // Check workspace role first
+    const wsRows = await req.db.query(
+      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank
+       FROM workspace_members wm
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [oldCard.workspace_id, req.user.id]
+    );
+    if (wsRows.length > 0) {
+      const wsRoleName = wsRows[0].role_name || '';
+      let wsRank = Number(wsRows[0].rank || 30);
+      const wsRoleNorm = wsRoleName.toLowerCase();
+      if (wsRoleNorm === 'owner' || wsRoleNorm === 'super admin') wsRank = 100;
+      else if (wsRoleNorm === 'admin') wsRank = Math.max(wsRank, 80);
+      else if (wsRoleNorm === 'project manager') wsRank = Math.max(wsRank, 60);
+      else if (wsRoleNorm === 'team lead' || wsRoleNorm === 'team leader') wsRank = Math.max(wsRank, 50);
+      callerRank = wsRank;
+      callerRoleName = wsRoleName;
+    }
+    // Check board role and take the highest rank
     const boardMemberRows = await req.db.query(
-      `SELECT bm.role_id, r.name as role_name, r.rank
+      `SELECT bm.role_id, bm.role as bm_role, r.name as role_name, r.rank
        FROM board_members bm
-       LEFT JOIN roles r ON bm.role_id = r.id
+       LEFT JOIN roles r ON bm.role_id = r.id OR (bm.role_id IS NULL AND bm.role = r.name)
        WHERE bm.board_id = ? AND bm.user_id = ?`,
       [oldCard.board_id, req.user.id]
     );
-    if (boardMemberRows.length > 0 && boardMemberRows[0].role_id) {
-      callerRank = Number(boardMemberRows[0].rank || 30);
-      callerRoleName = boardMemberRows[0].role_name || '';
-    } else {
-      const wsRows = await req.db.query(
-        `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank
-         FROM workspace_members wm
-         LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-         WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-        [oldCard.workspace_id, req.user.id]
-      );
-      if (wsRows.length > 0) {
-        callerRank = Number(wsRows[0].rank || (wsRows[0].role_name === 'Owner' || wsRows[0].role_name === 'Super Admin' ? 100 : 30));
-        callerRoleName = wsRows[0].role_name || '';
+    if (boardMemberRows.length > 0) {
+      const bRoleName = boardMemberRows[0].role_name || boardMemberRows[0].bm_role || '';
+      let bRank = Number(boardMemberRows[0].rank || 30);
+      const bRoleNorm = bRoleName.toLowerCase();
+      if (bRoleNorm === 'owner' || bRoleNorm === 'super admin') bRank = 100;
+      else if (bRoleNorm === 'admin') bRank = Math.max(bRank, 80);
+      else if (bRoleNorm === 'project manager') bRank = Math.max(bRank, 60);
+      else if (bRoleNorm === 'team lead' || bRoleNorm === 'team leader') bRank = Math.max(bRank, 50);
+      if (bRank > callerRank) {
+        callerRank = bRank;
+        callerRoleName = bRoleName;
       }
     }
     const normalizedRole = String(callerRoleName || '').trim().toLowerCase();
@@ -1298,19 +1315,8 @@ router.post(
         );
       }
     } else {
-      // Adding a new assignee
-      if (!hasFullAssigneeControl) {
-        // Team member cannot assign an existing card assigner as an assignee
-        const isTargetAssigner = assignerRows.some((a) => Number(a.user_id) === Number(user_id));
-        if (isTargetAssigner) {
-          return res.status(403).json({
-            error: {
-              message: 'Card assigners cannot be assigned as assignees by team members.',
-              code: 'FORBIDDEN'
-            }
-          });
-        }
-      }
+      // Adding a new assignee - team members can assign anyone on the board (and self-assign)
+      // No assigner block: anyone on the board can be assigned as an assignee
 
       await req.db.execute(
         'INSERT INTO card_members (card_id, user_id, assigned_by_user_id) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE assigned_by_user_id = COALESCE(assigned_by_user_id, VALUES(assigned_by_user_id))',
