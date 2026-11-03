@@ -177,7 +177,7 @@ const PERMISSIONS = [
   { key: 'report.view_project', module: 'report', label: 'View Project Reports', description: 'View task velocity and project progress', scope: 'project', dangerous: false },
   { key: 'report.view_team', module: 'report', label: 'View Team Reports', description: 'View team workload and allocations', scope: 'company', dangerous: false, planned: true },
   { key: 'report.view_all', module: 'report', label: 'View All Reports', description: 'Access cross-project organization reports', scope: 'company', dangerous: false, planned: true },
-  { key: 'report.export', module: 'report', label: 'Export Reports', description: 'Download PDF and CSV reports', scope: 'company', dangerous: false, planned: true },
+  { key: 'report.export', module: 'report', label: 'Export Reports', description: 'Download PDF and CSV reports', scope: 'company', dangerous: false, planned: false },
   { key: 'report.create_custom', module: 'report', label: 'Create Custom Reports', description: 'Build and save custom report configurations', scope: 'company', dangerous: false, planned: true },
 
   // --- Daily Tracker ---

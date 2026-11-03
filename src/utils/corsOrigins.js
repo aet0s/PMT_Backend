@@ -1,55 +1,89 @@
 // server/src/utils/corsOrigins.js
-// Centralized origin validation for Express CORS, CSRF protection, and Socket.io.
+// Strict centralized origin validation for Express CORS, CSRF protection, and Socket.IO.
 require('dotenv').config();
 
+const PRODUCTION_DEFAULT_ALLOWED_ORIGINS = [
+  'https://pmt.solarman.in'
+];
+
+const DEVELOPMENT_DEFAULT_ALLOWED_ORIGINS = [
+  'https://pmt.solarman.in',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5000',
+  'http://127.0.0.1:5000'
+];
+
+function isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
+
+function normalizeOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return '';
+  return origin.trim().replace(/\/+$/, '');
+}
+
 function getAllowedOrigins() {
-  const list = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const defaults = [
-    'https://pmt.solarman.in',
-    'http://pmt.solarman.in',
-    'https://www.pmt.solarman.in',
-    'http://www.pmt.solarman.in',
-    'https://pmtmgmt.solarman.in',
-    'http://pmtmgmt.solarman.in',
-    'https://www.pmtmgmt.solarman.in',
-    'http://www.pmtmgmt.solarman.in',
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://localhost:5000',
-    'http://127.0.0.1:5000'
-  ];
-  for (const d of defaults) {
-    if (!list.includes(d)) list.push(d);
+  const isProd = isProduction();
+  const rawList = (process.env.CORS_ORIGINS || '').split(',').map(normalizeOrigin).filter(Boolean);
+
+  let allowed = isProd
+    ? [...PRODUCTION_DEFAULT_ALLOWED_ORIGINS]
+    : [...DEVELOPMENT_DEFAULT_ALLOWED_ORIGINS];
+
+  // Merge explicitly configured CORS_ORIGINS from environment
+  for (const origin of rawList) {
+    if (!origin) continue;
+    if (isProd) {
+      // In production, enforce HTTPS only and ban localhost / IP addresses
+      try {
+        const parsed = new URL(origin);
+        if (parsed.protocol !== 'https:') {
+          console.warn(`[CORS SECURITY WARNING] Ignored non-HTTPS origin in production: ${origin}`);
+          continue;
+        }
+        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '0.0.0.0') {
+          console.warn(`[CORS SECURITY WARNING] Ignored localhost/loopback origin in production: ${origin}`);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (!allowed.includes(origin)) {
+      allowed.push(origin);
+    }
   }
+
+  // Handle CLIENT_URL if provided
   if (process.env.CLIENT_URL) {
-    const cUrl = process.env.CLIENT_URL.trim();
-    if (!list.includes(cUrl)) list.push(cUrl);
+    const cUrl = normalizeOrigin(process.env.CLIENT_URL);
+    if (cUrl) {
+      if (isProd) {
+        try {
+          const parsed = new URL(cUrl);
+          if (parsed.protocol === 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+            if (!allowed.includes(cUrl)) allowed.push(cUrl);
+          }
+        } catch {}
+      } else {
+        if (!allowed.includes(cUrl)) allowed.push(cUrl);
+      }
+    }
   }
-  return list;
+
+  return allowed;
 }
 
 function isOriginAllowed(origin) {
-  if (!origin || origin === 'null') return false;
-  const normalized = origin.trim().replace(/\/+$/, '');
-  const list = getAllowedOrigins();
+  if (!origin || typeof origin !== 'string') return false;
+  const normalized = normalizeOrigin(origin);
+  if (!normalized || normalized === 'null') return false;
 
-  if (list.includes(normalized)) return true;
+  const allowedList = getAllowedOrigins();
 
-  try {
-    const parsed = new URL(normalized);
-    // Allow any solarman.in domain or subdomain (e.g. pmt.solarman.in, www.pmt.solarman.in, pmtmgmt.solarman.in)
-    if (parsed.hostname === 'solarman.in' || parsed.hostname.endsWith('.solarman.in')) {
-      return true;
-    }
-    // Allow localhost and 127.0.0.1 with any port
-    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-      return true;
-    }
-  } catch (e) {
-    // Malformed URL
-  }
-
-  return false;
+  // Strict exact matching only. No loose wildcards or broad suffix matching.
+  return allowedList.includes(normalized);
 }
 
-module.exports = { getAllowedOrigins, isOriginAllowed };
+module.exports = { getAllowedOrigins, isOriginAllowed, isProduction };

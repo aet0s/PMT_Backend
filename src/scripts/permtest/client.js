@@ -1,7 +1,69 @@
 // server/src/scripts/permtest/client.js
 // Native fetch client (Node 18+, no browser automation / Playwright / Puppeteer).
-// Connects to the application through the frontend proxy (http://localhost:5173/api)
-// or directly in production with strict Origin / Referer / CORS / Cookie jar / CSRF handling.
+// Automatically routes business requests through POST /api/secure using hybrid encryption.
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { mapUrlToOperation } = require('../../secure/operationMapper');
+
+let cachedPublicKeyPem = null;
+
+async function getPublicKeyPem() {
+  if (cachedPublicKeyPem) return cachedPublicKeyPem;
+  try {
+    const res = await fetch('http://127.0.0.1:5000/keys/server-public.pem');
+    if (res.ok) {
+      cachedPublicKeyPem = await res.text();
+      return cachedPublicKeyPem;
+    }
+  } catch (e) {}
+  const keyPath = path.resolve(__dirname, '../../../../server-public.pem');
+  if (fs.existsSync(keyPath)) {
+    cachedPublicKeyPem = fs.readFileSync(keyPath, 'utf8');
+    return cachedPublicKeyPem;
+  }
+  throw new Error('Server public key not found');
+}
+
+function encryptForGateway(innerPayload, publicKeyPem) {
+  const aesKey = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
+  const wrappedKey = crypto.publicEncrypt({
+    key: publicKeyPem,
+    padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    oaepHash: 'sha256'
+  }, aesKey);
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const aad = Buffer.from('v1|server-rsa-v1|' + timestamp + '|' + nonce, 'utf8');
+
+  const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
+  cipher.setAAD(aad);
+  const plaintext = JSON.stringify({
+    ...innerPayload,
+    request_id: crypto.randomUUID(),
+    idempotency_key: crypto.randomUUID()
+  });
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const encryptedObj = {
+    wrapped_key: wrappedKey.toString('base64'),
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ciphertext: ciphertext.toString('base64')
+  };
+
+  return {
+    version: 1,
+    key_id: 'server-rsa-v1',
+    timestamp,
+    nonce,
+    encrypted: Buffer.from(JSON.stringify(encryptedObj)).toString('base64url')
+  };
+}
 
 class PermtestClient {
   constructor({
@@ -78,7 +140,35 @@ class PermtestClient {
       }
     }
 
-    const method = (options.method || 'GET').toUpperCase();
+    let method = (options.method || 'GET').toUpperCase();
+
+    const isException = options.raw ||
+                        path.includes('/keys/') ||
+                        path.includes('/api/health') ||
+                        path.includes('/api/time') ||
+                        path.includes('/api/upload') ||
+                        path === '/api/secure' ||
+                        path.endsWith('/api/secure');
+
+    let body = options.body;
+
+    if (!isException) {
+      let parsedData = {};
+      if (body) {
+        if (typeof body === 'string') {
+          try { parsedData = JSON.parse(body); } catch { parsedData = { raw: body }; }
+        } else if (typeof body === 'object') {
+          parsedData = body;
+        }
+      }
+      const mapped = mapUrlToOperation(path, method, parsedData);
+      const pubKey = await getPublicKeyPem();
+      const envelope = encryptForGateway(mapped, pubKey);
+
+      url = 'http://127.0.0.1:5000/api/secure';
+      method = 'POST';
+      body = JSON.stringify(envelope);
+    }
     const headers = {
       'Origin': this.frontendUrl,
       'Referer': `${this.frontendUrl}/`,
@@ -100,9 +190,10 @@ class PermtestClient {
       headers['x-csrf-token'] = this.csrfToken;
     }
 
-    let body = options.body;
     if (body && typeof body === 'object' && !(body instanceof Buffer) && !(body instanceof FormData)) {
       body = JSON.stringify(body);
+      headers['Content-Type'] = 'application/json';
+    } else if (body && typeof body === 'string' && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
 

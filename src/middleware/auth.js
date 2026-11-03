@@ -26,9 +26,7 @@ function extractToken(req) {
   if (req.cookies && req.cookies.token) {
     return req.cookies.token;
   }
-  if (req.query && req.query.token) {
-    return String(req.query.token).trim();
-  }
+  // Query parameters for authentication tokens are strictly banned (Finding 4)
   return null;
 }
 

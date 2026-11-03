@@ -147,6 +147,15 @@ const disable2FaSchema = z.object({
   token: z.string().optional()
 });
 
+const verifyForgotPasswordTokenSchema = z.object({
+  token: z.string().min(1, 'Verification token is required')
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().optional(),
+  newPassword: z.string().min(1, 'New password is required')
+});
+
 const updateProfileSchema = z.object({
   name: z.string().min(1, 'Name is required').optional(),
   email: z.string().email('Invalid email address').optional(),
@@ -281,7 +290,7 @@ router.get('/check-email', async (req, res, next) => {
 // POST /api/auth/register-company
 // Step 1: Validates company & admin password policy; provisions or OTP
 // -------------------------------------------------------------
-router.post('/register-company', validate(registerCompanySchema), async (req, res, next) => {
+router.post('/register-company', authRateLimiter, validate(registerCompanySchema), async (req, res, next) => {
   const registrationEnabled = process.env.REGISTRATION_ENABLED !== 'false' && process.env.REGISTRATION_ENABLED !== '0';
   if (!registrationEnabled) {
     return res.status(403).json({
@@ -487,7 +496,7 @@ router.post('/register-company', validate(registerCompanySchema), async (req, re
 // -------------------------------------------------------------
 // POST /api/auth/verify-registration (Preserved for VERIFICATION_MODE=on)
 // -------------------------------------------------------------
-router.post('/verify-registration', validate(verifyRegistrationSchema), async (req, res, next) => {
+router.post('/verify-registration', authRateLimiter, validate(verifyRegistrationSchema), async (req, res, next) => {
   const { verification_id, otp } = req.body;
   const masterDb = getMasterDb();
 
@@ -567,7 +576,7 @@ router.post('/verify-registration', validate(verifyRegistrationSchema), async (r
 // POST /api/auth/register/send-otp
 // Step 1: Validates email, sends 6-digit OTP via EmailProvider
 // -------------------------------------------------------------
-router.post('/register/send-otp', validate(sendOtpSchema), async (req, res, next) => {
+router.post('/register/send-otp', authRateLimiter, validate(sendOtpSchema), async (req, res, next) => {
   const { email } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
@@ -617,7 +626,7 @@ router.post('/register/send-otp', validate(sendOtpSchema), async (req, res, next
 // POST /api/auth/register/verify-otp
 // Step 2: Validates OTP and issues a verification token for password setup
 // -------------------------------------------------------------
-router.post('/register/verify-otp', validate(verifyOtpSchema), async (req, res, next) => {
+router.post('/register/verify-otp', authRateLimiter, validate(verifyOtpSchema), async (req, res, next) => {
   const { email, otp } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
@@ -666,7 +675,7 @@ router.post('/register/verify-otp', validate(verifyOtpSchema), async (req, res, 
 // POST /api/auth/register
 // User registration (e.g. from invitation link or dev)
 // -------------------------------------------------------------
-router.post('/register', validate(registerUserSchema), async (req, res, next) => {
+router.post('/register', authRateLimiter, validate(registerUserSchema), async (req, res, next) => {
   const { name, email, password, verification_token: verificationToken, company_name, companyName, slug, phone } = req.body;
   const inviteToken = req.body.invite_token || req.body.token;
 
@@ -801,7 +810,7 @@ router.post('/register', validate(registerUserSchema), async (req, res, next) =>
       });
     }
 
-    let activeDb = req.db;
+    let activeDb = (req.db && req.db !== getMasterDb()) ? req.db : null;
     if (!activeDb && inviteToken) {
       const parts = inviteToken.split('.');
       if (parts.length === 3 && parts[0] !== 'default') {
@@ -1181,7 +1190,7 @@ async function handleUserLoginVerification(db, user, password, req, tenant = nul
 // POST /api/auth/login
 // Supports multi-tenant lookup, company picker, lockout, and TOTP 2FA
 // -------------------------------------------------------------
-router.post('/login', validate(loginSchema), async (req, res, next) => {
+router.post('/login', loginRateLimiter, validate(loginSchema), async (req, res, next) => {
   const { email, password, tenant_slug } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
@@ -1192,7 +1201,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       const userRes = await devDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
       if (userRes.length === 0) {
         await bcrypt.compare(password, DUMMY_HASH);
-        return res.status(401).json({ error: { message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' } });
+        return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
       }
 
       const loginResult = await handleUserLoginVerification(devDb, userRes[0], password, req, null);
@@ -1215,18 +1224,21 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
 
       if (!tenant) {
         await bcrypt.compare(password, DUMMY_HASH);
-        return res.status(404).json({ error: { message: `Company "${cleanSlug}" not found`, code: 'TENANT_NOT_FOUND' } });
+        console.warn(`[AUTH] Login failed: tenant slug "${cleanSlug}" not found`);
+        return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
       }
 
       if (tenant.status !== 'active') {
-        return res.status(403).json({ error: { message: `Company account is ${tenant.status}`, code: 'TENANT_INACTIVE' } });
+        await bcrypt.compare(password, DUMMY_HASH);
+        console.warn(`[AUTH] Login failed: tenant "${cleanSlug}" is ${tenant.status}`);
+        return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
       }
 
       const tenantDb = await getTenantDb(tenant.id);
       const userRes = await tenantDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
       if (userRes.length === 0) {
         await bcrypt.compare(password, DUMMY_HASH);
-        return res.status(401).json({ error: { message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' } });
+        return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
       }
 
       const loginResult = await handleUserLoginVerification(tenantDb, userRes[0], password, req, tenant);
@@ -1261,7 +1273,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       }
 
       await bcrypt.compare(password, DUMMY_HASH);
-      return res.status(401).json({ error: { message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' } });
+      return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
     }
 
     if (matchingTenants.length === 1) {
@@ -1270,7 +1282,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       const tenantDb = await getTenantDb(targetTenant.id);
       const userRes = await tenantDb.query('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
       if (userRes.length === 0) {
-        return res.status(401).json({ error: { message: 'Invalid email or password', code: 'INVALID_CREDENTIALS' } });
+        return res.status(401).json({ error: { message: 'Invalid company, email or password', code: 'INVALID_CREDENTIALS', requestId: req.id } });
       }
 
       const loginResult = await handleUserLoginVerification(tenantDb, userRes[0], password, req, targetTenant);
@@ -1305,7 +1317,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
 // POST /api/auth/2fa/verify-login
 // Step 2 of login when TOTP 2FA is active
 // -------------------------------------------------------------
-router.post('/2fa/verify-login', validate(verifyLogin2FaSchema), async (req, res, next) => {
+router.post('/2fa/verify-login', authRateLimiter, validate(verifyLogin2FaSchema), async (req, res, next) => {
   const { temp_token: tempToken, code } = req.body;
 
   try {
@@ -1526,7 +1538,7 @@ async function ensurePasswordResetsTable() {
 // POST /api/auth/forgot-password/send-otp
 // Step 1: Initiates password reset by sending 6-digit OTP to user email
 // -------------------------------------------------------------
-router.post('/forgot-password/send-otp', validate(sendOtpSchema), async (req, res, next) => {
+router.post('/forgot-password/send-otp', authRateLimiter, validate(sendOtpSchema), async (req, res, next) => {
   const { email } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
@@ -1634,7 +1646,7 @@ router.post('/forgot-password/send-otp', validate(sendOtpSchema), async (req, re
 // POST /api/auth/forgot-password/verify-otp
 // Step 2: Validates reset OTP and issues temporary password reset token
 // -------------------------------------------------------------
-router.post('/forgot-password/verify-otp', validate(verifyOtpSchema), async (req, res, next) => {
+router.post('/forgot-password/verify-otp', authRateLimiter, validate(verifyOtpSchema), async (req, res, next) => {
   const { email, otp } = req.body;
   const normalizedEmail = normalizeEmail(email);
   const cleanOtp = String(otp || '').trim().replace(/\D/g, '');
@@ -1742,7 +1754,7 @@ router.post('/forgot-password/verify-otp', validate(verifyOtpSchema), async (req
 // POST /api/auth/forgot-password/verify-token
 // Validates whether a reset token is valid and unexpired
 // -------------------------------------------------------------
-router.post('/forgot-password/verify-token', async (req, res) => {
+router.post('/forgot-password/verify-token', validate(verifyForgotPasswordTokenSchema), async (req, res) => {
   const { token, email } = req.body;
   if (!token) {
     return res.status(400).json({
@@ -1777,7 +1789,7 @@ router.post('/forgot-password/verify-token', async (req, res) => {
 // POST /api/auth/forgot-password/reset
 // Step 3: Resets password using verified token and enforces strong password policy
 // -------------------------------------------------------------
-router.post('/forgot-password/reset', validate(resetPasswordWithOtpSchema), async (req, res, next) => {
+router.post('/forgot-password/reset', authRateLimiter, validate(resetPasswordWithOtpSchema), async (req, res, next) => {
   const { email, reset_token, new_password } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
@@ -1903,7 +1915,7 @@ router.post('/refresh', async (req, res, next) => {
   // To find tenant DB from refresh token hash:
   // If req.tenant/req.db is available from header or context, use it.
   // Otherwise search across active tenant databases or check session table.
-  let activeDb = req.db;
+  let activeDb = (req.db && req.db !== getMasterDb()) ? req.db : null;
   let tenantId = req.tenant?.id || null;
 
   try {
@@ -2767,9 +2779,9 @@ const handlePasswordChange = async (req, res, next) => {
   }
 };
 
-router.put('/password', requireAuth, handlePasswordChange);
-router.post('/password', requireAuth, handlePasswordChange);
-router.post('/change-password', requireAuth, handlePasswordChange);
+router.put('/password', requireAuth, validate(changePasswordSchema), handlePasswordChange);
+router.post('/password', requireAuth, validate(changePasswordSchema), handlePasswordChange);
+router.post('/change-password', requireAuth, validate(changePasswordSchema), handlePasswordChange);
 
 router.resetRegistrationLimitsForTest = resetRegistrationLimitsForTest;
 router.RESERVED_SLUGS = RESERVED_SLUGS;

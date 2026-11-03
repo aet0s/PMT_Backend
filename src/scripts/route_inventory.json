@@ -1,0 +1,1013 @@
+{
+  "routes": [
+    {
+      "file": "archive.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/archive"
+    },
+    {
+      "file": "attachments.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/attachments"
+    },
+    {
+      "file": "attachments.js",
+      "method": "GET",
+      "subpath": "/:id",
+      "fullPath": "/api/attachments/:id"
+    },
+    {
+      "file": "attachments.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/attachments/:id"
+    },
+    {
+      "file": "attachments.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/attachments"
+    },
+    {
+      "file": "auth.js",
+      "method": "GET",
+      "subpath": "/check-email",
+      "fullPath": "/api/auth/check-email"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/register-company",
+      "fullPath": "/api/auth/register-company"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/verify-registration",
+      "fullPath": "/api/auth/verify-registration"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/register/send-otp",
+      "fullPath": "/api/auth/register/send-otp"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/register/verify-otp",
+      "fullPath": "/api/auth/register/verify-otp"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/register",
+      "fullPath": "/api/auth/register"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/login",
+      "fullPath": "/api/auth/login"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/verify-login",
+      "fullPath": "/api/auth/2fa/verify-login"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/forgot-password/send-otp",
+      "fullPath": "/api/auth/forgot-password/send-otp"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/forgot-password/verify-otp",
+      "fullPath": "/api/auth/forgot-password/verify-otp"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/forgot-password/verify-token",
+      "fullPath": "/api/auth/forgot-password/verify-token"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/forgot-password/reset",
+      "fullPath": "/api/auth/forgot-password/reset"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/refresh",
+      "fullPath": "/api/auth/refresh"
+    },
+    {
+      "file": "auth.js",
+      "method": "GET",
+      "subpath": "/sessions",
+      "fullPath": "/api/auth/sessions"
+    },
+    {
+      "file": "auth.js",
+      "method": "DELETE",
+      "subpath": "/sessions/:id",
+      "fullPath": "/api/auth/sessions/:id"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/sessions/revoke-others",
+      "fullPath": "/api/auth/sessions/revoke-others"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/logout",
+      "fullPath": "/api/auth/logout"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/logout-all",
+      "fullPath": "/api/auth/logout-all"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/generate",
+      "fullPath": "/api/auth/2fa/generate"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/setup",
+      "fullPath": "/api/auth/2fa/setup"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/confirm",
+      "fullPath": "/api/auth/2fa/confirm"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/verify",
+      "fullPath": "/api/auth/2fa/verify"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/2fa/disable",
+      "fullPath": "/api/auth/2fa/disable"
+    },
+    {
+      "file": "auth.js",
+      "method": "GET",
+      "subpath": "/2fa/status",
+      "fullPath": "/api/auth/2fa/status"
+    },
+    {
+      "file": "auth.js",
+      "method": "GET",
+      "subpath": "/activity",
+      "fullPath": "/api/auth/activity"
+    },
+    {
+      "file": "auth.js",
+      "method": "GET",
+      "subpath": "/me",
+      "fullPath": "/api/auth/me"
+    },
+    {
+      "file": "auth.js",
+      "method": "PUT",
+      "subpath": "/profile",
+      "fullPath": "/api/auth/profile"
+    },
+    {
+      "file": "auth.js",
+      "method": "PUT",
+      "subpath": "/password",
+      "fullPath": "/api/auth/password"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/password",
+      "fullPath": "/api/auth/password"
+    },
+    {
+      "file": "auth.js",
+      "method": "POST",
+      "subpath": "/change-password",
+      "fullPath": "/api/auth/change-password"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/boards"
+    },
+    {
+      "file": "boards.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/boards"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id",
+      "fullPath": "/api/boards/:id"
+    },
+    {
+      "file": "boards.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/boards/:id"
+    },
+    {
+      "file": "boards.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/boards/:id"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id/mention-candidates",
+      "fullPath": "/api/boards/:id/mention-candidates"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id/workspace-members",
+      "fullPath": "/api/boards/:id/workspace-members"
+    },
+    {
+      "file": "boards.js",
+      "method": "POST",
+      "subpath": "/:id/members",
+      "fullPath": "/api/boards/:id/members"
+    },
+    {
+      "file": "boards.js",
+      "method": "DELETE",
+      "subpath": "/:id/members/:userId",
+      "fullPath": "/api/boards/:id/members/:userId"
+    },
+    {
+      "file": "boards.js",
+      "method": "PATCH",
+      "subpath": "/:id/members/:userId/role",
+      "fullPath": "/api/boards/:id/members/:userId/role"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id/labels",
+      "fullPath": "/api/boards/:id/labels"
+    },
+    {
+      "file": "boards.js",
+      "method": "POST",
+      "subpath": "/:id/labels",
+      "fullPath": "/api/boards/:id/labels"
+    },
+    {
+      "file": "boards.js",
+      "method": "PATCH",
+      "subpath": "/:id/labels/:labelId",
+      "fullPath": "/api/boards/:id/labels/:labelId"
+    },
+    {
+      "file": "boards.js",
+      "method": "DELETE",
+      "subpath": "/:id/labels/:labelId",
+      "fullPath": "/api/boards/:id/labels/:labelId"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id/archived",
+      "fullPath": "/api/boards/:id/archived"
+    },
+    {
+      "file": "boards.js",
+      "method": "POST",
+      "subpath": "/:id/archive",
+      "fullPath": "/api/boards/:id/archive"
+    },
+    {
+      "file": "boards.js",
+      "method": "POST",
+      "subpath": "/:id/restore",
+      "fullPath": "/api/boards/:id/restore"
+    },
+    {
+      "file": "boards.js",
+      "method": "GET",
+      "subpath": "/:id/attachments",
+      "fullPath": "/api/boards/:id/attachments"
+    },
+    {
+      "file": "cards.js",
+      "method": "GET",
+      "subpath": "/:id",
+      "fullPath": "/api/cards/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/cards"
+    },
+    {
+      "file": "cards.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/cards/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/cards/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/labels",
+      "fullPath": "/api/cards/:id/labels"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/members",
+      "fullPath": "/api/cards/:id/members"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/assigners",
+      "fullPath": "/api/cards/:id/assigners"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/copy",
+      "fullPath": "/api/cards/:id/copy"
+    },
+    {
+      "file": "cards.js",
+      "method": "GET",
+      "subpath": "/:id/attachments",
+      "fullPath": "/api/cards/:id/attachments"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/attachments",
+      "fullPath": "/api/cards/:id/attachments"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/attachments/file",
+      "fullPath": "/api/cards/:id/attachments/file"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/attachments/link",
+      "fullPath": "/api/cards/:id/attachments/link"
+    },
+    {
+      "file": "cards.js",
+      "method": "DELETE",
+      "subpath": "/attachments/:id",
+      "fullPath": "/api/cards/attachments/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "GET",
+      "subpath": "/:id/comments",
+      "fullPath": "/api/cards/:id/comments"
+    },
+    {
+      "file": "cards.js",
+      "method": "GET",
+      "subpath": "/:id/mention-candidates",
+      "fullPath": "/api/cards/:id/mention-candidates"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/comments",
+      "fullPath": "/api/cards/:id/comments"
+    },
+    {
+      "file": "cards.js",
+      "method": "PATCH",
+      "subpath": "/comments/:id",
+      "fullPath": "/api/cards/comments/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "DELETE",
+      "subpath": "/comments/:id",
+      "fullPath": "/api/cards/comments/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/checklists",
+      "fullPath": "/api/cards/:id/checklists"
+    },
+    {
+      "file": "cards.js",
+      "method": "DELETE",
+      "subpath": "/checklists/:id",
+      "fullPath": "/api/cards/checklists/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/checklist-items",
+      "fullPath": "/api/cards/checklist-items"
+    },
+    {
+      "file": "cards.js",
+      "method": "PATCH",
+      "subpath": "/checklist-items/:id",
+      "fullPath": "/api/cards/checklist-items/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "DELETE",
+      "subpath": "/checklist-items/:id",
+      "fullPath": "/api/cards/checklist-items/:id"
+    },
+    {
+      "file": "cards.js",
+      "method": "GET",
+      "subpath": "/:id/checkins",
+      "fullPath": "/api/cards/:id/checkins"
+    },
+    {
+      "file": "cards.js",
+      "method": "POST",
+      "subpath": "/:id/checkins",
+      "fullPath": "/api/cards/:id/checkins"
+    },
+    {
+      "file": "cards.js",
+      "method": "PATCH",
+      "subpath": "/:id/checkins/:checkinId",
+      "fullPath": "/api/cards/:id/checkins/:checkinId"
+    },
+    {
+      "file": "checkins.js",
+      "method": "POST",
+      "subpath": "/checkins/:id/review",
+      "fullPath": "/api/checkins/checkins/:id/review"
+    },
+    {
+      "file": "checkins.js",
+      "method": "POST",
+      "subpath": "/checkin-reviews/:id/answer",
+      "fullPath": "/api/checkins/checkin-reviews/:id/answer"
+    },
+    {
+      "file": "files.js",
+      "method": "POST",
+      "subpath": "/avatar",
+      "fullPath": "/api/files/avatar"
+    },
+    {
+      "file": "files.js",
+      "method": "POST",
+      "subpath": "/preview-token",
+      "fullPath": "/api/files/preview-token"
+    },
+    {
+      "file": "files.js",
+      "method": "GET",
+      "subpath": "/avatars/:filename",
+      "fullPath": "/api/files/avatars/:filename"
+    },
+    {
+      "file": "files.js",
+      "method": "GET",
+      "subpath": "/:tenantId/*",
+      "fullPath": "/api/files/:tenantId/*"
+    },
+    {
+      "file": "invitations.js",
+      "method": "GET",
+      "subpath": "/verify",
+      "fullPath": "/api/invitations/verify"
+    },
+    {
+      "file": "invitations.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/invitations"
+    },
+    {
+      "file": "invitations.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/invitations"
+    },
+    {
+      "file": "invitations.js",
+      "method": "POST",
+      "subpath": "/accept",
+      "fullPath": "/api/invitations/accept"
+    },
+    {
+      "file": "invitations.js",
+      "method": "POST",
+      "subpath": "/:id/regenerate",
+      "fullPath": "/api/invitations/:id/regenerate"
+    },
+    {
+      "file": "invitations.js",
+      "method": "POST",
+      "subpath": "/:id/resend",
+      "fullPath": "/api/invitations/:id/resend"
+    },
+    {
+      "file": "invitations.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/invitations/:id"
+    },
+    {
+      "file": "lists.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/lists"
+    },
+    {
+      "file": "lists.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/lists/:id"
+    },
+    {
+      "file": "lists.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/lists/:id"
+    },
+    {
+      "file": "notifications.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/notifications"
+    },
+    {
+      "file": "notifications.js",
+      "method": "GET",
+      "subpath": "/summary",
+      "fullPath": "/api/notifications/summary"
+    },
+    {
+      "file": "notifications.js",
+      "method": "GET",
+      "subpath": "/unread-count",
+      "fullPath": "/api/notifications/unread-count"
+    },
+    {
+      "file": "notifications.js",
+      "method": "GET",
+      "subpath": "/preferences",
+      "fullPath": "/api/notifications/preferences"
+    },
+    {
+      "file": "notifications.js",
+      "method": "PATCH",
+      "subpath": "/preferences",
+      "fullPath": "/api/notifications/preferences"
+    },
+    {
+      "file": "notifications.js",
+      "method": "GET",
+      "subpath": "/mutes",
+      "fullPath": "/api/notifications/mutes"
+    },
+    {
+      "file": "notifications.js",
+      "method": "POST",
+      "subpath": "/mute",
+      "fullPath": "/api/notifications/mute"
+    },
+    {
+      "file": "notifications.js",
+      "method": "POST",
+      "subpath": "/unmute",
+      "fullPath": "/api/notifications/unmute"
+    },
+    {
+      "file": "notifications.js",
+      "method": "PATCH",
+      "subpath": "/:id/read",
+      "fullPath": "/api/notifications/:id/read"
+    },
+    {
+      "file": "notifications.js",
+      "method": "PATCH",
+      "subpath": "/:id/unread",
+      "fullPath": "/api/notifications/:id/unread"
+    },
+    {
+      "file": "notifications.js",
+      "method": "PATCH",
+      "subpath": "/read-all",
+      "fullPath": "/api/notifications/read-all"
+    },
+    {
+      "file": "notifications.js",
+      "method": "PATCH",
+      "subpath": "/board/:id/read-all",
+      "fullPath": "/api/notifications/board/:id/read-all"
+    },
+    {
+      "file": "notifications.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/notifications/:id"
+    },
+    {
+      "file": "notifications.js",
+      "method": "DELETE",
+      "subpath": "/clear/read",
+      "fullPath": "/api/notifications/clear/read"
+    },
+    {
+      "file": "permissions.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/permissions"
+    },
+    {
+      "file": "permissions.js",
+      "method": "GET",
+      "subpath": "/me",
+      "fullPath": "/api/permissions/me"
+    },
+    {
+      "file": "push.js",
+      "method": "POST",
+      "subpath": "/subscriptions",
+      "fullPath": "/api/push/subscriptions"
+    },
+    {
+      "file": "push.js",
+      "method": "GET",
+      "subpath": "/subscriptions",
+      "fullPath": "/api/push/subscriptions"
+    },
+    {
+      "file": "push.js",
+      "method": "DELETE",
+      "subpath": "/subscriptions/current",
+      "fullPath": "/api/push/subscriptions/current"
+    },
+    {
+      "file": "push.js",
+      "method": "DELETE",
+      "subpath": "/subscriptions/:id",
+      "fullPath": "/api/push/subscriptions/:id"
+    },
+    {
+      "file": "push.js",
+      "method": "POST",
+      "subpath": "/test",
+      "fullPath": "/api/push/test"
+    },
+    {
+      "file": "roles.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/roles/:id"
+    },
+    {
+      "file": "roles.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/roles/:id"
+    },
+    {
+      "file": "roles.js",
+      "method": "POST",
+      "subpath": "/:id/reset-default",
+      "fullPath": "/api/roles/:id/reset-default"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/workspaces"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id",
+      "fullPath": "/api/workspaces/:id"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/workspaces"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/workspaces/:id"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/icon",
+      "fullPath": "/api/workspaces/:id/icon"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "DELETE",
+      "subpath": "/:id/icon",
+      "fullPath": "/api/workspaces/:id/icon"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/security",
+      "fullPath": "/api/workspaces/:id/security"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id/security",
+      "fullPath": "/api/workspaces/:id/security"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/auto-archive",
+      "fullPath": "/api/workspaces/:id/auto-archive"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/workspaces/:id"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/my-permissions",
+      "fullPath": "/api/workspaces/:id/my-permissions"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/roles",
+      "fullPath": "/api/workspaces/:id/roles"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/roles",
+      "fullPath": "/api/workspaces/:id/roles"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/members",
+      "fullPath": "/api/workspaces/:id/members"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id/members/:userId/role",
+      "fullPath": "/api/workspaces/:id/members/:userId/role"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "DELETE",
+      "subpath": "/:id/members/:userId",
+      "fullPath": "/api/workspaces/:id/members/:userId"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/members/:userId/deactivate",
+      "fullPath": "/api/workspaces/:id/members/:userId/deactivate"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/members/:userId/reactivate",
+      "fullPath": "/api/workspaces/:id/members/:userId/reactivate"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:workspaceId/members/:userId/reset-password",
+      "fullPath": "/api/workspaces/:workspaceId/members/:userId/reset-password"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:workspaceId/members/:userId/reset-2fa",
+      "fullPath": "/api/workspaces/:workspaceId/members/:userId/reset-2fa"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/members",
+      "fullPath": "/api/workspaces/:id/members"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/invitations",
+      "fullPath": "/api/workspaces/:id/invitations"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/invitations",
+      "fullPath": "/api/workspaces/:id/invitations"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/archived",
+      "fullPath": "/api/workspaces/:id/archived"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/activity",
+      "fullPath": "/api/workspaces/:id/activity"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/reports",
+      "fullPath": "/api/workspaces/:id/reports"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/company-members",
+      "fullPath": "/api/workspaces/:id/company-members"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id/company-members/:userId/role",
+      "fullPath": "/api/workspaces/:id/company-members/:userId/role"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/company-members/:userId/workspaces",
+      "fullPath": "/api/workspaces/:id/company-members/:userId/workspaces"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/company-members/:userId/boards",
+      "fullPath": "/api/workspaces/:id/company-members/:userId/boards"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "DELETE",
+      "subpath": "/:id/company-members/:userId",
+      "fullPath": "/api/workspaces/:id/company-members/:userId"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id/company-members/:userId/credentials",
+      "fullPath": "/api/workspaces/:id/company-members/:userId/credentials"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit-events",
+      "fullPath": "/api/workspaces/:id/audit-events"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit-events/facets",
+      "fullPath": "/api/workspaces/:id/audit-events/facets"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit-events/export",
+      "fullPath": "/api/workspaces/:id/audit-events/export"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/audit-events/verify",
+      "fullPath": "/api/workspaces/:id/audit-events/verify"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit-events/:eventId",
+      "fullPath": "/api/workspaces/:id/audit-events/:eventId"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit",
+      "fullPath": "/api/workspaces/:id/audit"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/audit/export",
+      "fullPath": "/api/workspaces/:id/audit/export"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/search",
+      "fullPath": "/api/workspaces/:id/search"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/issues",
+      "fullPath": "/api/workspaces/:id/issues"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/my-tasks",
+      "fullPath": "/api/workspaces/:id/my-tasks"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/daily-tracker",
+      "fullPath": "/api/workspaces/:id/daily-tracker"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/daily-tracker/people",
+      "fullPath": "/api/workspaces/:id/daily-tracker/people"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/checkins/pending",
+      "fullPath": "/api/workspaces/:id/checkins/pending"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "GET",
+      "subpath": "/:id/leave-days",
+      "fullPath": "/api/workspaces/:id/leave-days"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "POST",
+      "subpath": "/:id/leave-days",
+      "fullPath": "/api/workspaces/:id/leave-days"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "PATCH",
+      "subpath": "/:id/leave-days/:leaveId",
+      "fullPath": "/api/workspaces/:id/leave-days/:leaveId"
+    },
+    {
+      "file": "workspaces.js",
+      "method": "DELETE",
+      "subpath": "/:id/leave-days/:leaveId",
+      "fullPath": "/api/workspaces/:id/leave-days/:leaveId"
+    }
+  ],
+  "count": 168
+}

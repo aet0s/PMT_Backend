@@ -109,7 +109,8 @@ function initSocket(server) {
     try {
       const cookieHeader = socket.handshake.headers.cookie;
       const cookies = parseCookies(cookieHeader);
-      const token = socket.handshake.auth?.token || socket.handshake.query?.token || cookies.token;
+      // Authenticate via HttpOnly cookie (or short-lived ticket if provided). Query params are rejected.
+      const token = cookies.token || socket.handshake.auth?.ticket || socket.handshake.auth?.token;
 
       if (!token) {
         return next(new Error('unauthorized'));

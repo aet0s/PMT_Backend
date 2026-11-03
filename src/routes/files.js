@@ -226,6 +226,38 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
 
     const effectiveTenantId = tenantId || userTenantId || 1;
 
+    // Verify user authorization before issuing preview token
+    const { userHasPermission } = require('../middleware/permissions');
+    if (subpath.startsWith('workspaces/')) {
+      const wsMatch = subpath.match(/^workspaces\/ws_(\d+)_/);
+      if (wsMatch) {
+        const wsId = Number(wsMatch[1]);
+        const hasWsView = await userHasPermission(req.user.id, wsId, 'workspace.view', req.db);
+        if (!hasWsView) {
+          return res.status(403).json({ error: { message: 'Access denied: workspace.view required', code: 'FORBIDDEN' } });
+        }
+      }
+    } else if (subpath.startsWith('cards/')) {
+      const cardMatch = subpath.match(/^cards\/(\d+)\//);
+      if (cardMatch) {
+        const cardId = Number(cardMatch[1]);
+        const cardRows = await req.db.query(
+          `SELECT l.board_id, b.workspace_id FROM cards c
+           JOIN lists l ON c.list_id = l.id
+           JOIN boards b ON l.board_id = b.id
+           WHERE c.id = ?`,
+          [cardId]
+        );
+        if (cardRows.length > 0) {
+          const hasView = await userHasPermission(req.user.id, cardRows[0].workspace_id, 'file.view', req.db, cardRows[0].board_id)
+            || await userHasPermission(req.user.id, cardRows[0].workspace_id, 'attachment.view', req.db, cardRows[0].board_id);
+          if (!hasView) {
+            return res.status(403).json({ error: { message: 'Access denied: attachment.view required', code: 'FORBIDDEN' } });
+          }
+        }
+      }
+    }
+
     const token = jwt.sign(
       {
         purpose: 'file_preview',
@@ -234,13 +266,13 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
         userId: req.user.id
       },
       getJwtSecret(),
-      { expiresIn: '2h' }
+      { expiresIn: '15m' }
     );
 
     return res.json({
       token,
       normalized_path: `/api/files/${effectiveTenantId}/${subpath}`,
-      expires_in: 7200
+      expires_in: 900
     });
   } catch (err) {
     next(err);
@@ -250,7 +282,7 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
 // Middleware: allow valid requireAuth, valid signed ?token=..., OR public avatar images
 async function authOrPreviewToken(req, res, next) {
   const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
-  if (relativeSubpath.startsWith('avatars/') || relativeSubpath.startsWith('workspaces/')) {
+  if (relativeSubpath.startsWith('avatars/')) {
     req.isAvatarRequest = true;
     return next();
   }
@@ -260,14 +292,21 @@ async function authOrPreviewToken(req, res, next) {
       const payload = jwt.verify(req.query.token, getJwtSecret());
       if (
         payload.purpose === 'file_preview' &&
-        Number(payload.tenantId) === Number(req.params.tenantId)
+        Number(payload.tenantId) === Number(req.params.tenantId) &&
+        payload.subpath === relativeSubpath
       ) {
         req.isPreviewToken = true;
         req.tenant = { id: payload.tenantId };
         return next();
+      } else {
+        return res.status(403).json({
+          error: { message: 'Access denied: Preview token does not match requested resource', code: 'FORBIDDEN' }
+        });
       }
     } catch {
-      // Invalid token, fall through to requireAuth
+      return res.status(401).json({
+        error: { message: 'Invalid or expired preview token', code: 'UNAUTHORIZED' }
+      });
     }
   }
   return requireAuth(req, res, next);
@@ -340,9 +379,20 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
     const { userHasPermission } = require('../middleware/permissions');
 
     if (!req.isPreviewToken && !req.isAvatarRequest) {
-      // All non-avatar files (cards attachments, etc.) require board membership + file.view
-      let boardId = null;
-      let workspaceId = null;
+      if (relativeSubpath.startsWith('workspaces/')) {
+        const wsMatch = relativeSubpath.match(/^workspaces\/ws_(\d+)_/);
+        if (!wsMatch) {
+          return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
+        }
+        const wsId = Number(wsMatch[1]);
+        const hasWsView = await userHasPermission(req.user.id, wsId, 'workspace.view', req.db);
+        if (!hasWsView) {
+          return res.status(403).json({ error: { message: 'Access denied: workspace.view required', code: 'FORBIDDEN' } });
+        }
+      } else {
+        // All non-avatar files (cards attachments, etc.) require board membership + file.view
+        let boardId = null;
+        let workspaceId = null;
 
         const fileUrl = `/api/files/${requestedTenantId}/${relativeSubpath}`;
         const attRows = await req.db.query(
@@ -388,6 +438,7 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
           });
         }
       }
+    }
   } catch (dbErr) {
     console.error('[FILES_DB_ERR]', dbErr.message);
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });

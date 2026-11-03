@@ -110,10 +110,10 @@ app.use((req, res, next) => {
     } else {
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, x-origin-id, x-client-mutation-id, X-Requested-With, Accept, Origin, Cache-Control, X-Request-Id, X-Forwarded-For, x-tenant-id, x-tenant-slug'
+        'Content-Type, Authorization, X-CSRF-Token, x-origin-id, x-client-mutation-id, X-Requested-With, Accept, Origin, Cache-Control, X-Request-Id, X-Forwarded-For, x-tenant-id, x-tenant-slug'
       );
     }
-    res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id, Date, X-Server-Time');
+    res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id, Date, X-Server-Time, X-CSRF-Token');
     res.setHeader('Access-Control-Max-Age', '86400');
 
     // Respond immediately to OPTIONS preflight requests
@@ -145,7 +145,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposedHeaders: ['X-Request-Id', 'Date', 'X-Server-Time'],
+    exposedHeaders: ['X-Request-Id', 'Date', 'X-Server-Time', 'X-CSRF-Token'],
     maxAge: 86400
   })
 );
@@ -155,21 +155,28 @@ app.use((req, res, next) => {
   next();
 });
 
-const { csrfProtection } = require('./middleware/csrf');
-app.use(csrfProtection(getAllowedOrigins));
-
 app.use(cookieParser());
+
+const { csrfProtection, injectCsrfCookie } = require('./middleware/csrf');
+app.use((req, res, next) => {
+  injectCsrfCookie(req, res);
+  next();
+});
+app.use(csrfProtection(getAllowedOrigins));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Dedicated server time endpoint for instant client synchronization
 app.get('/api/time', (req, res) => {
   const now = new Date();
+  const csrf = req.cookies?.csrfToken || res.getHeader('X-CSRF-Token') || null;
   res.json({
     server_time: now.toISOString(),
     serverTime: now.toISOString(),
     server_time_ms: now.getTime(),
-    timezone: process.env.APP_TIMEZONE || process.env.TZ || 'Asia/Kolkata'
+    timezone: process.env.APP_TIMEZONE || process.env.TZ || 'Asia/Kolkata',
+    csrfToken: csrf,
+    csrf_token: csrf
   });
 });
 
@@ -184,30 +191,168 @@ app.use('/uploads', (req, res) => {
   });
 });
 
-// API Routes
-app.use('/api/auth', authRouter);
-app.use('/api/workspaces', workspacesRouter);
-app.use('/api/boards', boardsRouter);
-app.use('/api/lists', listsRouter);
-app.use('/api/cards', cardsRouter);
-app.use('/api/archive', archiveRouter);
-app.use('/api/archived', archiveRouter);
-app.use('/api/attachments', attachmentsRouter);
-app.use('/api/invitations', invitationsRouter);
-app.use('/api/notifications', notificationsRouter);
-app.use('/api/permissions', permissionsRouter);
-app.use('/api/roles', rolesRouter);
-app.use('/api/files', filesRouter);
-app.use('/api/push', pushRouter);
-app.use('/api', checkinsRouter);
 
-// POST /api/upload - Standalone file upload endpoint
-app.post('/api/upload', requireAuth, upload.single('file'), async (req, res, next) => {
+// Public RSA key for hybrid encryption envelope
+app.get('/keys/server-public.pem', (req, res) => {
+  const pubPath = path.resolve(__dirname, '../keys/public.pem');
+  if (fs.existsSync(pubPath)) {
+    res.setHeader('Content-Type', 'application/x-pem-file');
+    return res.sendFile(pubPath);
+  }
+  const clientPubPath = path.resolve(__dirname, '../../client/public/keys/server-public.pem');
+  if (fs.existsSync(clientPubPath)) {
+    res.setHeader('Content-Type', 'application/x-pem-file');
+    return res.sendFile(clientPubPath);
+  }
+  res.status(404).send('Public key not found');
+});
+
+// Encrypted POST-Only Business Gateway (POST /api/secure)
+const { router: secureRouter } = require('./secure/gateway');
+app.use('/api', secureRouter);
+
+// RETIRED: Direct plaintext REST routes are permanently disabled.
+// All business operations must use POST /api/secure with hybrid encryption.
+
+// POST /api/upload - Standalone file upload endpoint supporting 'file', 'icon', and 'avatar' fields
+function detectImageMagicBytes(buffer) {
+  if (!buffer || buffer.length < 8) return null;
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return 'image/jpeg';
+  if (
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47 &&
+    buffer[4] === 0x0D && buffer[5] === 0x0A && buffer[6] === 0x1A && buffer[7] === 0x0A
+  ) return 'image/png';
+  const header6 = buffer.slice(0, 6).toString('ascii');
+  if (header6 === 'GIF87a' || header6 === 'GIF89a') return 'image/gif';
+  if (
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer.length >= 12 && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) return 'image/webp';
+  return null;
+}
+
+const genericUpload = upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'icon', maxCount: 1 },
+  { name: 'avatar', maxCount: 1 }
+]);
+
+app.post('/api/upload', requireAuth, (req, res, next) => {
+  genericUpload(req, res, (err) => {
+    if (err) return next(err);
+    if (!req.file && req.files) {
+      req.file = req.files.file?.[0] || req.files.icon?.[0] || req.files.avatar?.[0];
+    }
+    next();
+  });
+}, async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: { message: 'File is required', code: 'BAD_REQUEST' } });
     }
-    const saved = await localStorage.save(req.file, null, req.tenant ? req.tenant.id : 1);
+
+    const tenantId = req.tenant ? req.tenant.id : 1;
+    const purpose = String(req.body.purpose || '').trim();
+    const { userHasPermission } = require('./middleware/permissions');
+
+    // 1. WORKSPACE ICON UPLOAD
+    if (purpose === 'workspace_icon' || req.body.workspace_id) {
+      const workspaceId = Number(req.body.workspace_id);
+      if (!workspaceId) {
+        return res.status(400).json({ error: { message: 'workspace_id is required for workspace icon upload', code: 'BAD_REQUEST' } });
+      }
+
+      // Max size: 5MB
+      if (req.file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({ error: { message: 'Image must not exceed 5MB', code: 'FILE_TOO_LARGE' } });
+      }
+
+      // Magic bytes check (JPEG, PNG, WebP, GIF, SVG)
+      const verifiedMime = detectImageMagicBytes(req.file.buffer);
+      const isSvg = (req.file.mimetype || '').includes('svg') || (req.file.originalname || '').toLowerCase().endsWith('.svg');
+      if (!verifiedMime && !isSvg) {
+        return res.status(400).json({
+          error: {
+            message: 'Invalid file format. Magic bytes do not match a valid JPEG, PNG, WebP, GIF, or SVG image.',
+            code: 'INVALID_IMAGE_TYPE'
+          }
+        });
+      }
+
+      // Check workspace exists
+      const ws = await req.db.query('SELECT id, name FROM workspaces WHERE id = ?', [workspaceId]);
+      if (!ws || ws.length === 0) {
+        return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+      }
+
+      // Check user membership & workspace.edit permission
+      const hasEdit = await userHasPermission(req.user.id, workspaceId, 'workspace.edit', req.db);
+      if (!hasEdit) {
+        return res.status(403).json({ error: { message: 'Access denied: workspace.edit permission required', code: 'FORBIDDEN' } });
+      }
+
+      const saved = await localStorage.saveWorkspaceIcon(tenantId, workspaceId, req.file);
+      return res.status(201).json({
+        message: 'Workspace icon uploaded successfully',
+        file: {
+          file_name: req.file.originalname,
+          file_url: saved.file_url,
+          file_type: verifiedMime || (isSvg ? 'image/svg+xml' : 'image/png'),
+          file_size_bytes: req.file.size
+        }
+      });
+    }
+
+    // 2. AVATAR UPLOAD
+    if (purpose === 'avatar' || req.body.user_id) {
+      const targetUserId = Number(req.body.user_id) || req.user.id;
+      if (targetUserId !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'owner') {
+        return res.status(403).json({ error: { message: 'Access denied: cannot upload avatar for another user', code: 'FORBIDDEN' } });
+      }
+
+      if (req.file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({ error: { message: 'Image must not exceed 5MB', code: 'FILE_TOO_LARGE' } });
+      }
+
+      const verifiedMime = detectImageMagicBytes(req.file.buffer);
+      if (!verifiedMime) {
+        return res.status(400).json({ error: { message: 'Invalid file format: must be valid image', code: 'INVALID_IMAGE_TYPE' } });
+      }
+
+      const saved = await localStorage.saveAvatar(tenantId, targetUserId, req.file);
+      return res.status(201).json({
+        message: 'Avatar uploaded successfully',
+        file: {
+          file_name: req.file.originalname,
+          file_url: saved.file_url,
+          file_type: verifiedMime,
+          file_size_bytes: req.file.size
+        }
+      });
+    }
+
+    // 3. CARD ATTACHMENT UPLOAD
+    const cardId = req.body.card_id ? Number(req.body.card_id) : null;
+    if (cardId) {
+      const cardRows = await req.db.query(
+        `SELECT c.id, l.board_id, b.workspace_id
+         FROM cards c
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE c.id = ?`,
+        [cardId]
+      );
+      if (!cardRows || cardRows.length === 0) {
+        return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+      }
+      const card = cardRows[0];
+      const hasUpload = await userHasPermission(req.user.id, card.workspace_id, 'attachment.upload', req.db, card.board_id);
+      if (!hasUpload) {
+        return res.status(403).json({ error: { message: 'Access denied: attachment.upload permission required', code: 'FORBIDDEN' } });
+      }
+    }
+
+    const saved = await localStorage.save(req.file, cardId || 'temp', tenantId);
     return res.status(201).json({
       message: 'File uploaded successfully',
       file: {
@@ -268,17 +413,18 @@ if (process.env.NODE_ENV === 'test') {
   });
 }
 
-// Unknown /api route catch-all returns JSON 404
-app.use('/api', (req, res) => {
+// RETIREMENT OF ALL LEGACY PLAINTEXT BUSINESS API ACCESS PATHS
+// Direct access to legacy REST routes is permanently disabled.
+app.all('/api/*', (req, res) => {
   const origin = req.headers.origin;
   if (origin && isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  res.status(404).json({
+  res.status(410).json({
     error: {
-      message: `Endpoint ${req.method} ${req.originalUrl || req.path} not found`,
-      code: 'NOT_FOUND',
+      message: `Endpoint retired: Direct plaintext REST API access to ${req.method} ${req.originalUrl || req.path} has been permanently disabled. All business operations must use POST /api/secure with hybrid encryption.`,
+      code: 'ENDPOINT_RETIRED',
       requestId: req.id
     }
   });
@@ -291,18 +437,44 @@ app.use((err, req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  const status = err.status || (err.name === 'MulterError' ? 400 : 500);
-  const message = err.message || 'Internal Server Error';
-  const code = err.code || (err.name === 'MulterError' ? 'UPLOAD_ERROR' : 'INTERNAL_ERROR');
+
+  // Handle express.json() JSON parse errors gracefully
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({
+      error: {
+        message: 'Malformed JSON payload',
+        code: 'INVALID_JSON',
+        requestId: req.id
+      }
+    });
+  }
+
+  const isMulter = err.name === 'MulterError';
+  const status = Number(err.status || err.statusCode) || (isMulter ? 400 : 500);
 
   if (status >= 500) {
     console.error(`[${req.id || 'NO_REQ_ID'}] Unhandled Server Error:`, err);
-  } else {
-    console.warn(`[${req.id || 'NO_REQ_ID'}] Client Error ${status} (${code}): ${message}`);
+    // Never expose raw exception messages, stack traces, or internal errors to clients
+    return res.status(status).json({
+      error: {
+        message: 'Internal Server Error',
+        code: 'INTERNAL_ERROR',
+        requestId: req.id
+      }
+    });
   }
 
-  res.status(status).json({
-    error: { message, code, requestId: req.id }
+  const message = err.message || 'Bad Request';
+  const code = err.code || (isMulter ? 'UPLOAD_ERROR' : 'BAD_REQUEST');
+
+  console.warn(`[${req.id || 'NO_REQ_ID'}] Client Error ${status} (${code}): ${message}`);
+
+  return res.status(status).json({
+    error: {
+      message,
+      code,
+      requestId: req.id
+    }
   });
 });
 

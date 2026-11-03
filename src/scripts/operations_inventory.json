@@ -1,0 +1,1845 @@
+[
+  {
+    "name": "archive.list",
+    "domain": "archive",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.2fa.confirm",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "code"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.2fa.disable",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "password"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.2fa.generate",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.2fa.status",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.2fa.verify_login",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "temp_token",
+      "code"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.activity",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.check_email",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.forgot_password.reset",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "token",
+      "password"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.forgot_password.send_otp",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.forgot_password.verify_otp",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email",
+      "otp"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.forgot_password.verify_token",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "token"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.login",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email",
+      "password",
+      "company_slug",
+      "rememberMe"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.logout",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.logout_all",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.me",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.password.update",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "currentPassword",
+      "newPassword"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.profile.update",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "name",
+      "avatar_url"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.refresh",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.register",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "name",
+      "email",
+      "password",
+      "company_name"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.register.send_otp",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.register.verify_otp",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "email",
+      "otp"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.register_company",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "auth.sessions.list",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.sessions.revoke",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "session_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.sessions.revoke_others",
+    "domain": "auth",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "auth.verify_registration",
+    "domain": "auth",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "boards.archive",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.archived",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.attachments",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.create",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "workspace_id",
+      "name",
+      "title"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.delete",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.get",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.labels.create",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.labels.delete",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "label_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.labels.list",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.labels.update",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "label_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.list",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.members.add",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.members.list",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.members.remove",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.members.update_role",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.mention_candidates",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.restore",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.update",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "boards.workspace_members",
+    "domain": "boards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.assigners.assign",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.attachments.create",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.attachments.delete",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "attachment_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.attachments.file",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.attachments.link",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.attachments.list",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checkins.answer",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "review_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checkins.create",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checkins.list",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checkins.review",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "checkin_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checkins.update",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id",
+      "checkin_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.create",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id",
+      "title"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.delete",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "checklist_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.items.create",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "checklist_id",
+      "title"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.items.delete",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "item_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.items.update",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "item_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.checklists.list",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.copy",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.create",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "list_id",
+      "title",
+      "name"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.delete",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.get",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.labels.assign",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.members.assign",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.move",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "cards.update",
+    "domain": "cards",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "comments.candidates",
+    "domain": "comments",
+    "requireAuth": true,
+    "permission": "comment.view",
+    "schemaFields": [
+      "card_id",
+      "query",
+      "limit"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "comments.create",
+    "domain": "comments",
+    "requireAuth": true,
+    "permission": "comment.create",
+    "schemaFields": [
+      "card_id",
+      "body",
+      "parent_comment_id",
+      "mentions"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "comments.delete",
+    "domain": "comments",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "comment_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "comments.list",
+    "domain": "comments",
+    "requireAuth": true,
+    "permission": "comment.view",
+    "schemaFields": [
+      "card_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "comments.update",
+    "domain": "comments",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "comment_id",
+      "body"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "files.avatar",
+    "domain": "files",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "files.download",
+    "domain": "files",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "file_id",
+      "attachment_id",
+      "file_path",
+      "tenant_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "files.preview_token",
+    "domain": "files",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "gateway.ping",
+    "domain": "gateway",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "echo"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "invitations.accept",
+    "domain": "invitations",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "token"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "invitations.create",
+    "domain": "invitations",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "invitations.delete",
+    "domain": "invitations",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "invitation_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "invitations.list",
+    "domain": "invitations",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "invitations.regenerate",
+    "domain": "invitations",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "invitation_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "invitations.resend",
+    "domain": "invitations",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "invitation_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "invitations.verify",
+    "domain": "invitations",
+    "requireAuth": false,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "token"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": true
+  },
+  {
+    "name": "lists.create",
+    "domain": "lists",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id",
+      "name",
+      "title"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "lists.delete",
+    "domain": "lists",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "list_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "lists.update",
+    "domain": "lists",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "list_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.board_mark_all_read",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "board_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.clear_read",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.delete",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "notification_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.list",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.mark_all_read",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.mark_read",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "notification_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.mark_unread",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "notification_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.mute",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.mutes.list",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.preferences.get",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.preferences.update",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.summary",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.unmute",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notifications.unread_count",
+    "domain": "notifications",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "permissions.list",
+    "domain": "permissions",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "permissions.me",
+    "domain": "permissions",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "push.subscriptions.create",
+    "domain": "push",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "push.subscriptions.delete",
+    "domain": "push",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "push.subscriptions.delete_current",
+    "domain": "push",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "push.subscriptions.list",
+    "domain": "push",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "push.test",
+    "domain": "push",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.activity",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.archived",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit.export",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.export",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit_events.export",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.export",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit_events.facets",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit_events.get",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.view",
+    "schemaFields": [
+      "workspace_id",
+      "event_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit_events.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.audit_events.verify",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "audit.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.auto_archive",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.edit",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.checkins_pending",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.assign_boards",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.assign_workspaces",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.remove",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.remove",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.update_credentials",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.company_members.update_role",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.role_assign",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.create",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.create",
+    "schemaFields": [
+      "name",
+      "description"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_tracker",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_tracker_people",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.delete",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.delete",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.get",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.icon.remove",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.edit",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.icon.set",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.edit",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.invitations.create",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.invitations.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.issues",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.leave_days.create",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.leave_days.delete",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id",
+      "leave_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.leave_days.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.leave_days.update",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id",
+      "leave_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.add",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.invite",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.deactivate",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.reactivate",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.remove",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.remove",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.reset_2fa",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.reset_password",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.manage",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.members.update_role",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "member.role_assign",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.my_permissions",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.my_tasks",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.reports",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "reports.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.roles.create",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "role.create",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.roles.delete",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "role.delete",
+    "schemaFields": [
+      "role_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.roles.list",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "role.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.roles.reset_default",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "role.edit",
+    "schemaFields": [
+      "role_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.roles.update",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "role.edit",
+    "schemaFields": [
+      "role_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.search",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.security.get",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.security_manage",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.security.update",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.security_manage",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.update",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.edit",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  }
+]
