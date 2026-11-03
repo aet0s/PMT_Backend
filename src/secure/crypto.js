@@ -13,26 +13,56 @@ let activePrivateKey = null;
 const keyStore = new Map();
 
 function resolvePrivateKeyPath() {
+  const candidatePaths = [];
+
   if (process.env.SERVER_PRIVATE_KEY_PATH) {
-    return path.resolve(process.env.SERVER_PRIVATE_KEY_PATH);
+    candidatePaths.push(path.resolve(process.env.SERVER_PRIVATE_KEY_PATH));
   }
-  return path.resolve(__dirname, '../../keys/private.pem');
+
+  // Persistent external keys outside server deployment directory (preserved across git/tar deploys)
+  candidatePaths.push(path.resolve('/data/projects/pmt/keys/private.pem'));
+  candidatePaths.push(path.resolve(__dirname, '../../../keys/private.pem'));
+  candidatePaths.push(path.resolve(process.cwd(), '../keys/private.pem'));
+  candidatePaths.push(path.resolve('/data/keys/private.pem'));
+
+  // Standard server/keys directory
+  candidatePaths.push(path.resolve(__dirname, '../../keys/private.pem'));
+  candidatePaths.push(path.resolve(process.cwd(), 'keys/private.pem'));
+
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  return process.env.SERVER_PRIVATE_KEY_PATH
+    ? path.resolve(process.env.SERVER_PRIVATE_KEY_PATH)
+    : path.resolve(__dirname, '../../keys/private.pem');
 }
 
 function loadServerKeys() {
-  const keyPath = resolvePrivateKeyPath();
-  if (!fs.existsSync(keyPath)) {
-    const errorMsg = `[FATAL] Server private key file not found at: ${keyPath}`;
-    console.error(errorMsg);
-    throw new Error(errorMsg);
+  let keyPem = '';
+  let keySource = '';
+
+  if (process.env.SERVER_PRIVATE_KEY_PEM) {
+    keyPem = process.env.SERVER_PRIVATE_KEY_PEM.replace(/\\n/g, '\n');
+    keySource = 'environment variable SERVER_PRIVATE_KEY_PEM';
+  } else {
+    const keyPath = resolvePrivateKeyPath();
+    if (!fs.existsSync(keyPath)) {
+      const errorMsg = `[FATAL] Server private key file not found at: ${keyPath}. Store your key at /data/projects/pmt/keys/private.pem or in .env as SERVER_PRIVATE_KEY_PATH=/data/projects/pmt/keys/private.pem to prevent removal during deployment.`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+    keyPem = fs.readFileSync(keyPath, 'utf8');
+    keySource = keyPath;
   }
 
-  const keyPem = fs.readFileSync(keyPath, 'utf8');
   let privKeyObject;
   try {
     privKeyObject = crypto.createPrivateKey(keyPem);
   } catch (err) {
-    throw new Error(`[FATAL] Invalid private key format: ${err.message}`);
+    throw new Error(`[FATAL] Invalid private key format from ${keySource}: ${err.message}`);
   }
 
   if (privKeyObject.asymmetricKeyType !== 'rsa') {
@@ -51,6 +81,27 @@ function loadServerKeys() {
   };
 
   keyStore.set(DEFAULT_KEY_ID, activePrivateKey);
+
+  // Auto-sync public.pem file alongside private key if writable
+  try {
+    const derivedPub = crypto.createPublicKey(privKeyObject).export({ type: 'spki', format: 'pem' });
+    const localKeysDir = path.resolve(__dirname, '../../keys');
+    if (!fs.existsSync(localKeysDir)) {
+      fs.mkdirSync(localKeysDir, { recursive: true });
+    }
+    const localPubFile = path.join(localKeysDir, 'public.pem');
+    if (!fs.existsSync(localPubFile)) {
+      fs.writeFileSync(localPubFile, derivedPub, 'utf8');
+    }
+    // Also sync to persistent external keys directory if it exists
+    const persistentKeysDir = path.resolve('/data/projects/pmt/keys');
+    if (fs.existsSync(persistentKeysDir)) {
+      const persistentPubFile = path.join(persistentKeysDir, 'public.pem');
+      if (!fs.existsSync(persistentPubFile)) {
+        fs.writeFileSync(persistentPubFile, derivedPub, 'utf8');
+      }
+    }
+  } catch (_) {}
 
   // Support secondary key for rotation if provided via SERVER_PREVIOUS_PRIVATE_KEY_PATH
   if (process.env.SERVER_PREVIOUS_PRIVATE_KEY_PATH && fs.existsSync(process.env.SERVER_PREVIOUS_PRIVATE_KEY_PATH)) {

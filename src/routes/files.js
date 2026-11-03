@@ -36,11 +36,17 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
   }
   candidateBases.push(path.resolve(__dirname, '../../uploads'));
   candidateBases.push(path.resolve(__dirname, '../../../uploads'));
+  candidateBases.push(path.resolve(__dirname, '../../../uplaods'));
   candidateBases.push(path.resolve(process.cwd(), 'uploads'));
+  candidateBases.push(path.resolve(process.cwd(), 'uplaods'));
   candidateBases.push(path.resolve(process.cwd(), 'server/uploads'));
+  candidateBases.push(path.resolve(process.cwd(), '../uploads'));
+  candidateBases.push(path.resolve(process.cwd(), '../uplaods'));
   candidateBases.push(path.resolve('/data/projects/pmt/server/uploads'));
   candidateBases.push(path.resolve('/data/projects/pmt/uploads'));
+  candidateBases.push(path.resolve('/data/projects/pmt/uplaods'));
   candidateBases.push(path.resolve('/data/projects/uploads'));
+  candidateBases.push(path.resolve('/data/projects/uplaods'));
 
   const uniqueBases = Array.from(new Set(candidateBases.filter(Boolean)));
 

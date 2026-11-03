@@ -192,17 +192,37 @@ app.use('/uploads', (req, res) => {
 });
 
 
-// Public RSA key for hybrid encryption envelope
-app.get('/keys/server-public.pem', (req, res) => {
-  const pubPath = path.resolve(__dirname, '../keys/public.pem');
-  if (fs.existsSync(pubPath)) {
-    res.setHeader('Content-Type', 'application/x-pem-file');
-    return res.sendFile(pubPath);
-  }
-  const clientPubPath = path.resolve(__dirname, '../../client/public/keys/server-public.pem');
-  if (fs.existsSync(clientPubPath)) {
-    res.setHeader('Content-Type', 'application/x-pem-file');
-    return res.sendFile(clientPubPath);
+// Public RSA key for hybrid encryption envelope (supports both /keys/server-public.pem and /api/public-key)
+app.get(['/keys/server-public.pem', '/api/public-key'], (req, res) => {
+  // 1. If active RSA private key is loaded, dynamically export its public key
+  try {
+    const { getPrivateKey } = require('./secure/crypto');
+    const activeKey = getPrivateKey();
+    if (activeKey && activeKey.keyObject) {
+      const pubPem = crypto.createPublicKey(activeKey.keyObject).export({ type: 'spki', format: 'pem' });
+      res.setHeader('Content-Type', 'application/x-pem-file');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(pubPem);
+    }
+  } catch (_) {}
+
+  // 2. Candidate persistent and local public key file paths
+  const candidatePubs = [
+    process.env.SERVER_PUBLIC_KEY_PATH && path.resolve(process.env.SERVER_PUBLIC_KEY_PATH),
+    path.resolve('/data/projects/pmt/keys/public.pem'),
+    path.resolve(__dirname, '../../keys/public.pem'),
+    path.resolve(__dirname, '../keys/public.pem'),
+    path.resolve(process.cwd(), '../keys/public.pem'),
+    path.resolve(process.cwd(), 'keys/public.pem'),
+    path.resolve(__dirname, '../../client/public/keys/server-public.pem')
+  ].filter(Boolean);
+
+  for (const pubPath of candidatePubs) {
+    if (fs.existsSync(pubPath)) {
+      res.setHeader('Content-Type', 'application/x-pem-file');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.sendFile(pubPath);
+    }
   }
   res.status(404).send('Public key not found');
 });
