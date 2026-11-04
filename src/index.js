@@ -245,6 +245,13 @@ app.get(['/keys/server-public.pem', '/api/public-key'], (req, res) => {
 const { router: secureRouter } = require('./secure/gateway');
 app.use('/api', secureRouter);
 
+// Direct authenticated file download, avatar serving, and preview tokens
+app.use('/api/files', filesRouter);
+
+// Card multipart file attachments, links, and direct attachment deletion
+app.use('/api/cards', cardsRouter);
+app.use('/api/attachments', attachmentsRouter);
+
 // RETIRED: Direct plaintext REST routes are permanently disabled.
 // All business operations must use POST /api/secure with hybrid encryption.
 
