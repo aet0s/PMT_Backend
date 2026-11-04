@@ -167,7 +167,7 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
       [session.family_id]
     );
 
-    if (activeInFamily && activeInFamily.count > 0 && elapsedSec <= 20) {
+    if (activeInFamily && activeInFamily.count > 0 && elapsedSec <= 60) {
       // Within 20-second rotation race grace window:
       // Return a fresh valid pair for the same family, DO NOT revoke.
       const [user] = await db.query(

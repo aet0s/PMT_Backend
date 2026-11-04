@@ -100,6 +100,28 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
           return directSubfolder;
         }
       } catch {}
+
+      // Fallback for avatar by user ID if exact filename is missing: check for any avatar of this user
+      if (targetFolder === 'avatars') {
+        const avatarMatch = filename.match(/^avatar_(\d+)_/);
+        if (avatarMatch) {
+          const targetUserId = avatarMatch[1];
+          try {
+            const entries = fs.readdirSync(base, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isDirectory()) {
+                const candidateAvatars = path.resolve(base, entry.name, 'avatars');
+                if (fs.existsSync(candidateAvatars)) {
+                  const matched = fs.readdirSync(candidateAvatars).filter((f) => f.startsWith(`avatar_${targetUserId}_`)).sort().reverse();
+                  if (matched.length > 0) {
+                    return path.resolve(candidateAvatars, matched[0]);
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+      }
     }
   }
 
@@ -571,6 +593,55 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   return res.sendFile(resolvedPath);
 });
 
+router.resolveValidAvatarUrl = resolveValidAvatarUrl;
+module.exports.resolveValidAvatarUrl = resolveValidAvatarUrl;
 router.resolveUploadFilePath = resolveUploadFilePath;
 module.exports = router;
 module.exports.resolveUploadFilePath = resolveUploadFilePath;
+
+/**
+ * Resolves a valid avatar URL for a user, auto-healing missing or broken URLs.
+ * If current avatar is broken or missing, checks disk for valid avatar.
+ * If none exists, clears users.avatar_url in the database to prevent 404 loops.
+ */
+function resolveValidAvatarUrl(db, tenantId, userId, currentAvatarUrl) {
+  const tId = String(tenantId || 1);
+  if (currentAvatarUrl) {
+    const resolved = resolveUploadFilePath(tId, currentAvatarUrl);
+    if (resolved && fs.existsSync(resolved)) {
+      return currentAvatarUrl;
+    }
+  }
+
+  // Not found or missing on disk: search disk
+  try {
+    const candidateBases = [
+      storage.UPLOADS_DIR,
+      process.env.UPLOADS_DIR && path.resolve(process.env.UPLOADS_DIR),
+      path.resolve('/data/projects/pmt/uploads'),
+      path.resolve(__dirname, '../../uploads'),
+      path.resolve(__dirname, '../../../uploads')
+    ].filter(Boolean);
+
+    for (const base of Array.from(new Set(candidateBases))) {
+      const avatarDir = path.resolve(base, tId, 'avatars');
+      if (fs.existsSync(avatarDir)) {
+        const files = fs.readdirSync(avatarDir);
+        const userFiles = files.filter((f) => f.startsWith(`avatar_${userId}_`)).sort().reverse();
+        if (userFiles.length > 0) {
+          const healed = `/api/files/${tId}/avatars/${userFiles[0]}`;
+          if (db) {
+            db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [healed, userId]).catch(() => {});
+          }
+          return healed;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // If currentAvatarUrl was set but nonexistent on disk, clear dead pointer in database
+  if (currentAvatarUrl && db) {
+    db.query('UPDATE users SET avatar_url = NULL WHERE id = ?', [userId]).catch(() => {});
+  }
+  return null;
+}

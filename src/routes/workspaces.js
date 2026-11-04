@@ -1272,7 +1272,7 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
         id: m.id,
         name: m.name,
         email: m.email,
-        avatar_url: m.avatar_url,
+        avatar_url: resolveValidAvatarUrl(req.db, req.tenant?.id || 1, m.id, m.avatar_url),
         role: m.role_name,
         role_id: m.role_id,
         is_owner: isOwner,
@@ -3303,31 +3303,8 @@ router.get('/:id/company-members', requireAuth, requirePermission('member.view')
         primaryRole = userWorkspaces[0].role || 'Team Member';
       }
 
-      let effectiveAvatar = u.avatar_url;
-      if (!effectiveAvatar) {
-        try {
-          const tenantId = String(req.tenant?.id || 1);
-          const candidateBases = [
-            storage.UPLOADS_DIR,
-            process.env.UPLOADS_DIR && path.resolve(process.env.UPLOADS_DIR),
-            path.resolve('/data/projects/pmt/uploads'),
-            path.resolve(__dirname, '../../uploads')
-          ].filter(Boolean);
-
-          for (const base of Array.from(new Set(candidateBases))) {
-            const avatarDir = path.resolve(base, tenantId, 'avatars');
-            if (fs.existsSync(avatarDir)) {
-              const files = fs.readdirSync(avatarDir);
-              const userFiles = files.filter((f) => f.startsWith(`avatar_${u.id}_`)).sort().reverse();
-              if (userFiles.length > 0) {
-                effectiveAvatar = `/api/files/${tenantId}/avatars/${userFiles[0]}`;
-                req.db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [effectiveAvatar, u.id]).catch(() => {});
-                break;
-              }
-            }
-          }
-        } catch (_) {}
-      }
+      const { resolveValidAvatarUrl } = require('./files');
+      const effectiveAvatar = resolveValidAvatarUrl(req.db, req.tenant?.id || 1, u.id, u.avatar_url);
 
       return {
         id: u.id,
