@@ -121,8 +121,16 @@ const verifyOtpSchema = z.object({
 
 const resetPasswordWithOtpSchema = z.object({
   email: z.string().email('Invalid email address'),
-  reset_token: z.string().min(1, 'Reset token is required'),
-  new_password: z.string().min(1, 'New password is required')
+  reset_token: z.string().optional(),
+  token: z.string().optional(),
+  new_password: z.string().optional(),
+  password: z.string().optional()
+}).refine((d) => d.reset_token || d.token, {
+  message: 'Reset token is required',
+  path: ['reset_token']
+}).refine((d) => d.new_password || d.password, {
+  message: 'New password is required',
+  path: ['new_password']
 });
 
 const loginSchema = z.object({
@@ -1796,7 +1804,9 @@ router.post('/forgot-password/verify-token', validate(verifyForgotPasswordTokenS
 // Step 3: Resets password using verified token and enforces strong password policy
 // -------------------------------------------------------------
 router.post('/forgot-password/reset', authRateLimiter, validate(resetPasswordWithOtpSchema), async (req, res, next) => {
-  const { email, reset_token, new_password } = req.body;
+  const email = req.body.email;
+  const reset_token = req.body.reset_token || req.body.token;
+  const new_password = req.body.new_password || req.body.password;
   const normalizedEmail = normalizeEmail(email);
 
   // Validate reset token

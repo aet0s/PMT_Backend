@@ -33,6 +33,7 @@ const { canResetTarget, isOwnerRole, getRoleRank, isReservedRoleName } = require
 const { syncCompanyOwners, isCompanyOwner } = require('../utils/syncCompanyOwners');
 const { sanitizePlain } = require('../utils/sanitizer');
 const { createInvitationHelper } = require('./invitations');
+const { resolveValidAvatarUrl } = require('./files');
 const {
   PERMISSIONS,
   LEGACY_PERMISSION_ALIASES,

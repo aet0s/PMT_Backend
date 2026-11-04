@@ -203,11 +203,25 @@ registerOperation('auth.forgot_password.verify_token', {
 registerOperation('auth.forgot_password.reset', {
   requireAuth: false,
   schema: z.object({
-    token: z.string().min(1),
-    password: z.string().min(6)
+    email: z.string().optional(),
+    token: z.string().optional(),
+    reset_token: z.string().optional(),
+    password: z.string().optional(),
+    new_password: z.string().optional()
+  }).refine((d) => (d.reset_token || d.token) && (d.new_password || d.password), {
+    message: 'Reset token and new password are required'
   }).passthrough(),
   handler: async (ctx, data) => {
-    return await dispatchInternal(ctx, { method: 'POST', url: '/api/auth/forgot-password/reset', body: data });
+    const token = data.reset_token || data.token;
+    const password = data.new_password || data.password;
+    const body = {
+      ...data,
+      token,
+      reset_token: token,
+      password,
+      new_password: password
+    };
+    return await dispatchInternal(ctx, { method: 'POST', url: '/api/auth/forgot-password/reset', body });
   }
 });
 
