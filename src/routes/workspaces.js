@@ -4387,16 +4387,19 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
   try {
     await syncCompanyOwners(req.db, currentUserId);
 
-    // 1. Fetch user active workspace memberships
+    // 1. Fetch user active workspace memberships (including boards user is member of)
     const userWorkspaces = await req.db.query(
-      `SELECT wm.workspace_id, wm.role, wm.role_id, COALESCE(r.name, wm.role, 'Team Member') as role_name,
-              w.id, w.name
-       FROM workspace_members wm
-       JOIN workspaces w ON wm.workspace_id = w.id
+      `SELECT DISTINCT w.id, w.name,
+              COALESCE(wm.workspace_id, w.id) as workspace_id,
+              COALESCE(r.name, wm.role, 'Team Member') as role_name
+       FROM workspaces w
+       LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = ? AND wm.status != 'deactivated'
        LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-       WHERE wm.user_id = ? AND wm.status != 'deactivated'
+       LEFT JOIN boards b ON b.workspace_id = w.id AND b.is_archived = 0
+       LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
+       WHERE wm.user_id IS NOT NULL OR bm.user_id IS NOT NULL
        ORDER BY w.name ASC`,
-      [currentUserId]
+      [currentUserId, currentUserId]
     );
 
     if (userWorkspaces.length === 0) {
@@ -4703,6 +4706,24 @@ router.get('/:id/my-tasks', requireAuth, async (req, res, next) => {
 
     // Distinct boards for filter dropdown
     const distinctBoardsMap = {};
+    if (allAllowedBoardIds.length > 0) {
+      const allowedBoardRows = await req.db.query(
+        `SELECT b.id, b.name, b.workspace_id, w.name as workspace_name
+         FROM boards b
+         JOIN workspaces w ON b.workspace_id = w.id
+         WHERE b.id IN (?) AND b.is_archived = 0
+         ORDER BY w.name ASC, b.name ASC`,
+        [allAllowedBoardIds]
+      );
+      allowedBoardRows.forEach((b) => {
+        distinctBoardsMap[b.id] = {
+          id: b.id,
+          name: b.name,
+          workspace_id: b.workspace_id,
+          workspace_name: b.workspace_name
+        };
+      });
+    }
     [...formattedAssigned, ...formattedDelegated].forEach((t) => {
       if (t.board_id && !distinctBoardsMap[t.board_id]) {
         distinctBoardsMap[t.board_id] = {

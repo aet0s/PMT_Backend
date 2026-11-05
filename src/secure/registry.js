@@ -756,13 +756,13 @@ registerOperation('workspaces.audit.export', {
 });
 
 registerOperation('workspaces.my_tasks', {
-  permission: 'workspace.view',
   schema: z.object({
-    workspace_id: z.coerce.number().positive()
+    workspace_id: z.union([z.coerce.number().positive(), z.literal('all'), z.string()]).optional()
   }).passthrough(),
   handler: async (ctx, data) => {
     const { workspace_id, ...query } = data;
-    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${workspace_id}/my-tasks`, query });
+    const targetWs = workspace_id || 'all';
+    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${targetWs}/my-tasks`, query });
   }
 });
 
