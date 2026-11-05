@@ -2612,7 +2612,7 @@ router.get('/activity', requireAuth, async (req, res, next) => {
         details: detailsSummary,
         created_at: r.created_at
           ? (typeof r.created_at === 'string' && !r.created_at.endsWith('Z') && !r.created_at.includes('+')
-              ? new Date(r.created_at.replace(' ', 'T') + 'Z').toISOString()
+              ? new Date(r.created_at.replace(' ', 'T') + '+05:30').toISOString()
               : new Date(r.created_at).toISOString())
           : new Date().toISOString()
       };
