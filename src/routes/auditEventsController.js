@@ -252,11 +252,30 @@ async function buildAuditFilter(req, workspaceId) {
     queryParams.push(searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard, searchWildcard);
   }
 
+  // Default noise suppression: exclude generic transport gateway fallback events (POST /api/secure)
+  // unless user explicitly filters for category=system or action=api.mutation or specifies include_api_mutations=true
+  const hasExplicitSystemFilter = req.query.category === 'system' ||
+    (Array.isArray(req.query.category) && req.query.category.includes('system'));
+  const hasExplicitActionFilter = req.query.action === 'api.mutation' ||
+    (Array.isArray(req.query.action) && req.query.action.includes('api.mutation'));
+
+  if (!hasExplicitSystemFilter && !hasExplicitActionFilter && req.query.include_api_mutations !== 'true') {
+    whereConditions.push("(a.action != 'api.mutation' OR (a.entity_label NOT LIKE '%/api/secure%' AND a.entity_label NOT LIKE '%/secure%'))");
+  }
+
   return {
     whereSql: whereConditions.join(' AND '),
     queryParams,
     wsTimezone
   };
+}
+
+function formatOccurredAt(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString();
+  const s = String(val).trim();
+  if (s.endsWith('Z') || s.includes('+')) return s;
+  return s.replace(' ', 'T') + 'Z';
 }
 
 /**
@@ -310,6 +329,7 @@ async function getAuditEvents(req, res, next) {
     // Format events
     const events = rows.map((r) => ({
       ...r,
+      occurred_at: formatOccurredAt(r.occurred_at),
       changes: parseJson(r.changes),
       meta: parseJson(r.meta)
     }));
@@ -391,6 +411,7 @@ async function getAuditEventById(req, res, next) {
 
     const event = {
       ...rawEvent,
+      occurred_at: formatOccurredAt(rawEvent.occurred_at),
       changes: parseJson(rawEvent.changes),
       meta: parseJson(rawEvent.meta)
     };
@@ -434,15 +455,25 @@ async function getAuditEventFacets(req, res, next) {
       }))
     ];
 
-    // 2. Categories with counts
+    // 2. Categories with counts (excluding transport gateway noise)
     const catCounts = await req.db.query(
-      `SELECT category, COUNT(*) as count FROM audit_events WHERE workspace_id = ? GROUP BY category ORDER BY count DESC`,
+      `SELECT category, COUNT(*) as count
+       FROM audit_events
+       WHERE workspace_id = ?
+         AND (action != 'api.mutation' OR (entity_label NOT LIKE '%/api/secure%' AND entity_label NOT LIKE '%/secure%'))
+       GROUP BY category
+       ORDER BY count DESC`,
       [workspaceId]
     );
 
-    // 3. Actions with counts
+    // 3. Actions with counts (excluding transport gateway noise)
     const actionCounts = await req.db.query(
-      `SELECT action, category, COUNT(*) as count FROM audit_events WHERE workspace_id = ? GROUP BY action, category ORDER BY count DESC`,
+      `SELECT action, category, COUNT(*) as count
+       FROM audit_events
+       WHERE workspace_id = ?
+         AND (action != 'api.mutation' OR (entity_label NOT LIKE '%/api/secure%' AND entity_label NOT LIKE '%/secure%'))
+       GROUP BY action, category
+       ORDER BY count DESC`,
       [workspaceId]
     );
 

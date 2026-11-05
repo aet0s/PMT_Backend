@@ -8,6 +8,8 @@ const { getAuditContext } = require('../utils/auditContext');
 // Routine background sweeps, polling checks, or personal notification read status
 // that should not pollute the tamper-proof security audit log with generic api.mutation fallbacks
 const IGNORED_SAFETY_NET_ROUTES = [
+  /\/api\/secure(\/.*)?$/,
+  /\/secure(\/.*)?$/,
   /\/api\/workspaces\/[^/]+\/auto-archive$/,
   /\/api\/notifications\/[^/]+\/read$/,
   /\/api\/notifications\/[^/]+\/unread$/,
@@ -17,6 +19,19 @@ const IGNORED_SAFETY_NET_ROUTES = [
 function auditSafetyNetMiddleware(req, res, next) {
   const mutatingMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
   if (!mutatingMethods.includes(req.method)) {
+    return next();
+  }
+
+  const path = req.originalUrl || req.path || '';
+  if (
+    path === '/api/secure' ||
+    path.startsWith('/api/secure/') ||
+    path === '/secure' ||
+    path.startsWith('/secure/') ||
+    path.includes('/keys/') ||
+    path.includes('/health') ||
+    path.includes('/time')
+  ) {
     return next();
   }
 
