@@ -1229,7 +1229,7 @@ router.post(
 
   try {
     const cardRes = await req.db.query(
-      'SELECT c.title, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
+      'SELECT c.title, c.created_by, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
       [cardId]
     );
     if (cardRes.length === 0) {
@@ -1262,41 +1262,46 @@ router.post(
       [cardId, user_id]
     );
 
-    // Fetch card assigners to identify assigners vs assignees
+    // Fetch card assigners and creator to verify assigner authority:
+    // Only assigners of this card (or creator / manager / tenant owner) can add or remove assignees.
     const assignerRows = await req.db.query(
       'SELECT user_id FROM card_assigners WHERE card_id = ?',
       [cardId]
     );
     const isCallerAssigner = assignerRows.some((a) => Number(a.user_id) === Number(req.user.id));
+    const isCreator = Number(cardRes[0]?.created_by) === Number(req.user.id);
+    const hasBulkEdit = await userHasPermission(req.user.id, workspaceId, 'task.bulk_edit', req.db, boardId, req);
+    const isTenantOwner = Boolean(req.tenant && Number(req.tenant.owner_id) === Number(req.user.id));
+    const isAuthorizedAssigner = isCallerAssigner || isCreator || hasBulkEdit || isTenantOwner;
 
-    const hasGeneralAssign = await userHasPermission(req.user.id, workspaceId, 'task.assign', req.db, boardId, req);
-    const hasFullAssigneeControl = isCallerAssigner || hasGeneralAssign;
-
-    let action = '';
-    if (existing.length > 0) {
-      // Removing an assignee
-      if (!hasFullAssigneeControl) {
-        // 1. Assignee cannot remove themselves from assignee
+    if (!isAuthorizedAssigner) {
+      if (existing.length > 0) {
         if (Number(user_id) === Number(req.user.id)) {
           return res.status(403).json({
             error: {
-              message: 'You cannot remove yourself as an assignee from this card.',
+              message: 'You cannot remove yourself as an assignee from this card. Only card assigners can manage assignees.',
               code: 'FORBIDDEN'
             }
           });
         }
-        // 2. Assignee can only remove extra assignees that they themselves added
-        const memberAssignedBy = existing[0].assigned_by_user_id;
-        if (memberAssignedBy && Number(memberAssignedBy) !== Number(req.user.id)) {
-          return res.status(403).json({
-            error: {
-              message: 'Only the assigner who assigned this member or administrators can remove them.',
-              code: 'FORBIDDEN'
-            }
-          });
-        }
+        return res.status(403).json({
+          error: {
+            message: 'Only card assigners or administrators can remove assignees from this card.',
+            code: 'FORBIDDEN'
+          }
+        });
+      } else {
+        return res.status(403).json({
+          error: {
+            message: 'Only card assigners or administrators can assign members to this card.',
+            code: 'FORBIDDEN'
+          }
+        });
       }
+    }
 
+    let action = '';
+    if (existing.length > 0) {
       await req.db.execute('DELETE FROM card_members WHERE card_id = ? AND user_id = ?', [cardId, user_id]);
       action = 'removed';
       if (boardId) {
@@ -1372,7 +1377,7 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
 
   try {
     const cardRes = await req.db.query(
-      'SELECT c.title, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
+      'SELECT c.title, c.created_by, l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
       [cardId]
     );
     if (cardRes.length === 0) {
@@ -1391,11 +1396,14 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
       [cardId]
     )).map((u) => ({ id: u.id, name: u.name }));
 
-    // Authorization check: Only existing assigners of this card or users with task.assign can modify card assigners
-    const hasGeneralAssign = await userHasPermission(req.user.id, workspaceId, 'task.assign', req.db, boardId, req);
+    // Authorization check: Only existing assigners of this card, creator, or managers can modify card assigners
     const isCallerAssigner = beforeAssigners.some((a) => Number(a.id) === Number(req.user.id));
+    const isCreator = Number(cardRes[0]?.created_by) === Number(req.user.id);
+    const hasBulkEdit = await userHasPermission(req.user.id, workspaceId, 'task.bulk_edit', req.db, boardId, req);
+    const isTenantOwner = Boolean(req.tenant && Number(req.tenant.owner_id) === Number(req.user.id));
+    const isAuthorized = isCallerAssigner || isCreator || hasBulkEdit || isTenantOwner;
 
-    if (!hasGeneralAssign && !isCallerAssigner) {
+    if (!isAuthorized) {
       return res.status(403).json({
         error: {
           message: 'Only card assigners or administrators can modify card assigners.',

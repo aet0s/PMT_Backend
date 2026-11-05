@@ -1,6 +1,7 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
+const { isOwnerRole } = require('../utils/roleRank');
 
 const router = express.Router();
 
@@ -36,11 +37,8 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
       [req.user.id]
     );
 
-    // Global tenant owner or global rank >= 100 Owner role
-    const isGlobalOwner = isTenantOwner || userWorkspaceMemberships.some((m) => {
-      const rName = String(m.role_name || '').toLowerCase();
-      return (m.is_system === 1 && m.rank >= 100) || rName === 'owner' || rName === 'super admin';
-    });
+    // Global tenant owner or global Owner role
+    const isGlobalOwner = isTenantOwner || userWorkspaceMemberships.some((m) => isOwnerRole(m));
 
     // 2. Workspaces accessible to user
     let userWorkspaces = [];
@@ -50,7 +48,7 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
       );
     } else {
       userWorkspaces = userWorkspaceMemberships
-        .filter((m) => m.workspace_is_archived === 0)
+        .filter((m) => !m.workspace_is_archived)
         .map((m) => ({ id: m.workspace_id, name: m.workspace_name }));
     }
 
@@ -117,12 +115,12 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
       LEFT JOIN role_permissions rp ON r.id = rp.role_id
       LEFT JOIN permissions p ON rp.permission_id = p.id AND p.key = 'project.access_all'
-      LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = ? AND (bm.status = 'active' OR bm.status IS NULL)
+      LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = ?
       WHERE b.workspace_id IN (?)
         AND (
           ? = 1
           OR (r.is_system = 1 AND (r.is_editable = 0 OR COALESCE(r.rank, 30) >= 80))
-          OR wm.role IN ('Owner', 'Super Admin', 'Admin')
+          OR COALESCE(r.name, wm.role) IN ('Owner', 'Super Admin', 'Admin')
           OR p.id IS NOT NULL
           OR bm.user_id IS NOT NULL
         )
@@ -137,8 +135,8 @@ router.get('/', requireAuth, requirePermission('archive.view'), async (req, res,
     ]);
 
     const accessibleBoardIds = accessibleBoards.map((b) => b.id);
-    const userBoards = accessibleBoards.filter((b) => b.is_archived === 0);
-    const boardsRes = accessibleBoards.filter((b) => b.is_archived === 1);
+    const userBoards = accessibleBoards.filter((b) => !b.is_archived);
+    const boardsRes = accessibleBoards.filter((b) => Boolean(b.is_archived));
 
     // If a specific board is requested, verify user has access to it
     if (requestedBoardId && !accessibleBoardIds.includes(requestedBoardId)) {

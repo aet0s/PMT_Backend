@@ -2347,7 +2347,7 @@ router.get('/2fa/status', requireAuth, async (req, res, next) => {
 router.get('/activity', requireAuth, async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20)); // Exactly 20 per page default
+    const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 20)); // Exactly 20 per page default, up to 5000 for export
     const offset = (page - 1) * limit;
     const workspaceId = req.query.workspace_id ? Number(req.query.workspace_id) : null;
     const boardId = req.query.board_id ? Number(req.query.board_id) : null;
@@ -2610,7 +2610,11 @@ router.get('/activity', requireAuth, async (req, res, next) => {
         user_agent: meta.user_agent || null,
         metadata: meta,
         details: detailsSummary,
-        created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+        created_at: r.created_at
+          ? (typeof r.created_at === 'string' && !r.created_at.endsWith('Z') && !r.created_at.includes('+')
+              ? new Date(r.created_at.replace(' ', 'T') + 'Z').toISOString()
+              : new Date(r.created_at).toISOString())
+          : new Date().toISOString()
       };
     });
 
