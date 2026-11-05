@@ -2409,13 +2409,37 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
 
     // Section 5.4: Filter active boards via accessibleBoardIds
     const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
+    const canViewTeam = await userHasPermission(req.user.id, workspaceId, 'report.view_team', req.db);
+    const canExport = await userHasPermission(req.user.id, workspaceId, 'report.export', req.db);
     if (allowedBoardIds.length === 0) {
       return res.json({
         workspace: { id: workspaceId, name: ws[0].name },
+        summary: {
+          total_tasks: 0,
+          todo_tasks: 0,
+          in_progress_tasks: 0,
+          review_tasks: 0,
+          completed_tasks: 0,
+          overdue_tasks: 0,
+          due_soon_tasks: 0,
+          no_due_date_tasks: 0,
+          completion_rate: 0,
+          overdue_rate: 0,
+          avg_cycle_days: 0,
+          total_boards: 0,
+          total_members: 0,
+          unassigned_tasks: 0
+        },
         boards: [],
-        summary: { totalTasks: 0, completedTasks: 0, overdueTasks: 0, dueSoonTasks: 0, completionRate: 0 },
-        breakdowns: { byStage: {}, byPriority: {}, byBoard: [] },
-        trends: { tasksCreatedOverTime: [], tasksCompletedOverTime: [] }
+        boards_breakdown: [],
+        status_breakdown: [],
+        stage_breakdown: { todo: 0, in_progress: 0, review: 0, done: 0 },
+        labels_breakdown: { labels: [], unlabeled_tasks: 0 },
+        members_workload: [],
+        overdue_tasks_list: [],
+        velocity: [],
+        can_view_team: Boolean(canViewTeam),
+        can_export: Boolean(canExport)
       });
     }
 
@@ -2597,7 +2621,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
 
     const pipelineCardIds = pipelineCardsRes.map((c) => c.id);
     let cardMembersMap = {};
-    if (pipelineCardIds.length > 0) {
+    if (canViewTeam && pipelineCardIds.length > 0) {
       const cmRes = await req.db.query(
         `SELECT cm.card_id, u.id, u.name, u.email, u.avatar_url
          FROM card_members cm
@@ -2683,10 +2707,10 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        LEFT JOIN board_members bm ON b.id = bm.board_id
        LEFT JOIN lists l ON b.id = l.board_id AND l.is_archived = 0
        LEFT JOIN cards c ON l.id = c.list_id AND c.is_archived = 0 ${timeframeClause}
-       WHERE b.workspace_id = ? AND b.is_archived = 0
+       WHERE b.workspace_id = ? AND b.is_archived = 0 ${boardClause}
        GROUP BY b.id, b.name, b.background_color
        ORDER BY total_tasks DESC, b.name ASC`,
-      [workspaceId]
+      [workspaceId, ...boardParam]
     );
 
     // Group lists by board
@@ -2758,33 +2782,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
     );
     const unlabeledCount = Number(unlabeledRes[0]?.unlabeled_tasks || 0);
 
-    // 7. Member workload
-    const membersWorkloadRes = await req.db.query(
-      `SELECT
-        u.id,
-        u.name,
-        u.email,
-        u.avatar_url,
-        r.name as role_name,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN c.id END) as assigned_tasks,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN c.id END) as completed_tasks,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%review%' OR LOWER(l.name) LIKE '%qa%' OR LOWER(l.name) LIKE '%test%') THEN c.id END) as review_tasks,
-        COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks
-       FROM workspace_members wm
-       JOIN users u ON wm.user_id = u.id
-       LEFT JOIN roles r ON wm.role_id = r.id
-       LEFT JOIN card_members cm ON u.id = cm.user_id
-       LEFT JOIN cards c ON cm.card_id = c.id AND c.is_archived = 0
-       LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
-       LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id = wm.workspace_id ${boardClause}
-       WHERE wm.workspace_id = ?
-       GROUP BY u.id, u.name, u.email, u.avatar_url, r.name
-       ORDER BY assigned_tasks DESC, u.name ASC`,
-      [...boardParam, workspaceId]
-    );
-
+    // 7. Unassigned tasks count
     const unassignedRes = await req.db.query(
       `SELECT COUNT(DISTINCT c.id) as unassigned_tasks
        FROM cards c
@@ -2800,170 +2798,200 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
     );
     const unassignedCount = Number(unassignedRes[0]?.unassigned_tasks || 0);
 
-    // Fetch all assigned cards for members in this workspace with board & list info
-    const assignedCardsRes = await req.db.query(
-      `SELECT
-        cm.user_id,
-        c.id,
-        c.title,
-        c.due_date,
-        c.is_complete,
-        c.created_at,
-        c.list_id,
-        l.name as list_name,
-        l.position as list_position,
-        b.id as board_id,
-        b.name as board_name,
-        CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
-        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
-        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
-       FROM card_members cm
-       JOIN cards c ON cm.card_id = c.id
-       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
-       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
-         AND c.is_archived = 0
-         ${boardClause}
-       ORDER BY c.due_date ASC, c.created_at DESC`,
-      [workspaceId, ...boardParam]
-    );
+    // 8. Member workload (strictly gated by report.view_team)
+    let membersWorkload = [];
+    if (canViewTeam) {
+      const membersWorkloadRes = await req.db.query(
+        `SELECT
+          u.id,
+          u.name,
+          u.email,
+          u.avatar_url,
+          r.name as role_name,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN c.id END) as assigned_tasks,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN c.id END) as completed_tasks,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%review%' OR LOWER(l.name) LIKE '%qa%' OR LOWER(l.name) LIKE '%test%') THEN c.id END) as review_tasks,
+          COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks
+         FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         LEFT JOIN roles r ON wm.role_id = r.id
+         LEFT JOIN card_members cm ON u.id = cm.user_id
+         LEFT JOIN cards c ON cm.card_id = c.id AND c.is_archived = 0
+         LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+         LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id = wm.workspace_id ${boardClause}
+         WHERE wm.workspace_id = ?
+         GROUP BY u.id, u.name, u.email, u.avatar_url, r.name
+         ORDER BY assigned_tasks DESC, u.name ASC`,
+        [...boardParam, workspaceId]
+      );
 
-    const userTasksMap = {};
-    assignedCardsRes.forEach((row) => {
-      if (!userTasksMap[row.user_id]) userTasksMap[row.user_id] = [];
-      const isDone = Boolean(row.is_effectively_complete);
-      const isOverdue = Boolean(row.is_overdue);
-      const isDueSoon = Boolean(row.is_due_soon);
-      const stage = classifyTaskStage(row.list_name, isDone);
+      // Fetch all assigned cards for members in this workspace with board & list info
+      const assignedCardsRes = await req.db.query(
+        `SELECT
+          cm.user_id,
+          c.id,
+          c.title,
+          c.due_date,
+          c.is_complete,
+          c.created_at,
+          c.list_id,
+          l.name as list_name,
+          l.position as list_position,
+          b.id as board_id,
+          b.name as board_name,
+          CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
+          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+         FROM card_members cm
+         JOIN cards c ON cm.card_id = c.id
+         JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+         JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+         WHERE b.workspace_id = ?
+           AND c.is_archived = 0
+           ${boardClause}
+         ORDER BY c.due_date ASC, c.created_at DESC`,
+        [workspaceId, ...boardParam]
+      );
 
-      userTasksMap[row.user_id].push({
-        id: row.id,
-        title: row.title,
-        due_date: row.due_date,
-        is_complete: isDone,
-        is_overdue: isOverdue,
-        is_due_soon: isDueSoon,
-        list_id: row.list_id,
-        list_name: row.list_name,
-        stage: stage,
-        board_id: row.board_id,
-        board_name: row.board_name,
-        created_at: row.created_at
+      const userTasksMap = {};
+      assignedCardsRes.forEach((row) => {
+        if (!userTasksMap[row.user_id]) userTasksMap[row.user_id] = [];
+        const isDone = Boolean(row.is_effectively_complete);
+        const isOverdue = Boolean(row.is_overdue);
+        const isDueSoon = Boolean(row.is_due_soon);
+        const stage = classifyTaskStage(row.list_name, isDone);
+
+        userTasksMap[row.user_id].push({
+          id: row.id,
+          title: row.title,
+          due_date: row.due_date,
+          is_complete: isDone,
+          is_overdue: isOverdue,
+          is_due_soon: isDueSoon,
+          list_id: row.list_id,
+          list_name: row.list_name,
+          stage: stage,
+          board_id: row.board_id,
+          board_name: row.board_name,
+          created_at: row.created_at
+        });
       });
-    });
 
-    // 7b. Cards Created / Reported by Members (Tracks Tester, QA, and Manager activity)
-    const createdCardsRes = await req.db.query(
-      `SELECT
-        ca.user_id,
-        c.id,
-        c.title,
-        c.due_date,
-        c.is_complete,
-        c.created_at,
-        c.list_id,
-        l.name as list_name,
-        l.position as list_position,
-        b.id as board_id,
-        b.name as board_name,
-        CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
-        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
-        CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
-       FROM (
-         SELECT user_id, card_id FROM card_assigners
-         UNION
-         SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
-       ) ca
-       JOIN cards c ON ca.card_id = c.id
-       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
-       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
-         AND c.is_archived = 0
-         ${boardClause}
-         ${timeframeClause}
-       ORDER BY c.created_at DESC`,
-      [workspaceId, ...boardParam]
-    );
+      // Cards Created / Reported by Members (Tracks Tester, QA, and Manager activity)
+      const createdCardsRes = await req.db.query(
+        `SELECT
+          ca.user_id,
+          c.id,
+          c.title,
+          c.due_date,
+          c.is_complete,
+          c.created_at,
+          c.list_id,
+          l.name as list_name,
+          l.position as list_position,
+          b.id as board_id,
+          b.name as board_name,
+          CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
+          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+          CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
+         FROM (
+           SELECT user_id, card_id FROM card_assigners
+           UNION
+           SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
+         ) ca
+         JOIN cards c ON ca.card_id = c.id
+         JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
+         JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+         WHERE b.workspace_id = ?
+           AND c.is_archived = 0
+           ${boardClause}
+           ${timeframeClause}
+         ORDER BY c.created_at DESC`,
+        [workspaceId, ...boardParam]
+      );
 
-    const userCreatedCardsMap = {};
-    createdCardsRes.forEach((row) => {
-      if (!userCreatedCardsMap[row.user_id]) userCreatedCardsMap[row.user_id] = [];
-      const isDone = Boolean(row.is_effectively_complete);
-      const isOverdue = Boolean(row.is_overdue);
-      const isDueSoon = Boolean(row.is_due_soon);
-      const stage = classifyTaskStage(row.list_name, isDone);
+      const userCreatedCardsMap = {};
+      createdCardsRes.forEach((row) => {
+        if (!userCreatedCardsMap[row.user_id]) userCreatedCardsMap[row.user_id] = [];
+        const isDone = Boolean(row.is_effectively_complete);
+        const isOverdue = Boolean(row.is_overdue);
+        const isDueSoon = Boolean(row.is_due_soon);
+        const stage = classifyTaskStage(row.list_name, isDone);
 
-      userCreatedCardsMap[row.user_id].push({
-        id: row.id,
-        title: row.title,
-        due_date: row.due_date,
-        is_complete: isDone,
-        is_overdue: isOverdue,
-        is_due_soon: isDueSoon,
-        list_id: row.list_id,
-        list_name: row.list_name,
-        stage: stage,
-        board_id: row.board_id,
-        board_name: row.board_name,
-        created_at: row.created_at,
-        members: cardMembersMap[row.id] || []
+        userCreatedCardsMap[row.user_id].push({
+          id: row.id,
+          title: row.title,
+          due_date: row.due_date,
+          is_complete: isDone,
+          is_overdue: isOverdue,
+          is_due_soon: isDueSoon,
+          list_id: row.list_id,
+          list_name: row.list_name,
+          stage: stage,
+          board_id: row.board_id,
+          board_name: row.board_name,
+          created_at: row.created_at,
+          members: cardMembersMap[row.id] || []
+        });
       });
-    });
 
-    const membersWorkload = membersWorkloadRes.map((m) => {
-      const assigned = Number(m.assigned_tasks || 0);
-      const completed = Number(m.completed_tasks || 0);
-      const overdue = Number(m.overdue_tasks || 0);
-      const inProgress = Number(m.in_progress_tasks || 0);
-      const todo = Number(m.todo_tasks || 0);
-      const review = Number(m.review_tasks || 0);
-      const userTasks = userTasksMap[m.id] || [];
+      membersWorkload = membersWorkloadRes.map((m) => {
+        const assigned = Number(m.assigned_tasks || 0);
+        const completed = Number(m.completed_tasks || 0);
+        const overdue = Number(m.overdue_tasks || 0);
+        const inProgress = Number(m.in_progress_tasks || 0);
+        const todo = Number(m.todo_tasks || 0);
+        const review = Number(m.review_tasks || 0);
+        const userTasks = userTasksMap[m.id] || [];
 
-      const userCreatedCards = userCreatedCardsMap[m.id] || [];
-      const createdTasksCount = userCreatedCards.length;
-      const createdCompletedCount = userCreatedCards.filter((t) => t.is_complete).length;
-      const createdTodoCount = userCreatedCards.filter((t) => t.stage === 'todo' && !t.is_complete).length;
-      const createdInProgressCount = userCreatedCards.filter((t) => (t.stage === 'in_progress' || t.stage === 'review') && !t.is_complete).length;
-      const createdOverdueCount = userCreatedCards.filter((t) => t.is_overdue).length;
-      const createdResolutionRate = createdTasksCount > 0 ? Math.round((createdCompletedCount / createdTasksCount) * 100) : 0;
+        const userCreatedCards = userCreatedCardsMap[m.id] || [];
+        const createdTasksCount = userCreatedCards.length;
+        const createdCompletedCount = userCreatedCards.filter((t) => t.is_complete).length;
+        const createdTodoCount = userCreatedCards.filter((t) => t.stage === 'todo' && !t.is_complete).length;
+        const createdInProgressCount = userCreatedCards.filter((t) => (t.stage === 'in_progress' || t.stage === 'review') && !t.is_complete).length;
+        const createdOverdueCount = userCreatedCards.filter((t) => t.is_overdue).length;
+        const createdResolutionRate = createdTasksCount > 0 ? Math.round((createdCompletedCount / createdTasksCount) * 100) : 0;
 
-      // Board distribution for this user
-      const userBoardsMap = {};
-      userTasks.forEach((t) => {
-        if (!userBoardsMap[t.board_id]) {
-          userBoardsMap[t.board_id] = { id: t.board_id, name: t.board_name, task_count: 0, completed_count: 0 };
-        }
-        userBoardsMap[t.board_id].task_count++;
-        if (t.is_complete) userBoardsMap[t.board_id].completed_count++;
+        // Board distribution for this user
+        const userBoardsMap = {};
+        userTasks.forEach((t) => {
+          if (!userBoardsMap[t.board_id]) {
+            userBoardsMap[t.board_id] = { id: t.board_id, name: t.board_name, task_count: 0, completed_count: 0 };
+          }
+          userBoardsMap[t.board_id].task_count++;
+          if (t.is_complete) userBoardsMap[t.board_id].completed_count++;
+        });
+        const userBoards = Object.values(userBoardsMap);
+        const dueSoon = userTasks.filter((t) => t.is_due_soon).length;
+
+        return {
+          id: m.id,
+          name: m.name,
+          email: m.email,
+          avatar_url: m.avatar_url,
+          role: m.role_name || 'Member',
+          assigned_tasks: assigned,
+          todo_tasks: todo,
+          in_progress_tasks: inProgress,
+          review_tasks: review,
+          completed_tasks: completed,
+          overdue_tasks: overdue,
+          due_soon_tasks: dueSoon,
+          completion_rate: assigned > 0 ? Math.round((completed / assigned) * 100) : 0,
+          created_tasks: createdTasksCount,
+          created_completed_tasks: createdCompletedCount,
+          created_todo_tasks: createdTodoCount,
+          created_in_progress_tasks: createdInProgressCount,
+          created_overdue_tasks: createdOverdueCount,
+          created_resolution_rate: createdResolutionRate,
+          created_cards: userCreatedCards,
+          boards: userBoards,
+          tasks: userTasks
+        };
       });
-      const userBoards = Object.values(userBoardsMap);
-      const dueSoon = userTasks.filter((t) => t.is_due_soon).length;
-
-      return {
-        id: m.id,
-        name: m.name,
-        email: m.email,
-        avatar_url: m.avatar_url,
-        role: m.role_name || 'Member',
-        assigned_tasks: assigned,
-        todo_tasks: todo,
-        in_progress_tasks: inProgress,
-        review_tasks: review,
-        completed_tasks: completed,
-        overdue_tasks: overdue,
-        due_soon_tasks: dueSoon,
-        completion_rate: assigned > 0 ? Math.round((completed / assigned) * 100) : 0,
-        created_tasks: createdTasksCount,
-        created_completed_tasks: createdCompletedCount,
-        created_todo_tasks: createdTodoCount,
-        created_in_progress_tasks: createdInProgressCount,
-        created_overdue_tasks: createdOverdueCount,
-        created_resolution_rate: createdResolutionRate,
-        created_cards: userCreatedCards,
-        boards: userBoards,
-        tasks: userTasks
-      };
-    });
+    }
 
     // 8. Overdue Tasks detailed list
     const overdueTasksRes = await req.db.query(
@@ -2991,10 +3019,10 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
       [workspaceId, ...boardParam]
     );
 
-    // Attach assignees for overdue tasks
+    // Attach assignees for overdue tasks (only if authorized to view team info)
     const overdueTaskIds = overdueTasksRes.map((t) => t.id);
     let overdueMembersMap = {};
-    if (overdueTaskIds.length > 0) {
+    if (canViewTeam && overdueTaskIds.length > 0) {
       const ovmRes = await req.db.query(
         `SELECT cm.card_id, u.id as user_id, u.name, u.email
          FROM card_members cm
@@ -3108,9 +3136,11 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         })),
         unlabeled_tasks: unlabeledCount
       },
-      members_workload: membersWorkload,
+      members_workload: canViewTeam ? membersWorkload : [],
       overdue_tasks_list: overdueTasksList,
-      velocity: past7Days
+      velocity: past7Days,
+      can_view_team: Boolean(canViewTeam),
+      can_export: Boolean(canExport)
     });
   } catch (err) {
     next(err);

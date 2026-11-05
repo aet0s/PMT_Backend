@@ -241,6 +241,26 @@ async function safeQuery(db, sql, params = []) {
           [rRow.id]
         );
       }
+
+      // Explicitly enforce that Team Member, Viewer, and Guest cannot have reporting permissions
+      if (['Team Member', 'Viewer', 'Guest'].includes(roleName)) {
+        await db.execute(
+          `DELETE rp FROM role_permissions rp
+           JOIN permissions p ON rp.permission_id = p.id
+           WHERE rp.role_id = ? AND (p.\`key\` LIKE 'report.%')`,
+          [rRow.id]
+        );
+      }
+
+      // Explicitly enforce that Auditor cannot have report.view_team
+      if (roleName === 'Auditor') {
+        await db.execute(
+          `DELETE rp FROM role_permissions rp
+           JOIN permissions p ON rp.permission_id = p.id
+           WHERE rp.role_id = ? AND p.\`key\` = 'report.view_team'`,
+          [rRow.id]
+        );
+      }
     }
 
     return {

@@ -175,7 +175,7 @@ const PERMISSIONS = [
 
   // --- Report ---
   { key: 'report.view_project', module: 'report', label: 'View Project Reports', description: 'View task velocity and project progress', scope: 'project', dangerous: false },
-  { key: 'report.view_team', module: 'report', label: 'View Team Reports', description: 'View team workload and allocations', scope: 'company', dangerous: false, planned: true },
+  { key: 'report.view_team', module: 'report', label: 'View Team Reports', description: 'View team workload and allocations', scope: 'company', dangerous: false, planned: false },
   { key: 'report.view_all', module: 'report', label: 'View All Reports', description: 'Access cross-project organization reports', scope: 'company', dangerous: false, planned: true },
   { key: 'report.export', module: 'report', label: 'Export Reports', description: 'Download PDF and CSV reports', scope: 'company', dangerous: false, planned: false },
   { key: 'report.create_custom', module: 'report', label: 'Create Custom Reports', description: 'Build and save custom report configurations', scope: 'company', dangerous: false, planned: true },
@@ -310,7 +310,7 @@ const SYSTEM_ROLES = {
       'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
       'epic.view', 'epic.create', 'epic.edit',
       'time.view_own', 'time.log', 'time.edit_own', 'time.view_all',
-      'report.view_project', 'report.view_team', 'dashboard.view_project',
+      'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.export',
       'archive.view', 'archive.restore', 'activity.view',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
@@ -335,7 +335,7 @@ const SYSTEM_ROLES = {
       'label.view', 'label.create', 'label.delete_own',
       'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
       'time.view_own', 'time.log', 'time.edit_own',
-      'report.view_project', 'dashboard.view_project',
+      'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete',
       'archive.view', 'archive.restore', 'activity.view',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
@@ -352,7 +352,7 @@ const SYSTEM_ROLES = {
       'workspace.view', 'company.view', 'member.view', 'team.view',
       'project.view', 'task.view', 'task.watch', 'comment.view', 'attachment.view', 'file.view', 'label.view',
       'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
-      'report.view_project', 'dashboard.view_project', 'view.view', 'activity.view',
+      'dashboard.view_project', 'view.view', 'activity.view',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
@@ -368,7 +368,7 @@ const SYSTEM_ROLES = {
       'project.access_all', 'project.view', 'task.view', 'view.view', 'comment.view', 'attachment.view', 'file.view', 'label.view',
       'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
       'audit.view', 'audit.export', 'archive.view', 'activity.view',
-      'report.view_project', 'report.view_team', 'report.view_all', 'report.export',
+      'report.view_project', 'report.view_all', 'report.export',
       'dashboard.view_project', 'dashboard.view_executive', 'time.view_all',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
