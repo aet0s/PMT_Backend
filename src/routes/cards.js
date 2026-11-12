@@ -244,6 +244,28 @@ async function getFullCard(cardId, dbInstance = null) {
       card.task_number = 1;
     }
 
+    try {
+      const creatorRes = card.created_by
+        ? await db.query('SELECT name FROM users WHERE id = ?', [card.created_by])
+        : [];
+      if (creatorRes.length > 0) {
+        card.created_by_name = creatorRes[0].name;
+      }
+      const actRows = await db.query(
+        `SELECT a.id, a.board_id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at,
+                u.name as user_name, u.avatar_url as user_avatar_url
+         FROM activity_log a
+         LEFT JOIN users u ON a.user_id = u.id
+         WHERE a.card_id = ?
+         ORDER BY a.created_at DESC, a.id DESC
+         LIMIT 100`,
+        [cardId]
+      );
+      card.activities = actRows;
+    } catch (actErr) {
+      card.activities = [];
+    }
+
     return card;
   } catch (err) {
     console.error('Failed to fetch full card:', err);

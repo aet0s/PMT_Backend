@@ -4955,9 +4955,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const whereConditions = [
       'b.workspace_id IN (?)',
       'b.id IN (?)',
-      'b.is_archived = 0',
-      'l.is_archived = 0',
-      'c.is_archived = 0'
+      'b.is_archived = 0'
     ];
     const queryParams = [activeWsIds, allAllowedBoardIds];
 
@@ -4990,7 +4988,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
           SELECT 1 FROM activity_log a
           WHERE a.card_id = c.id
             AND a.created_at >= ? AND a.created_at < ?
-            AND a.action_type IN ('checklist_toggled', 'moved_card', 'attachment_uploaded', 'attachment_added', 'marked_complete')
+            AND a.action_type IN ('checklist_toggled', 'moved_card', 'attachment_uploaded', 'attachment_added', 'marked_complete', 'card_archived', 'card_restored')
             AND (
               a.action_type != 'checklist_toggled'
               OR JSON_UNQUOTE(JSON_EXTRACT(a.meta_json, '$.is_checked')) IN ('true', '1')
@@ -5017,10 +5015,10 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       )`);
       queryParams.push(startUtc, endUtc, startUtc, endUtc, startUtc, endUtc, startUtc, endUtc, targetDate);
     } else if (mode === 'in_progress') {
-      // Bug D fix: use lists.is_done_list = 0
-      whereConditions.push('(c.is_complete = 0 AND l.is_done_list = 0)');
+      // Bug D fix: use lists.is_done_list = 0; only active non-archived cards/lists are ongoing
+      whereConditions.push('(c.is_archived = 0 AND l.is_archived = 0 AND c.is_complete = 0 AND l.is_done_list = 0)');
     } else {
-      // Bug G fix: range predicates instead of DATE(c.created_at) = ?
+      // Bug G fix: range predicates instead of DATE(c.created_at) = ? (preserve archived cards' creation history)
       whereConditions.push('(c.created_at >= ? AND c.created_at < ?)');
       queryParams.push(startUtc, endUtc);
     }
@@ -5146,7 +5144,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         cardLabelsMap[row.card_id].push({ id: row.id, name: row.name, color: row.color });
       });
 
-      // 4. Performance Range Query (Bug K): fetch target range activity AND latest event
+      // 4. Performance Range Query (Bug K): fetch target range activity, archive/restore history, AND latest event
       const actRes = await req.db.query(
         `SELECT a.id, a.card_id, a.user_id, a.action_type, a.meta_json, a.created_at, u.name as user_name
          FROM activity_log a
@@ -5154,9 +5152,10 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
          WHERE a.card_id IN (?)
            AND (
              (a.created_at >= ? AND a.created_at < ?)
+             OR a.action_type IN ('card_archived', 'card_restored')
              OR a.id IN (SELECT MAX(id) FROM activity_log WHERE card_id IN (?) GROUP BY card_id)
            )
-         ORDER BY a.created_at DESC`,
+         ORDER BY a.created_at DESC, a.id DESC`,
         [cardIds, startUtc, endUtc, cardIds]
       );
       actRes.forEach((row) => {
@@ -5320,15 +5319,17 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       const startDate = c.first_moved_or_assigned_at ? new Date(c.first_moved_or_assigned_at) : new Date(c.created_at);
       const daysInProgress = getWorkingDaysBetween(startDate, targetDate, wsWorkingDays, wsHolidays);
 
-      // Inactivity & idle warning in working days
-      const workingDaysSinceActivity = getWorkingDaysBetween(latestActivityAt, targetDate, wsWorkingDays, wsHolidays);
-      if (workingDaysSinceActivity >= 3) {
-        if (!flags.includes('inactivity')) flags.push('inactivity');
-      } else if (workingDaysSinceActivity >= 2) {
-        if (!flags.includes('idle_warning')) flags.push('idle_warning');
-      }
-      if (daysInProgress >= 14) {
-        if (!flags.includes('long_running')) flags.push('long_running');
+      // Inactivity & idle warning in working days (skip for archived/completed cards)
+      if (!c.is_archived && !c.is_complete && c.is_done_list !== 1) {
+        const workingDaysSinceActivity = getWorkingDaysBetween(latestActivityAt, targetDate, wsWorkingDays, wsHolidays);
+        if (workingDaysSinceActivity >= 3) {
+          if (!flags.includes('inactivity')) flags.push('inactivity');
+        } else if (workingDaysSinceActivity >= 2) {
+          if (!flags.includes('idle_warning')) flags.push('idle_warning');
+        }
+        if (daysInProgress >= 14) {
+          if (!flags.includes('long_running')) flags.push('long_running');
+        }
       }
 
       // --- ANTI-CHEAT ENGINE ---
@@ -5508,6 +5509,10 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       // 6. Check-in: For in_progress, prefer the latest check-in across all days; otherwise check-in for targetDate
       const topCheckin = (mode === 'in_progress' ? allCardCheckins[0] : (checkinsToday[0] || allCardCheckins[0])) || null;
 
+      const archivedTodayAct = targetDateActivities.find((a) => a.action_type === 'card_archived') || null;
+      const restoredTodayAct = targetDateActivities.find((a) => a.action_type === 'card_restored') || null;
+      const latestArchiveAct = activities.find((a) => a.action_type === 'card_archived') || null;
+
       // Activity Pill & Genuine Work Evaluation
       let activityPill = null;
       let hasGenuineWork = false;
@@ -5537,18 +5542,31 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       } else if (hasAttachment) {
         activityPill = `📎 File attached${attActor ? ` by ${attActor}` : ''}`;
         hasGenuineWork = true;
+      } else if (archivedTodayAct) {
+        const archActor = archivedTodayAct.user_name ? ` by ${archivedTodayAct.user_name}` : '';
+        activityPill = isCreatedToday
+          ? `Intake by ${c.created_by_name || 'Someone'} • Archived${archActor}`
+          : `Archived${archActor}`;
+        hasGenuineWork = false;
+      } else if (restoredTodayAct) {
+        const restActor = restoredTodayAct.user_name ? ` by ${restoredTodayAct.user_name}` : '';
+        activityPill = `Restored from archive${restActor}`;
+        hasGenuineWork = false;
       } else if (isCreatedToday) {
         // Bug J fix: Card creation is NEVER genuine work; show as Intake by <user>
         const creatorName = c.created_by_name || 'Someone';
-        activityPill = `Intake by ${creatorName}`;
+        activityPill = c.is_archived ? `Intake by ${creatorName} (Archived)` : `Intake by ${creatorName}`;
         hasGenuineWork = false;
       } else {
-        activityPill = 'Active today';
+        activityPill = c.is_archived ? 'Archived' : 'Active today';
         hasGenuineWork = false;
       }
 
       return {
         ...c,
+        is_archived: Boolean(c.is_archived),
+        archived_by_name: latestArchiveAct?.user_name || null,
+        archived_at: latestArchiveAct?.created_at || null,
         boardId: c.board_id,
         workspaceId: c.workspace_id,
         listName: c.list_name,
@@ -5558,6 +5576,7 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         assigned_users: cardMembersMap[c.id] || [],
         assigners: cardAssignersMap[c.id] || [],
         labels: cardLabelsMap[c.id] || [],
+        activities: targetDateActivities,
         days_in_progress: daysInProgress,
         last_activity_at: latestActivityAt.toISOString(),
         activity_pill: activityPill,
