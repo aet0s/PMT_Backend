@@ -2564,6 +2564,33 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       return 'in_progress';
     }
 
+    // Helper to extract clean plain text from HTML descriptions (strips <img> and all HTML tags)
+    function extractPlainText(html, maxLength = 5000) {
+      if (!html) return '';
+      let str = String(html);
+      // Remove <img> tags completely to eliminate heavy base64 data URIs or image markup
+      str = str.replace(/<img[^>]*>/gi, '');
+      // Replace breaks and block elements with spaces
+      str = str.replace(/<br\s*\/?>/gi, ' ');
+      str = str.replace(/<\/(p|div|li|tr|h[1-6])>/gi, ' ');
+      // Strip all remaining HTML tags
+      str = str.replace(/<[^>]+>/g, '');
+      // Decode HTML entities
+      str = str
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'");
+      // Normalize whitespace and newlines into clean single spaces
+      str = str.replace(/\s+/g, ' ').trim();
+      if (maxLength && str.length > maxLength) {
+        return str.substring(0, maxLength);
+      }
+      return str;
+    }
+
     // 2. High-level summary metrics (counts all historical & completed work, including archived tasks)
     const summaryRes = await req.db.query(
       `SELECT
@@ -2665,6 +2692,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       `SELECT
         c.id,
         c.title,
+        c.description,
         c.list_id,
         c.due_date,
         c.is_complete,
@@ -2717,6 +2745,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       listCardsMap[c.list_id].push({
         id: c.id,
         title: c.title,
+        description: extractPlainText(c.description),
+        created_at: c.created_at,
         due_date: c.due_date,
         is_complete: isDone,
         is_overdue: Boolean(c.is_overdue),
@@ -2911,6 +2941,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           cm.user_id,
           c.id,
           c.title,
+          c.description,
           c.due_date,
           c.is_complete,
           c.is_archived,
@@ -2925,15 +2956,15 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           CASE WHEN (c.is_complete = 1 OR l.is_done_list = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
           CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
           CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
-         FROM card_members cm
-         JOIN cards c ON cm.card_id = c.id
-         JOIN lists l ON c.list_id = l.id
-         JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-         JOIN workspaces w ON b.workspace_id = w.id
-         WHERE b.workspace_id IN (?)
-           ${boardClause}
-           ${timeframeClause}
-         ORDER BY c.due_date ASC, c.created_at DESC`,
+        FROM card_members cm
+        JOIN cards c ON cm.card_id = c.id
+        JOIN lists l ON c.list_id = l.id
+        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+        JOIN workspaces w ON b.workspace_id = w.id
+        WHERE b.workspace_id IN (?)
+          ${boardClause}
+          ${timeframeClause}
+        ORDER BY c.due_date ASC, c.created_at DESC`,
         [activeWsIds, ...boardParam]
       );
 
@@ -2949,6 +2980,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         userTasksMap[row.user_id].push({
           id: row.id,
           title: row.title,
+          description: extractPlainText(row.description),
           due_date: row.due_date,
           is_complete: isDone,
           is_archived: isArchived,
@@ -2971,6 +3003,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           ca.user_id,
           c.id,
           c.title,
+          c.description,
           c.due_date,
           c.is_complete,
           c.is_archived,
@@ -2985,19 +3018,19 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           CASE WHEN (c.is_complete = 1 OR l.is_done_list = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
           CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
           CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
-         FROM (
-           SELECT user_id, card_id FROM card_assigners
-           UNION
-           SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
-         ) ca
-         JOIN cards c ON ca.card_id = c.id
-         JOIN lists l ON c.list_id = l.id
-         JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-         JOIN workspaces w ON b.workspace_id = w.id
-         WHERE b.workspace_id IN (?)
-           ${boardClause}
-           ${timeframeClause}
-         ORDER BY c.created_at DESC`,
+        FROM (
+          SELECT user_id, card_id FROM card_assigners
+          UNION
+          SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
+        ) ca
+        JOIN cards c ON ca.card_id = c.id
+        JOIN lists l ON c.list_id = l.id
+        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+        JOIN workspaces w ON b.workspace_id = w.id
+        WHERE b.workspace_id IN (?)
+          ${boardClause}
+          ${timeframeClause}
+        ORDER BY c.created_at DESC`,
         [activeWsIds, ...boardParam]
       );
 
@@ -3013,6 +3046,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         userCreatedCardsMap[row.user_id].push({
           id: row.id,
           title: row.title,
+          description: extractPlainText(row.description),
           due_date: row.due_date,
           is_complete: isDone,
           is_archived: isArchived,
@@ -3105,6 +3139,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       `SELECT
         c.id,
         c.title,
+        c.description,
+        c.created_at,
         c.due_date,
         l.name as list_name,
         b.id as board_id,
@@ -3125,7 +3161,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
          ${boardClause}
          ${timeframeClause}
        ORDER BY c.due_date ASC
-       LIMIT 20`,
+       LIMIT 100`,
       [activeWsIds, ...boardParam]
     );
 
@@ -3153,6 +3189,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
     const overdueTasksList = overdueTasksRes.map((t) => ({
       id: t.id,
       title: t.title,
+      description: extractPlainText(t.description),
+      created_at: t.created_at,
       due_date: t.due_date,
       list_name: t.list_name,
       board_id: t.board_id,
@@ -3163,7 +3201,91 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       members: overdueMembersMap[t.id] || []
     }));
 
-    // 9. Daily velocity for past 7 days (including created tasks that were subsequently completed and archived)
+    // 9. All Tasks in scope (for complete inventory and detailed CSV export)
+    const allTasksRes = await req.db.query(
+      `SELECT
+        c.id,
+        c.title,
+        c.description,
+        c.due_date,
+        c.is_complete,
+        c.is_archived,
+        c.created_at,
+        l.id as list_id,
+        l.name as list_name,
+        b.id as board_id,
+        b.name as board_name,
+        w.id as workspace_id,
+        w.name as workspace_name,
+        CASE WHEN (c.is_complete = 1 OR l.is_done_list = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
+        CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
+        CASE WHEN (c.is_archived = 0 AND c.is_complete = 0 AND COALESCE(l.is_done_list, 0) = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon,
+        TIMESTAMPDIFF(DAY, c.due_date, NOW()) as days_overdue
+       FROM cards c
+       JOIN lists l ON c.list_id = l.id
+       JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?)
+         ${boardClause}
+         ${timeframeClause}
+       ORDER BY c.created_at DESC`,
+      [activeWsIds, ...boardParam]
+    );
+
+    const allCardIds = allTasksRes.map((c) => c.id);
+    let allTaskMembersMap = {};
+    if (canViewTeam && allCardIds.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < allCardIds.length; i += chunkSize) {
+        const slice = allCardIds.slice(i, i + chunkSize);
+        const cmRows = await req.db.query(
+          `SELECT cm.card_id, u.id, u.name, u.email
+           FROM card_members cm
+           JOIN users u ON cm.user_id = u.id
+           WHERE cm.card_id IN (${slice.map(() => '?').join(',')})`,
+          slice
+        );
+        cmRows.forEach((row) => {
+          if (!allTaskMembersMap[row.card_id]) allTaskMembersMap[row.card_id] = [];
+          allTaskMembersMap[row.card_id].push({
+            id: row.id,
+            name: row.name,
+            email: row.email
+          });
+        });
+      }
+    }
+
+    const allTasksList = allTasksRes.map((c) => {
+      const isDone = Boolean(c.is_effectively_complete);
+      const isArchived = Boolean(c.is_archived);
+      const isOverdue = Boolean(c.is_overdue);
+      const isDueSoon = Boolean(c.is_due_soon);
+      const stage = classifyTaskStage(c.list_name, isDone, isArchived);
+
+      return {
+        id: c.id,
+        title: c.title,
+        description: extractPlainText(c.description),
+        created_at: c.created_at,
+        due_date: c.due_date,
+        is_complete: isDone,
+        is_archived: isArchived,
+        is_overdue: isOverdue,
+        is_due_soon: isDueSoon,
+        days_overdue: Math.max(0, Number(c.days_overdue || 0)),
+        list_id: c.list_id,
+        list_name: c.list_name,
+        stage: stage,
+        board_id: c.board_id,
+        board_name: c.board_name,
+        workspace_id: c.workspace_id,
+        workspace_name: c.workspace_name,
+        members: allTaskMembersMap[c.id] || []
+      };
+    });
+
+    // 10. Daily velocity for past 7 days (including created tasks that were subsequently completed and archived)
     const dailyVelocityRes = await req.db.query(
       `SELECT
         DATE_FORMAT(c.created_at, '%Y-%m-%d') as date_str,
@@ -3249,6 +3371,7 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       },
       members_workload: canViewTeam ? membersWorkload : [],
       overdue_tasks_list: overdueTasksList,
+      all_tasks_list: allTasksList,
       velocity: past7Days,
       can_view_team: Boolean(canViewTeam),
       can_export: Boolean(canExport)
