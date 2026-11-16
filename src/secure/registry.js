@@ -520,15 +520,15 @@ registerOperation('workspaces.activity', {
 });
 
 registerOperation('workspaces.reports', {
-  permission: 'report.view_project',
   schema: z.object({
-    workspace_id: z.coerce.number().positive(),
+    workspace_id: z.union([z.coerce.number().positive(), z.literal('all'), z.string()]).optional(),
     board_id: z.union([z.coerce.number().positive(), z.literal('all')]).optional(),
     timeframe: z.enum(['all', '7d', '30d', '90d', 'this_month']).optional()
   }).passthrough(),
   handler: async (ctx, data) => {
     const { workspace_id, ...query } = data;
-    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${workspace_id}/reports`, query });
+    const targetWs = workspace_id || 'all';
+    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${targetWs}/reports`, query });
   }
 });
 

@@ -2387,33 +2387,99 @@ router.get('/:id/activity', requireAuth, requirePermission('activity.view'), asy
   }
 });
 
-// GET /api/workspaces/:id/reports - Comprehensive workspace analytics & reporting
-router.get('/:id/reports', requireAuth, requirePermission('report.view_project'), async (req, res, next) => {
-  const workspaceId = Number(req.params.id);
+// GET /api/workspaces/:id/reports - Comprehensive workspace analytics & reporting (supports company-wide consolidated analytics across all workspaces and single workspace scoping)
+router.get('/:id/reports', requireAuth, async (req, res, next) => {
+  const currentUserId = Number(req.user.id);
+  const paramId = String(req.params.id || '').trim();
+  const queryWs = req.query.workspace_id || req.query.workspaceId ? String(req.query.workspace_id || req.query.workspaceId).trim() : '';
+  const isAllWorkspaces = paramId === 'all' || queryWs === 'all' || (!paramId && !queryWs);
+  const targetRawId = (!isAllWorkspaces && queryWs && queryWs !== 'all') ? queryWs : paramId;
+  const parsedTargetId = Number(targetRawId);
+  const specificWorkspaceId = (!isAllWorkspaces && !isNaN(parsedTargetId) && parsedTargetId > 0)
+    ? parsedTargetId
+    : null;
   const boardId = req.query.board_id && req.query.board_id !== 'all' ? Number(req.query.board_id) : null;
   const timeframe = req.query.timeframe ? String(req.query.timeframe).trim() : 'all';
 
   try {
-    const ws = await req.db.query('SELECT id, name FROM workspaces WHERE id = ?', [workspaceId]);
-    if (ws.length === 0) {
-      return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
-    }
+    await syncCompanyOwners(req.db, currentUserId);
 
-    const memberCheck = await req.db.query(
-      'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-      [workspaceId, req.user.id]
+    // 1. Fetch user active workspace memberships (including boards user is member of)
+    const userWorkspaces = await req.db.query(
+      `SELECT DISTINCT w.id, w.name,
+              COALESCE(wm.workspace_id, w.id) as workspace_id,
+              COALESCE(r.name, wm.role, 'Team Member') as role_name
+       FROM workspaces w
+       LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = ? AND wm.status != 'deactivated'
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       LEFT JOIN boards b ON b.workspace_id = w.id AND b.is_archived = 0
+       LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
+       WHERE wm.user_id IS NOT NULL OR bm.user_id IS NOT NULL
+       ORDER BY w.name ASC`,
+      [currentUserId, currentUserId]
     );
-    if (memberCheck.length === 0) {
-      return res.status(403).json({ error: { message: 'Access denied: not a workspace member', code: 'FORBIDDEN' } });
+
+    if (userWorkspaces.length === 0) {
+      return res.status(403).json({ error: { message: 'Access denied: You are not a member of any workspace', code: 'FORBIDDEN' } });
     }
 
-    // Section 5.4: Filter active boards via accessibleBoardIds
-    const allowedBoardIds = await accessibleBoardIds(req.user.id, workspaceId, 'project.view', req.db);
-    const canViewTeam = await userHasPermission(req.user.id, workspaceId, 'report.view_team', req.db);
-    const canExport = await userHasPermission(req.user.id, workspaceId, 'report.export', req.db);
+    // 2. Filter workspaces where user has report.view_project permission
+    const allowedWorkspaces = [];
+    for (const uw of userWorkspaces) {
+      const wsId = Number(uw.id || uw.workspace_id);
+      if (isNaN(wsId) || wsId <= 0) continue;
+      const hasReportPerm = await userHasPermission(currentUserId, wsId, 'report.view_project', req.db, null, req);
+      if (hasReportPerm) {
+        if (!allowedWorkspaces.some((w) => w.id === wsId)) {
+          allowedWorkspaces.push({ id: wsId, name: uw.name });
+        }
+      }
+    }
+
+    if (allowedWorkspaces.length === 0) {
+      return res.status(403).json({ error: { message: "Forbidden: Missing required permission 'report.view_project'", code: 'FORBIDDEN' } });
+    }
+
+    if (specificWorkspaceId) {
+      const match = allowedWorkspaces.find((w) => w.id === specificWorkspaceId);
+      if (!match) {
+        return res.status(403).json({ error: { message: "Forbidden: Missing required permission 'report.view_project' for this workspace", code: 'FORBIDDEN' } });
+      }
+    }
+
+    const activeWsIds = specificWorkspaceId ? [specificWorkspaceId] : allowedWorkspaces.map((w) => w.id);
+
+    // 3. Permissions across active workspaces
+    let canViewTeam = false;
+    let canExport = false;
+    for (const wsId of activeWsIds) {
+      if (!canViewTeam) {
+        canViewTeam = await userHasPermission(currentUserId, wsId, 'report.view_team', req.db, null, req);
+      }
+      if (!canExport) {
+        canExport = await userHasPermission(currentUserId, wsId, 'report.export', req.db, null, req);
+      }
+    }
+
+    // 4. Accessible boards
+    let allowedBoardIds = [];
+    for (const wsId of activeWsIds) {
+      const bIds = await accessibleBoardIds(currentUserId, wsId, 'project.view', req.db);
+      for (const bId of bIds) {
+        if (!allowedBoardIds.includes(bId)) {
+          allowedBoardIds.push(bId);
+        }
+      }
+    }
+
+    const currentWorkspaceInfo = specificWorkspaceId
+      ? allowedWorkspaces.find((w) => w.id === specificWorkspaceId)
+      : { id: 'all', name: 'All Workspaces (Consolidated)' };
+
     if (allowedBoardIds.length === 0) {
       return res.json({
-        workspace: { id: workspaceId, name: ws[0].name },
+        workspace: currentWorkspaceInfo,
+        workspaces: allowedWorkspaces,
         summary: {
           total_tasks: 0,
           todo_tasks: 0,
@@ -2448,11 +2514,12 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
     }
 
     const boardsRes = await req.db.query(
-      `SELECT id, name, background_color, is_archived, created_at
-       FROM boards
-       WHERE workspace_id = ? AND is_archived = 0 AND id IN (?)
-       ORDER BY name ASC`,
-      [workspaceId, boardId ? [boardId] : allowedBoardIds]
+      `SELECT b.id, b.name, b.background_color, b.is_archived, b.created_at, b.workspace_id, w.name as workspace_name
+       FROM boards b
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?) AND b.is_archived = 0 AND b.id IN (?)
+       ORDER BY b.name ASC`,
+      [activeWsIds, boardId ? [boardId] : allowedBoardIds]
     );
 
     // Build timeframe conditions
@@ -2510,13 +2577,13 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        FROM cards c
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND b.is_archived = 0
          AND l.is_archived = 0
          AND c.is_archived = 0
          ${boardClause}
          ${timeframeClause}`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     const totalTasks = Number(summaryRes[0]?.total_tasks || 0);
@@ -2538,14 +2605,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        JOIN cards c ON a.card_id = c.id
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND a.action_type = 'marked_complete'
          AND b.is_archived = 0
          AND l.is_archived = 0
          AND c.is_archived = 0
          ${boardClause}
          ${timeframeClause}`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     let avgCycleDays = cycleRes[0]?.avg_cycle_days != null ? Math.round(Number(cycleRes[0].avg_cycle_days) * 10) / 10 : null;
@@ -2556,14 +2623,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
          FROM cards c
          JOIN lists l ON c.list_id = l.id
          JOIN boards b ON l.board_id = b.id
-         WHERE b.workspace_id = ?
+         WHERE b.workspace_id IN (?)
            AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished'))
            AND b.is_archived = 0
            AND l.is_archived = 0
            AND c.is_archived = 0
            ${boardClause}
            ${timeframeClause}`,
-        [workspaceId, ...boardParam]
+        [activeWsIds, ...boardParam]
       );
       avgCycleDays = fallbackCycle[0]?.avg_days != null ? Math.round(Number(fallbackCycle[0].avg_days) * 10) / 10 : 0;
     } else if (avgCycleDays === null) {
@@ -2578,19 +2645,22 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         l.position as list_position,
         b.id as board_id,
         b.name as board_name,
+        w.id as workspace_id,
+        w.name as workspace_name,
         COUNT(DISTINCT c.id) as task_count,
         COUNT(DISTINCT CASE WHEN c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished') THEN c.id END) as completed_count,
         COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_count
        FROM lists l
        JOIN boards b ON l.board_id = b.id
+       JOIN workspaces w ON b.workspace_id = w.id
        LEFT JOIN cards c ON l.id = c.list_id AND c.is_archived = 0
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND b.is_archived = 0
          AND l.is_archived = 0
          ${boardClause}
-       GROUP BY l.id, l.name, l.position, b.id, b.name
+       GROUP BY l.id, l.name, l.position, b.id, b.name, w.id, w.name
        ORDER BY b.name ASC, l.position ASC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     // Fetch active cards for pipeline visualization with assignees
@@ -2606,17 +2676,20 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         l.name as list_name,
         b.id as board_id,
         b.name as board_name,
+        w.id as workspace_id,
+        w.name as workspace_name,
         CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
         CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
         CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
        FROM cards c
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?)
          AND c.is_archived = 0
          ${boardClause}
        ORDER BY c.position ASC, c.id ASC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     const pipelineCardIds = pipelineCardsRes.map((c) => c.id);
@@ -2655,6 +2728,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         list_name: c.list_name,
         board_id: c.board_id,
         board_name: c.board_name,
+        workspace_id: c.workspace_id,
+        workspace_name: c.workspace_name,
         stage: classifyTaskStage(c.list_name, isDone),
         members: cardMembersMap[c.id] || []
       });
@@ -2668,6 +2743,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         list_position: s.list_position,
         board_id: s.board_id,
         board_name: s.board_name,
+        workspace_id: s.workspace_id,
+        workspace_name: s.workspace_name,
         stage: sStage,
         task_count: Number(s.task_count || 0),
         completed_count: Number(s.completed_count || 0),
@@ -2697,6 +2774,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         b.id,
         b.name,
         b.background_color,
+        b.workspace_id,
+        w.name as workspace_name,
         COUNT(DISTINCT bm.user_id) as member_count,
         COUNT(DISTINCT c.id) as total_tasks,
         COUNT(DISTINCT CASE WHEN c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished') THEN c.id END) as completed_tasks,
@@ -2704,13 +2783,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%progress%' OR LOWER(l.name) LIKE '%doing%' OR LOWER(l.name) LIKE '%wip%' OR LOWER(l.name) LIKE '%working%' OR LOWER(l.name) LIKE '%active%') THEN c.id END) as in_progress_tasks,
         COUNT(DISTINCT CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND (LOWER(l.name) LIKE '%todo%' OR LOWER(l.name) LIKE '%to do%' OR LOWER(l.name) LIKE '%to-do%' OR LOWER(l.name) LIKE '%backlog%' OR LOWER(l.name) LIKE '%open%' OR (LOWER(l.name) NOT LIKE '%progress%' AND LOWER(l.name) NOT LIKE '%doing%' AND LOWER(l.name) NOT LIKE '%wip%' AND LOWER(l.name) NOT LIKE '%working%' AND LOWER(l.name) NOT LIKE '%active%' AND LOWER(l.name) NOT LIKE '%review%' AND LOWER(l.name) NOT LIKE '%qa%' AND LOWER(l.name) NOT LIKE '%test%')) THEN c.id END) as todo_tasks
        FROM boards b
+       JOIN workspaces w ON b.workspace_id = w.id
        LEFT JOIN board_members bm ON b.id = bm.board_id
        LEFT JOIN lists l ON b.id = l.board_id AND l.is_archived = 0
        LEFT JOIN cards c ON l.id = c.list_id AND c.is_archived = 0 ${timeframeClause}
-       WHERE b.workspace_id = ? AND b.is_archived = 0 ${boardClause}
-       GROUP BY b.id, b.name, b.background_color
+       WHERE b.workspace_id IN (?) AND b.is_archived = 0 ${boardClause}
+       GROUP BY b.id, b.name, b.background_color, b.workspace_id, w.name
        ORDER BY total_tasks DESC, b.name ASC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     // Group lists by board
@@ -2735,6 +2815,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         id: b.id,
         name: b.name,
         background_color: b.background_color,
+        workspace_id: b.workspace_id,
+        workspace_name: b.workspace_name,
         member_count: Number(b.member_count || 0),
         total_tasks: bTotal,
         completed_tasks: bCompleted,
@@ -2753,18 +2835,20 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         lb.name,
         lb.color,
         b.name as board_name,
+        w.name as workspace_name,
         COUNT(DISTINCT cl.card_id) as task_count
        FROM labels lb
        JOIN boards b ON lb.board_id = b.id
+       JOIN workspaces w ON b.workspace_id = w.id
        JOIN card_labels cl ON lb.id = cl.label_id
        JOIN cards c ON cl.card_id = c.id AND c.is_archived = 0 ${timeframeClause}
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND b.is_archived = 0
          ${boardClause}
-       GROUP BY lb.id, lb.name, lb.color, b.name
+       GROUP BY lb.id, lb.name, lb.color, b.name, w.name
        ORDER BY task_count DESC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     const unlabeledRes = await req.db.query(
@@ -2773,12 +2857,12 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
        LEFT JOIN card_labels cl ON c.id = cl.card_id
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND c.is_archived = 0
          AND cl.label_id IS NULL
          ${boardClause}
          ${timeframeClause}`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
     const unlabeledCount = Number(unlabeledRes[0]?.unlabeled_tasks || 0);
 
@@ -2789,16 +2873,16 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
        LEFT JOIN card_members cm ON c.id = cm.card_id
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND c.is_archived = 0
          AND cm.user_id IS NULL
          ${boardClause}
          ${timeframeClause}`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
     const unassignedCount = Number(unassignedRes[0]?.unassigned_tasks || 0);
 
-    // 8. Member workload (strictly gated by report.view_team)
+    // 8. Member workload (strictly gated by report.view_team - combines user performance across active workspaces)
     let membersWorkload = [];
     if (canViewTeam) {
       const membersWorkloadRes = await req.db.query(
@@ -2807,7 +2891,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           u.name,
           u.email,
           u.avatar_url,
-          r.name as role_name,
+          COALESCE(MAX(r.name), MAX(wm.role), 'Member') as role_name,
           COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN c.id END) as assigned_tasks,
           COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN c.id END) as completed_tasks,
           COUNT(DISTINCT CASE WHEN b.id IS NOT NULL AND (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN c.id END) as overdue_tasks,
@@ -2820,14 +2904,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
          LEFT JOIN card_members cm ON u.id = cm.user_id
          LEFT JOIN cards c ON cm.card_id = c.id AND c.is_archived = 0
          LEFT JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
-         LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id = wm.workspace_id ${boardClause}
-         WHERE wm.workspace_id = ?
-         GROUP BY u.id, u.name, u.email, u.avatar_url, r.name
+         LEFT JOIN boards b ON l.board_id = b.id AND b.is_archived = 0 AND b.workspace_id IN (?) ${boardClause}
+         WHERE wm.workspace_id IN (?)
+         GROUP BY u.id, u.name, u.email, u.avatar_url
          ORDER BY assigned_tasks DESC, u.name ASC`,
-        [...boardParam, workspaceId]
+        [activeWsIds, ...boardParam, activeWsIds]
       );
 
-      // Fetch all assigned cards for members in this workspace with board & list info
+      // Fetch all assigned cards for members with workspace, board & list info
       const assignedCardsRes = await req.db.query(
         `SELECT
           cm.user_id,
@@ -2841,6 +2925,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           l.position as list_position,
           b.id as board_id,
           b.name as board_name,
+          w.id as workspace_id,
+          w.name as workspace_name,
           CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished')) THEN 1 ELSE 0 END as is_effectively_complete,
           CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
           CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
@@ -2848,11 +2934,12 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
          JOIN cards c ON cm.card_id = c.id
          JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
          JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-         WHERE b.workspace_id = ?
+         JOIN workspaces w ON b.workspace_id = w.id
+         WHERE b.workspace_id IN (?)
            AND c.is_archived = 0
            ${boardClause}
          ORDER BY c.due_date ASC, c.created_at DESC`,
-        [workspaceId, ...boardParam]
+        [activeWsIds, ...boardParam]
       );
 
       const userTasksMap = {};
@@ -2875,6 +2962,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           stage: stage,
           board_id: row.board_id,
           board_name: row.board_name,
+          workspace_id: row.workspace_id,
+          workspace_name: row.workspace_name,
           created_at: row.created_at
         });
       });
@@ -2893,6 +2982,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           l.position as list_position,
           b.id as board_id,
           b.name as board_name,
+          w.id as workspace_id,
+          w.name as workspace_name,
           CASE WHEN (c.is_complete = 1 OR LOWER(l.name) IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) THEN 1 ELSE 0 END as is_effectively_complete,
           CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date < NOW() THEN 1 ELSE 0 END as is_overdue,
           CASE WHEN (c.is_complete = 0 AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved')) AND c.due_date IS NOT NULL AND c.due_date >= NOW() AND c.due_date <= DATE_ADD(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END as is_due_soon
@@ -2904,12 +2995,13 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
          JOIN cards c ON ca.card_id = c.id
          JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
          JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-         WHERE b.workspace_id = ?
+         JOIN workspaces w ON b.workspace_id = w.id
+         WHERE b.workspace_id IN (?)
            AND c.is_archived = 0
            ${boardClause}
            ${timeframeClause}
          ORDER BY c.created_at DESC`,
-        [workspaceId, ...boardParam]
+        [activeWsIds, ...boardParam]
       );
 
       const userCreatedCardsMap = {};
@@ -2932,6 +3024,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           stage: stage,
           board_id: row.board_id,
           board_name: row.board_name,
+          workspace_id: row.workspace_id,
+          workspace_name: row.workspace_name,
           created_at: row.created_at,
           members: cardMembersMap[row.id] || []
         });
@@ -2958,7 +3052,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         const userBoardsMap = {};
         userTasks.forEach((t) => {
           if (!userBoardsMap[t.board_id]) {
-            userBoardsMap[t.board_id] = { id: t.board_id, name: t.board_name, task_count: 0, completed_count: 0 };
+            userBoardsMap[t.board_id] = {
+              id: t.board_id,
+              name: t.board_name,
+              workspace_id: t.workspace_id,
+              workspace_name: t.workspace_name,
+              task_count: 0,
+              completed_count: 0
+            };
           }
           userBoardsMap[t.board_id].task_count++;
           if (t.is_complete) userBoardsMap[t.board_id].completed_count++;
@@ -3002,11 +3103,14 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         l.name as list_name,
         b.id as board_id,
         b.name as board_name,
+        w.id as workspace_id,
+        w.name as workspace_name,
         TIMESTAMPDIFF(DAY, c.due_date, NOW()) as days_overdue
        FROM cards c
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       JOIN workspaces w ON b.workspace_id = w.id
+       WHERE b.workspace_id IN (?)
          AND c.is_archived = 0
          AND c.is_complete = 0
          AND LOWER(l.name) NOT IN ('done', 'completed', 'complete', 'closed', 'finished')
@@ -3016,7 +3120,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
          ${timeframeClause}
        ORDER BY c.due_date ASC
        LIMIT 20`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     // Attach assignees for overdue tasks (only if authorized to view team info)
@@ -3047,6 +3151,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
       list_name: t.list_name,
       board_id: t.board_id,
       board_name: t.board_name,
+      workspace_id: t.workspace_id,
+      workspace_name: t.workspace_name,
       days_overdue: Math.max(0, Number(t.days_overdue || 0)),
       members: overdueMembersMap[t.id] || []
     }));
@@ -3059,13 +3165,13 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
        FROM cards c
        JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND c.is_archived = 0
          AND c.created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
          ${boardClause}
        GROUP BY DATE_FORMAT(c.created_at, '%Y-%m-%d')
        ORDER BY date_str ASC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     const completedVelocityRes = await req.db.query(
@@ -3074,13 +3180,13 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
         COUNT(*) as completed_count
        FROM activity_log a
        JOIN boards b ON a.board_id = b.id AND b.is_archived = 0
-       WHERE b.workspace_id = ?
+       WHERE b.workspace_id IN (?)
          AND a.action_type = 'marked_complete'
          AND a.created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
          ${boardClause}
        GROUP BY DATE_FORMAT(a.created_at, '%Y-%m-%d')
        ORDER BY date_str ASC`,
-      [workspaceId, ...boardParam]
+      [activeWsIds, ...boardParam]
     );
 
     // Build 7 day calendar map
@@ -3102,10 +3208,8 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
     }
 
     return res.json({
-      workspace: {
-        id: ws[0].id,
-        name: ws[0].name
-      },
+      workspace: currentWorkspaceInfo,
+      workspaces: allowedWorkspaces,
       summary: {
         total_tasks: totalTasks,
         todo_tasks: todoTasks,
@@ -3132,6 +3236,7 @@ router.get('/:id/reports', requireAuth, requirePermission('report.view_project')
           name: lb.name,
           color: lb.color,
           board_name: lb.board_name,
+          workspace_name: lb.workspace_name,
           task_count: Number(lb.task_count || 0)
         })),
         unlabeled_tasks: unlabeledCount

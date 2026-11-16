@@ -248,7 +248,7 @@ router.post('/secure', async (req, res, next) => {
 
     // Check required permission if defined at gateway level
     if (opDef.permission && authContext.user) {
-      if (workspaceId) {
+      if (workspaceId && !isNaN(Number(workspaceId)) && Number(workspaceId) > 0) {
         const hasPerm = await userHasPermission(
           authContext.user.id,
           Number(workspaceId),
