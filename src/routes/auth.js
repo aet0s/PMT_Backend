@@ -1180,7 +1180,7 @@ async function handleUserLoginVerification(db, user, password, req, tenant = nul
       name: user.name,
       email: user.email,
       avatar_url: user.avatar_url || null,
-      timezone: user.timezone || 'UTC',
+      timezone: user.timezone && user.timezone !== 'UTC' ? user.timezone : 'Asia/Kolkata',
       locale: user.locale || 'en',
       created_at: user.created_at,
       must_change_password: !!user.must_change_password,
@@ -1497,7 +1497,7 @@ router.post('/2fa/verify-login', authRateLimiter, validate(verifyLogin2FaSchema)
         name: user.name,
         email: user.email,
         avatar_url: require('./files').resolveValidAvatarUrl(req.db, req.tenant?.id || 1, user.id, user.avatar_url),
-        timezone: user.timezone || 'UTC',
+        timezone: user.timezone && user.timezone !== 'UTC' ? user.timezone : 'Asia/Kolkata',
         locale: user.locale || 'en',
         created_at: user.created_at,
         must_change_password: !!user.must_change_password,
@@ -2653,7 +2653,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
         name: user.name,
         email: user.email,
         avatar_url: require('./files').resolveValidAvatarUrl(req.db, req.tenant?.id || 1, user.id, user.avatar_url),
-        timezone: user.timezone || 'UTC',
+        timezone: user.timezone && user.timezone !== 'UTC' ? user.timezone : 'Asia/Kolkata',
         locale: user.locale || 'en',
         must_change_password: !!user.must_change_password,
         totp_enabled: !!user.totp_enabled,
@@ -2695,8 +2695,9 @@ router.put('/profile', requireAuth, validate(updateProfileSchema), async (req, r
     }
 
     if (timezone !== undefined) {
+      const cleanTz = timezone.trim();
       updates.push('timezone = ?');
-      values.push(timezone.trim() || 'UTC');
+      values.push(cleanTz && cleanTz !== 'UTC' ? cleanTz : 'Asia/Kolkata');
     }
 
     if (locale !== undefined) {
@@ -2726,7 +2727,7 @@ router.put('/profile', requireAuth, validate(updateProfileSchema), async (req, r
         name: updatedUser.name,
         email: updatedUser.email,
         avatar_url: updatedUser.avatar_url || null,
-        timezone: updatedUser.timezone || 'UTC',
+        timezone: updatedUser.timezone && updatedUser.timezone !== 'UTC' ? updatedUser.timezone : 'Asia/Kolkata',
         locale: updatedUser.locale || 'en',
         must_change_password: !!updatedUser.must_change_password,
         totp_enabled: !!updatedUser.totp_enabled,
