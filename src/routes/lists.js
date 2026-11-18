@@ -46,7 +46,11 @@ router.post('/', requireAuth, requirePermission('list.create'), validate(createL
 
     const calculatedIsDone = is_done_list !== undefined
       ? (is_done_list ? 1 : 0)
-      : (/^(done|completed|finished|closed|released|shipped|archive)/i.test(name.trim()) && !/not\s+done/i.test(name.trim()) ? 1 : 0);
+      // Only auto-flag as done when the entire trimmed name matches a known
+      // done-state keyword exactly (case-insensitive). The previous prefix regex
+      // incorrectly flagged names like "Archive Old Stuff" or "Done but waiting"
+      // as done-lists, causing their cards to be swept by the auto-archive cron.
+      : (/^(done|completed|finished|closed|released|shipped|archive|archived)$/i.test(name.trim()) ? 1 : 0);
     const finalWipEnabled = wip_limit_enabled !== undefined ? (wip_limit_enabled ? 1 : 0) : (calculatedIsDone ? 0 : 1);
     const finalWipLimit = wip_limit !== undefined ? (wip_limit === null ? null : Number(wip_limit)) : null;
 

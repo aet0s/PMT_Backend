@@ -84,9 +84,10 @@ async function authenticateSession(req) {
     }
     db = await getTenantDb(tenantId);
   } else {
-    // Single-tenant or dev single
-    tenant = { id: 1, slug: 'dev', name: 'Dev Company' };
-    db = getDevSingleDb();
+    const err = new Error('Authentication token is missing a valid tenant context');
+    err.status = 401;
+    err.code = 'TENANT_CONTEXT_REQUIRED';
+    throw err;
   }
 
   // Verify session is active in database (not revoked or expired)

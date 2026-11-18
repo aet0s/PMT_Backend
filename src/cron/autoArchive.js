@@ -22,10 +22,18 @@ async function executeAutoArchiveSweep({ db, workspaceId, days = 7, actorId = nu
   if (!db || !workspaceId) return { archived_count: 0, card_ids: [], days };
 
   const numDays = Math.max(0, Number(days) || 0);
-  let intervalClause = '';
   const params = [workspaceId];
 
-  if (numDays > 0) {
+  // Always apply a time-based guard so brand-new cards are never swept in the
+  // same cron tick they were created.
+  //   days = 0  → "archive immediately" mode: use a 5-minute grace window so a
+  //               card created seconds ago is not archived before the user even
+  //               sees it on the board.
+  //   days > 0  → standard threshold: only archive cards older than N days.
+  let intervalClause;
+  if (numDays === 0) {
+    intervalClause = 'AND COALESCE(c.completed_at, c.created_at) <= DATE_SUB(NOW(), INTERVAL 5 MINUTE)';
+  } else {
     intervalClause = 'AND COALESCE(c.completed_at, c.created_at) < DATE_SUB(NOW(), INTERVAL ? DAY)';
     params.push(numDays);
   }

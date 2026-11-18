@@ -112,28 +112,41 @@ async function processOutbox(db, tenantId = 'single') {
     }
     lockAcquired = true;
 
-    // Recover stuck processing rows where worker may have crashed (older than 5 minutes)
+    // Recover only expired processing leases where worker may have crashed or timed out.
+    // Never reset an actively processed notification whose lease is still valid.
     await runner.execute(
       `UPDATE notification_outbox
        SET status = 'failed',
-           last_error = 'Worker lease timeout: reset after 5 minutes in processing state',
-           next_retry_at = NOW(3)
+           last_error = 'Worker lease timeout: lease expired without completion',
+           next_retry_at = NOW(3),
+           lease_expires_at = NULL
        WHERE status = 'processing'
-         AND created_at < NOW(3) - INTERVAL 5 MINUTE`
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < NOW(3)`
     ).catch(() => {});
 
     const rows = await (connection || db).query(
       `SELECT * FROM notification_outbox
-       WHERE status IN ('pending', 'failed')
+       WHERE (status IN ('pending', 'failed')
+              OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW(3)))
          AND (next_retry_at IS NULL OR next_retry_at <= NOW(3))
        ORDER BY id ASC
        LIMIT 50`
     );
 
     for (const row of rows) {
-      // Atomic row claim: ensure only one worker claims this row even if locks overlap
-      const claimRes = await (connection || db).execute(
-        "UPDATE notification_outbox SET status = 'processing' WHERE id = ? AND status IN ('pending', 'failed')",
+      // Atomic row claim: sets processing_started_at and lease_expires_at (2-minute lease).
+      // Can claim a pending/failed row, or claim a row whose lease has expired.
+      const claimRes = await runner.execute(
+        `UPDATE notification_outbox
+         SET status = 'processing',
+             processing_started_at = NOW(3),
+             lease_expires_at = NOW(3) + INTERVAL 2 MINUTE
+         WHERE id = ?
+           AND (
+             status IN ('pending', 'failed')
+             OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW(3))
+           )`,
         [row.id]
       );
       if (!claimRes || claimRes.affectedRows === 0) {
@@ -296,14 +309,14 @@ async function processOutbox(db, tenantId = 'single') {
         }
 
         await runner.execute(
-          "UPDATE notification_outbox SET status = 'completed', processed_at = NOW(3) WHERE id = ?",
+          "UPDATE notification_outbox SET status = 'completed', processed_at = NOW(3), lease_expires_at = NULL WHERE id = ?",
           [row.id]
         );
       } catch (procErr) {
         const nextRetry = Number(row.retry_count || 0) + 1;
         if (nextRetry >= 5) {
           await runner.execute(
-            "UPDATE notification_outbox SET status = 'dead_letter', retry_count = ?, last_error = ? WHERE id = ?",
+            "UPDATE notification_outbox SET status = 'dead_letter', retry_count = ?, last_error = ?, lease_expires_at = NULL WHERE id = ?",
             [nextRetry, procErr.message.slice(0, 500), row.id]
           );
         } else {
@@ -311,7 +324,8 @@ async function processOutbox(db, tenantId = 'single') {
           await runner.execute(
             `UPDATE notification_outbox
              SET status = 'failed', retry_count = ?, last_error = ?,
-                 next_retry_at = NOW(3) + INTERVAL ? SECOND
+                 next_retry_at = NOW(3) + INTERVAL ? SECOND,
+                 lease_expires_at = NULL
              WHERE id = ?`,
             [nextRetry, procErr.message.slice(0, 500), delaySeconds, row.id]
           );
@@ -334,6 +348,24 @@ async function processOutbox(db, tenantId = 'single') {
 }
 
 /**
+ * Heartbeat/renewal for long-running notification processing lease
+ */
+async function renewLease(runner, rowId, additionalSeconds = 120) {
+  if (!runner || !rowId) return false;
+  try {
+    const res = await runner.execute(
+      `UPDATE notification_outbox
+       SET lease_expires_at = NOW(3) + INTERVAL ? SECOND
+       WHERE id = ? AND status = 'processing'`,
+      [additionalSeconds, rowId]
+    );
+    return Boolean(res && res.affectedRows > 0);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
  * Retention cleanup job: deletes read notifications older than 30 days
  */
 async function cleanOldNotifications(db) {
@@ -352,6 +384,7 @@ async function cleanOldNotifications(db) {
 module.exports = {
   enqueueOutbox,
   processOutbox,
+  renewLease,
   getUnreadCounts,
   cleanOldNotifications
 };

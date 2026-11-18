@@ -190,16 +190,9 @@ const requireAuth = async (req, res, next) => {
       req.db = await getTenantDb(tenantId);
       req.db.tenantId = tenant.id;
     } else {
-      // Single-tenant or development fallback
-      req.tenant = {
-        id: 1,
-        slug: 'dev',
-        name: 'Dev Company',
-        db_name: process.env.MYSQL_DATABASE || 'pm_dev_single',
-        status: 'active'
-      };
-      req.db = getDevSingleDb();
-      req.db.tenantId = 1;
+      return res.status(401).json({
+        error: { message: 'Authentication token is missing a valid tenant context', code: 'TENANT_CONTEXT_REQUIRED' }
+      });
     }
 
     // Deduplicate user auth verification across concurrent requests

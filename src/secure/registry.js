@@ -1530,9 +1530,15 @@ registerOperation('comments.update', {
     }
 
     const isOwn = Number(rows[0].user_id) === Number(ctx.user.id);
+    if (!ctx.tenant?.id) {
+      const err = new Error('Valid tenant context is required');
+      err.status = 401;
+      err.code = 'TENANT_CONTEXT_REQUIRED';
+      throw err;
+    }
     const hasPerm = isOwn
-      ? await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant?.id || 1, 'comment.edit_own', ctx.db, null, ctx.req)
-      : await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant?.id || 1, 'comment.edit_any', ctx.db, null, ctx.req);
+      ? await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant.id, 'comment.edit_own', ctx.db, null, ctx.req)
+      : await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant.id, 'comment.edit_any', ctx.db, null, ctx.req);
 
     if (!hasPerm && !isOwn) {
       const err = new Error('Permission denied to edit comment');
@@ -1567,10 +1573,16 @@ registerOperation('comments.delete', {
     }
 
     const isOwn = Number(rows[0].user_id) === Number(ctx.user.id);
+    if (!ctx.tenant?.id) {
+      const err = new Error('Valid tenant context is required');
+      err.status = 401;
+      err.code = 'TENANT_CONTEXT_REQUIRED';
+      throw err;
+    }
     const hasPerm = isOwn
-      ? (await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant?.id || 1, 'comment.delete_own', ctx.db, null, ctx.req) ||
-         await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant?.id || 1, 'comment.delete_any', ctx.db, null, ctx.req))
-      : await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant?.id || 1, 'comment.delete_any', ctx.db, null, ctx.req);
+      ? (await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant.id, 'comment.delete_own', ctx.db, null, ctx.req) ||
+         await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant.id, 'comment.delete_any', ctx.db, null, ctx.req))
+      : await userHasPermission(ctx.user.id, ctx.workspaceId || ctx.tenant.id, 'comment.delete_any', ctx.db, null, ctx.req);
 
     if (!hasPerm && !isOwn) {
       const err = new Error('Permission denied to delete comment');
@@ -1869,6 +1881,12 @@ registerOperation('files.preview_token', {
   requireAuth: true,
   schema: z.object({}).passthrough(),
   handler: async (ctx, data) => {
+    if (!ctx.tenant?.id) {
+      const err = new Error('Valid tenant context is required');
+      err.status = 401;
+      err.code = 'TENANT_CONTEXT_REQUIRED';
+      throw err;
+    }
     return await dispatchInternal(ctx, { method: 'POST', url: '/api/files/preview-token', body: data });
   }
 });
@@ -1890,10 +1908,16 @@ registerOperation('files.download', {
     tenant_id: z.coerce.number().optional()
   }).passthrough(),
   handler: async (ctx, data) => {
+    if (!ctx.tenant?.id || !ctx.db) {
+      const err = new Error('Valid tenant context is required for file download');
+      err.status = 401;
+      err.code = 'TENANT_CONTEXT_REQUIRED';
+      throw err;
+    }
     let filePath = null;
     let fileName = 'download';
     let fileType = 'application/octet-stream';
-    const tenantId = ctx.tenant?.id || 1;
+    const tenantId = Number(ctx.tenant.id);
 
     if (data.attachment_id || data.file_id) {
       const id = data.attachment_id || data.file_id;
@@ -2074,6 +2098,12 @@ registerOperation('users.profile', {
     email: z.string().optional()
   }).passthrough(),
   handler: async (ctx, data) => {
+    if (!ctx.tenant?.id || !ctx.db) {
+      const err = new Error('Valid tenant context is required');
+      err.status = 401;
+      err.code = 'TENANT_CONTEXT_REQUIRED';
+      throw err;
+    }
     const targetUserId = data.user_id || data.id || (data.email ? null : ctx.user.id);
     let targetUser = null;
 

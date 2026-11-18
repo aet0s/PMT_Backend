@@ -763,7 +763,13 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
         } catch {}
         const archiveSetting = wsSettings?.workspace_defaults?.autoArchiveDays ??
                                wsSettings?.project_defaults?.autoArchiveDays;
-        if ((archiveSetting === '0' || archiveSetting === 0) && is_archived === undefined) {
+        // Only immediately archive when the workspace policy is explicitly "0 days"
+        // AND the card was truly completed by an explicit user action (not just
+        // inferred from moving into a done-list without is_complete being set in
+        // the request body). This prevents cards from being archived the moment
+        // they are created in a list that happens to be flagged as done.
+        const isExplicitCompletion = is_complete === true || is_complete === 1;
+        if ((archiveSetting === '0' || archiveSetting === 0) && is_archived === undefined && isExplicitCompletion) {
           is_archived = true;
         }
       } catch (wsErr) {}
@@ -953,7 +959,7 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
             actorUserId: req.user.id,
             boardId: oldCard.board_id,
             cardId,
-            tenantId: req.tenant?.id || req.db?.tenantId || tx?.tenantId || 1,
+            tenantId: req.tenant?.id || req.db?.tenantId || tx?.tenantId,
             meta: { cardTitle: updatedCard.title, dueDate: formattedDue }
           },
           tx

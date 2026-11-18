@@ -39,7 +39,8 @@ function resolveUploadFilePath(tenantId, relativeSubpath) {
     if (seg === '..' || seg === '.') return null;
   }
 
-  const tId = String(tenantId || 1);
+  if (!tenantId) return null;
+  const tId = String(tenantId);
   const resolvedRoot = path.resolve(UPLOADS_DIR);
   const tenantDir = path.resolve(resolvedRoot, tId);
   const targetPath = path.resolve(tenantDir, cleanSubpath);
@@ -237,12 +238,22 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       tenantId = Number(parts[0]);
       subpath = parts.slice(1).join('/');
     }
-    const userTenantId = req.tenant ? Number(req.tenant.id) : 1;
+    if (!req.tenant?.id) {
+      return res.status(401).json({ error: { message: 'Valid tenant context is required', code: 'TENANT_CONTEXT_REQUIRED' } });
+    }
+    const userTenantId = Number(req.tenant.id);
     if (tenantId && tenantId !== userTenantId) {
       return res.status(403).json({ error: { message: 'Access denied: Cross-tenant preview forbidden', code: 'FORBIDDEN' } });
     }
 
     const effectiveTenantId = userTenantId;
+
+    // Reject avatar routes from preview token generation (avatars require authenticated session)
+    if (subpath.startsWith('avatars/') || subpath.startsWith('avatar_')) {
+      return res.status(403).json({
+        error: { message: 'Preview tokens cannot be generated for avatars; authenticated session required', code: 'FORBIDDEN' }
+      });
+    }
 
     // Verify user authorization before issuing preview token
     const { userHasPermission } = require('../middleware/permissions');
@@ -283,8 +294,6 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       if (!hasView) {
         return res.status(403).json({ error: { message: 'Access denied: attachment.view required', code: 'FORBIDDEN' } });
       }
-    } else if (subpath.startsWith('avatars/')) {
-      // Valid avatar subpath in tenant
     } else {
       return res.status(400).json({ error: { message: 'Unsupported preview resource type', code: 'BAD_REQUEST' } });
     }
@@ -328,6 +337,11 @@ async function authOrPreviewToken(req, res, next) {
   const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
 
   if (req.query.token) {
+    if (relativeSubpath.startsWith('avatars/') || relativeSubpath.startsWith('avatar_')) {
+      return res.status(403).json({
+        error: { message: 'Preview tokens cannot access avatar routes; authenticated session required', code: 'FORBIDDEN' }
+      });
+    }
     try {
       const payload = jwt.verify(req.query.token, getJwtSecret());
       if (
@@ -360,7 +374,10 @@ router.get('/avatars/:filename', requireAuth, (req, res) => {
   }
 
   // Tenant ID strictly from authenticated session
-  const tenantId = String(req.tenant?.id || req.user?.tenant_id || '1');
+  if (!req.tenant?.id) {
+    return res.status(401).json({ error: { message: 'Valid tenant context required', code: 'TENANT_CONTEXT_REQUIRED' } });
+  }
+  const tenantId = String(req.tenant.id);
 
   const origin = req.headers.origin;
   if (origin && isOriginAllowed(origin)) {
@@ -585,7 +602,8 @@ module.exports.resolveUploadFilePath = resolveUploadFilePath;
  * If none exists, clears users.avatar_url in the database to prevent 404 loops.
  */
 function resolveValidAvatarUrl(db, tenantId, userId, currentAvatarUrl) {
-  const tId = String(tenantId || 1);
+  if (!tenantId) return null;
+  const tId = String(tenantId);
   if (currentAvatarUrl) {
     const resolved = resolveUploadFilePath(tId, currentAvatarUrl);
     if (resolved && fs.existsSync(resolved)) {

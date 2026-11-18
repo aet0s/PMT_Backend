@@ -1273,7 +1273,7 @@ router.get('/:id/members', requireAuth, requirePermission('member.view'), async 
         id: m.id,
         name: m.name,
         email: m.email,
-        avatar_url: resolveValidAvatarUrl(req.db, req.tenant?.id || 1, m.id, m.avatar_url),
+        avatar_url: resolveValidAvatarUrl(req.db, req.tenant?.id, m.id, m.avatar_url),
         role: m.role_name,
         role_id: m.role_id,
         is_owner: isOwner,
@@ -3569,7 +3569,7 @@ router.get('/:id/company-members', requireAuth, requirePermission('member.view')
       }
 
       const { resolveValidAvatarUrl } = require('./files');
-      const effectiveAvatar = resolveValidAvatarUrl(req.db, req.tenant?.id || 1, u.id, u.avatar_url);
+      const effectiveAvatar = resolveValidAvatarUrl(req.db, req.tenant?.id, u.id, u.avatar_url);
 
       return {
         id: u.id,
@@ -4074,7 +4074,10 @@ router.patch('/:id/company-members/:userId/credentials', requireAuth, async (req
       try {
         const { getMasterDb } = require('../services/tenantPools');
         const masterDb = getMasterDb();
-        const tenantId = req.tenant?.id || 1;
+        const tenantId = req.tenant?.id;
+        if (!tenantId) {
+          throw new Error('Valid tenant context is required');
+        }
 
         const updateRes = await masterDb.execute(
           'UPDATE tenant_user_directory SET email = ? WHERE LOWER(email) = ? AND tenant_id = ?',

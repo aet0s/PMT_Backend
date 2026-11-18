@@ -169,8 +169,11 @@ function sanitizeAndVerifyContainment(key, tenantId = null, options = {}) {
 const localStorage = {
   sanitizeAndVerifyContainment,
 
-  async save(file, cardId, tenantId = 1) {
-    const tId = String(tenantId || 1);
+  async save(file, cardId, tenantId) {
+    if (!tenantId) {
+      throw new AppError('Tenant ID is required for storage save', 400, 'TENANT_REQUIRED');
+    }
+    const tId = String(tenantId);
     const safeCardId = String(cardId).replace(/[^a-zA-Z0-9_-]/g, '');
     const cardDir = path.join(UPLOADS_DIR, tId, 'cards', safeCardId);
     if (!fs.existsSync(cardDir)) {
@@ -202,7 +205,10 @@ const localStorage = {
   },
 
   async saveAvatar(tenantId, userId, file) {
-    const tId = String(tenantId || 1);
+    if (!tenantId) {
+      throw new AppError('Tenant ID is required for avatar storage', 400, 'TENANT_REQUIRED');
+    }
+    const tId = String(tenantId);
     const safeUserId = String(userId).replace(/[^0-9]/g, '');
     const avatarDir = path.join(UPLOADS_DIR, tId, 'avatars');
     if (!fs.existsSync(avatarDir)) {
@@ -227,7 +233,10 @@ const localStorage = {
   },
 
   async saveWorkspaceIcon(tenantId, workspaceId, file) {
-    const tId = String(tenantId || 1);
+    if (!tenantId) {
+      throw new AppError('Tenant ID is required for workspace icon storage', 400, 'TENANT_REQUIRED');
+    }
+    const tId = String(tenantId);
     const safeWsId = String(workspaceId).replace(/[^0-9]/g, '');
     const wsDir = path.join(UPLOADS_DIR, tId, 'workspaces');
     if (!fs.existsSync(wsDir)) {
