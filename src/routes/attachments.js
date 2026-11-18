@@ -60,30 +60,64 @@ async function getFullCard(cardId, db) {
   return card;
 }
 
-// GET /api/attachments - List attachments
+// GET /api/attachments - List attachments with card, board, and workspace authorization
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const cardId = req.query.card_id || req.query.cardId;
     if (cardId) {
+      const cId = Number(cardId);
+      const cardRows = await req.db.query(
+        `SELECT c.id, l.board_id, b.workspace_id
+         FROM cards c
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE c.id = ?`,
+        [cId]
+      );
+      if (!cardRows || cardRows.length === 0) {
+        return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+      }
+      const card = cardRows[0];
+      const hasPerm = (await userHasPermission(req.user.id, card.workspace_id, 'file.view', req.db, card.board_id)) ||
+        (await userHasPermission(req.user.id, card.workspace_id, 'attachment.view', req.db, card.board_id));
+      if (!hasPerm) {
+        return res.status(403).json({ error: { message: 'Access denied: attachment.view required', code: 'FORBIDDEN' } });
+      }
+
       const attachments = await req.db.query(
         `SELECT a.*, u.name as uploader_name FROM attachments a
          LEFT JOIN users u ON a.uploaded_by_user_id = u.id
          WHERE a.card_id = ? ORDER BY a.created_at DESC`,
-        [Number(cardId)]
+        [cId]
       );
       return res.json({ attachments });
     }
-    const attachments = await req.db.query(
-      `SELECT DISTINCT a.*, u.name as uploader_name, c.title as card_title FROM attachments a
+
+    // When cardId is not specified, only return attachments from boards where user has view permission
+    const candidateAttachments = await req.db.query(
+      `SELECT DISTINCT a.*, u.name as uploader_name, c.title as card_title, l.board_id, b.workspace_id
+       FROM attachments a
        JOIN cards c ON a.card_id = c.id
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
        JOIN workspace_members wm ON b.workspace_id = wm.workspace_id AND wm.user_id = ?
        LEFT JOIN users u ON a.uploaded_by_user_id = u.id
-       ORDER BY a.created_at DESC LIMIT 50`,
+       ORDER BY a.created_at DESC LIMIT 100`,
       [req.user.id]
     );
-    return res.json({ attachments });
+
+    const authorized = [];
+    for (const att of candidateAttachments) {
+      const canView = (await userHasPermission(req.user.id, att.workspace_id, 'file.view', req.db, att.board_id)) ||
+        (await userHasPermission(req.user.id, att.workspace_id, 'attachment.view', req.db, att.board_id));
+      if (canView) {
+        const { board_id, workspace_id, ...safeAtt } = att;
+        authorized.push(safeAtt);
+      }
+      if (authorized.length >= 50) break;
+    }
+
+    return res.json({ attachments: authorized });
   } catch (err) {
     next(err);
   }
@@ -111,7 +145,7 @@ router.get('/:id', requireAuth, requirePermission({ any: ['attachment.view', 'fi
 
     const att = attRes[0];
     const hasPerm = (await userHasPermission(req.user.id, att.workspace_id, 'file.view', req.db, att.board_id)) ||
-                    (await userHasPermission(req.user.id, att.workspace_id, 'attachment.view', req.db, att.board_id));
+      (await userHasPermission(req.user.id, att.workspace_id, 'attachment.view', req.db, att.board_id));
     if (!hasPerm) {
       return res.status(403).json({ error: { message: 'Access denied to attachment', code: 'FORBIDDEN' } });
     }
@@ -136,83 +170,84 @@ router.delete(
     any: (req) => req.query?.file_only === 'true' ? 'file.delete' : ['attachment.delete_any', 'file.delete']
   }),
   async (req, res, next) => {
-  const attachmentId = Number(req.params.id);
-  const originId = req.headers['x-origin-id'];
+    const attachmentId = Number(req.params.id);
+    const originId = req.headers['x-origin-id'];
 
-  try {
-    const attRes = await req.db.query(
-      `SELECT a.*, l.board_id, b.workspace_id
+    try {
+      const attRes = await req.db.query(
+        `SELECT a.*, l.board_id, b.workspace_id
        FROM attachments a
        JOIN cards c ON a.card_id = c.id
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
        WHERE a.id = ?`,
-      [attachmentId]
-    );
+        [attachmentId]
+      );
 
-    if (attRes.length === 0) {
-      return res.status(404).json({ error: { message: 'Attachment not found', code: 'NOT_FOUND' } });
-    }
-
-    const att = attRes[0];
-
-    if (att.file_type !== 'link') {
-      if (att.file_url.startsWith('/uploads/')) {
-        const relativeKey = att.file_url.replace('/uploads/', '');
-        await localStorage.delete(relativeKey);
-      } else if (att.file_url.startsWith('/api/files/')) {
-        const relativeKey = att.file_url.replace('/api/files/', '');
-        await localStorage.delete(relativeKey);
+      if (attRes.length === 0) {
+        return res.status(404).json({ error: { message: 'Attachment not found', code: 'NOT_FOUND' } });
       }
-    }
 
-    await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
+      const att = attRes[0];
 
-    try {
-      await auditService.record({
-        db: req.db,
-        action: 'attachment.deleted',
-        category: 'attachment',
-        entityType: 'attachment',
-        entityId: attachmentId,
-        entityLabel: att.file_name || 'Attachment',
-        cardId: att.card_id,
-        boardId: att.board_id,
-        workspaceId: att.workspace_id,
-        actorUserId: req.user.id,
-        meta: {
-          attachment_id: attachmentId,
-          file_name: att.file_name,
-          card_id: att.card_id,
-          board_id: att.board_id,
-          workspace_id: att.workspace_id,
-          deleted_by_user_id: req.user.id,
-          deleted_at: new Date().toISOString()
+      if (att.file_type !== 'link') {
+        const tenantId = req.tenant ? req.tenant.id : null;
+        if (att.file_url.startsWith('/uploads/')) {
+          const relativeKey = att.file_url.replace('/uploads/', '');
+          await localStorage.delete(relativeKey, tenantId);
+        } else if (att.file_url.startsWith('/api/files/')) {
+          const relativeKey = att.file_url.replace('/api/files/', '');
+          await localStorage.delete(relativeKey, tenantId);
         }
+      }
+
+      await req.db.execute('DELETE FROM attachments WHERE id = ?', [attachmentId]);
+
+      try {
+        await auditService.record({
+          db: req.db,
+          action: 'attachment.deleted',
+          category: 'attachment',
+          entityType: 'attachment',
+          entityId: attachmentId,
+          entityLabel: att.file_name || 'Attachment',
+          cardId: att.card_id,
+          boardId: att.board_id,
+          workspaceId: att.workspace_id,
+          actorUserId: req.user.id,
+          meta: {
+            attachment_id: attachmentId,
+            file_name: att.file_name,
+            card_id: att.card_id,
+            board_id: att.board_id,
+            workspace_id: att.workspace_id,
+            deleted_by_user_id: req.user.id,
+            deleted_at: new Date().toISOString()
+          }
+        });
+        res.locals._auditRecorded = true;
+      } catch (auditErr) {
+        console.warn('[WARN] Audit logging for attachment deletion failed:', auditErr.message);
+      }
+
+      const fullCard = await getFullCard(att.card_id, req.db);
+      broadcastBoardEvent(att.board_id, 'card:updated', { cardId: att.card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
+
+      await notify({
+        db: req.db,
+        tenantId: req.tenant?.id,
+        boardId: att.board_id,
+        cardId: att.card_id,
+        eventType: 'attachment.removed',
+        actorId: req.user.id,
+        data: { attachmentName: att.file_name || 'File', cardTitle: fullCard?.title || 'Card' }
       });
-      res.locals._auditRecorded = true;
-    } catch (auditErr) {
-      console.warn('[WARN] Audit logging for attachment deletion failed:', auditErr.message);
+
+      return res.json({ message: 'Attachment deleted successfully', id: attachmentId });
+    } catch (err) {
+      next(err);
     }
-
-    const fullCard = await getFullCard(att.card_id, req.db);
-    broadcastBoardEvent(att.board_id, 'card:updated', { cardId: att.card_id, card: fullCard }, originId, req.tenant ? req.tenant.id : null);
-
-    await notify({
-      db: req.db,
-      tenantId: req.tenant?.id,
-      boardId: att.board_id,
-      cardId: att.card_id,
-      eventType: 'attachment.removed',
-      actorId: req.user.id,
-      data: { attachmentName: att.file_name || 'File', cardTitle: fullCard?.title || 'Card' }
-    });
-
-    return res.json({ message: 'Attachment deleted successfully', id: attachmentId });
-  } catch (err) {
-    next(err);
-  }
-});
+  });
 
 // POST /api/attachments - Upload attachment with card_id in body
 router.post('/', requireAuth, upload.single('file'), async (req, res, next) => {

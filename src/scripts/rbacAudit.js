@@ -76,10 +76,6 @@ const ALLOWED_PUBLIC_ROUTES = new Map([
   ['POST /api/dev/reset-rate-limit', {
     category: 'test-only',
     justification: 'Test environment in-memory rate limit reset helper (only registered in NODE_ENV=test)'
-  }],
-  ['GET /api/files/avatars/:filename', {
-    category: 'files/avatars',
-    justification: 'Public avatar asset fallback for user profile pictures'
   }]
 ]);
 

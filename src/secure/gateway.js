@@ -310,6 +310,7 @@ router.post('/secure', async (req, res, next) => {
     const code = err.code || 'BAD_REQUEST';
 
     console.warn(`[SECURE-GATEWAY] Request rejected: ${message} (${code})`);
+    if (err.stack) console.warn('[SECURE-GATEWAY-STACK]', err.stack);
 
     return res.status(status).json({
       error: {

@@ -6,6 +6,7 @@ const fs = require('fs');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const { requireAuth, getJwtSecret } = require('../middleware/auth');
+const { isOriginAllowed } = require('../utils/corsOrigins');
 const storage = require('../storage');
 const auditService = require('../services/audit');
 
@@ -15,118 +16,57 @@ const UPLOADS_DIR = storage.UPLOADS_DIR || (process.env.UPLOADS_DIR
   : path.resolve(__dirname, '../../uploads'));
 
 /**
- * Safely resolves an uploaded file path across known upload roots.
- * Strictly verifies against path traversal attacks.
+ * Safely resolves an uploaded file path strictly within the specified tenant upload directory.
+ * Strictly verifies against path traversal attacks and eliminates cross-tenant searches.
  */
 function resolveUploadFilePath(tenantId, relativeSubpath) {
+  if (!relativeSubpath || typeof relativeSubpath !== 'string') return null;
+
+  // Reject null bytes, encoded traversals, and malformed characters
+  if (relativeSubpath.includes('\0') || /%2e|%2f|%5c/i.test(relativeSubpath)) {
+    return null;
+  }
+
   const cleanSubpath = String(relativeSubpath || '')
     .replace(/^https?:\/\/[^\/]+/i, '')
     .split('?')[0]
     .replace(/^\/?(?:api\/)?(?:files|uploads)(?:\/\d+)?\//, '')
     .replace(/^[/\\]+/, '');
 
+  // Reject any segment containing directory traversal dots
+  const segments = cleanSubpath.split(/[/\\]+/);
+  for (const seg of segments) {
+    if (seg === '..' || seg === '.') return null;
+  }
+
   const tId = String(tenantId || 1);
+  const resolvedRoot = path.resolve(UPLOADS_DIR);
+  const tenantDir = path.resolve(resolvedRoot, tId);
+  const targetPath = path.resolve(tenantDir, cleanSubpath);
 
-  const candidateBases = [];
-  if (storage.UPLOADS_DIR) {
-    candidateBases.push(storage.UPLOADS_DIR);
+  // STRICT CONTAINMENT: Target MUST reside strictly within tenant's directory
+  if (!targetPath.startsWith(tenantDir + path.sep) && targetPath !== tenantDir) {
+    return null;
   }
-  if (process.env.UPLOADS_DIR) {
-    candidateBases.push(path.resolve(process.env.UPLOADS_DIR));
-  }
-  candidateBases.push(path.resolve(__dirname, '../../uploads'));
-  candidateBases.push(path.resolve(__dirname, '../../../uploads'));
-  candidateBases.push(path.resolve(__dirname, '../../../uplaods'));
-  candidateBases.push(path.resolve(process.cwd(), 'uploads'));
-  candidateBases.push(path.resolve(process.cwd(), 'uplaods'));
-  candidateBases.push(path.resolve(process.cwd(), 'server/uploads'));
-  candidateBases.push(path.resolve(process.cwd(), '../uploads'));
-  candidateBases.push(path.resolve(process.cwd(), '../uplaods'));
-  candidateBases.push(path.resolve('/data/projects/pmt/server/uploads'));
-  candidateBases.push(path.resolve('/data/projects/pmt/uploads'));
-  candidateBases.push(path.resolve('/data/projects/pmt/uplaods'));
-  candidateBases.push(path.resolve('/data/projects/uploads'));
-  candidateBases.push(path.resolve('/data/projects/uplaods'));
 
-  const uniqueBases = Array.from(new Set(candidateBases.filter(Boolean)));
-
-  for (const base of uniqueBases) {
-    if (!fs.existsSync(base)) continue;
-
-    // 1. Candidate with tenant directory: <base>/<tenantId>/<cleanSubpath>
-    const tenantTarget = path.resolve(base, tId, cleanSubpath);
-    const tenantPrefix = path.resolve(base, tId);
-    if ((tenantTarget.startsWith(tenantPrefix + path.sep) || tenantTarget === tenantPrefix) && fs.existsSync(tenantTarget)) {
-      return tenantTarget;
-    }
-
-    // 2. Candidate directly under base: <base>/<cleanSubpath>
-    const directTarget = path.resolve(base, cleanSubpath);
-    const directPrefix = path.resolve(base);
-    if ((directTarget.startsWith(directPrefix + path.sep) || directTarget === directPrefix) && fs.existsSync(directTarget)) {
-      return directTarget;
-    }
-
-    // 3. Fallback: check across other tenant directories under base: <base>/*/<cleanSubpath>
+  // Symlink escape protection: strictly reject symbolic links in managed storage
+  // and verify realpath is ALSO strictly within tenant directory
+  if (fs.existsSync(targetPath)) {
     try {
-      const entries = fs.readdirSync(base, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory() && entry.name !== tId) {
-          const crossTenantTarget = path.resolve(base, entry.name, cleanSubpath);
-          if (fs.existsSync(crossTenantTarget)) {
-            return crossTenantTarget;
-          }
-        }
+      const stat = fs.lstatSync(targetPath);
+      if (stat.isSymbolicLink()) {
+        return null;
       }
-    } catch {}
-
-    // 4. Fallback for avatars/workspace icons: check by basename in subfolder across all tenant folders
-    const filename = path.basename(cleanSubpath);
-    const subfolder = cleanSubpath.split(/[\/\\]/)[0];
-    const targetFolder = (subfolder === 'avatars' || filename.startsWith('avatar_')) ? 'avatars' : ((subfolder === 'workspaces' || filename.startsWith('ws_')) ? 'workspaces' : null);
-    if (targetFolder) {
-      try {
-        const entries = fs.readdirSync(base, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            const candidateDeep = path.resolve(base, entry.name, targetFolder, filename);
-            if (fs.existsSync(candidateDeep)) {
-              return candidateDeep;
-            }
-          }
-        }
-        const directSubfolder = path.resolve(base, targetFolder, filename);
-        if (fs.existsSync(directSubfolder)) {
-          return directSubfolder;
-        }
-      } catch {}
-
-      // Fallback for avatar by user ID if exact filename is missing: check for any avatar of this user
-      if (targetFolder === 'avatars') {
-        const avatarMatch = filename.match(/^avatar_(\d+)_/);
-        if (avatarMatch) {
-          const targetUserId = avatarMatch[1];
-          try {
-            const entries = fs.readdirSync(base, { withFileTypes: true });
-            for (const entry of entries) {
-              if (entry.isDirectory()) {
-                const candidateAvatars = path.resolve(base, entry.name, 'avatars');
-                if (fs.existsSync(candidateAvatars)) {
-                  const matched = fs.readdirSync(candidateAvatars).filter((f) => f.startsWith(`avatar_${targetUserId}_`)).sort().reverse();
-                  if (matched.length > 0) {
-                    return path.resolve(candidateAvatars, matched[0]);
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
+      const real = fs.realpathSync(targetPath);
+      if (!real.startsWith(tenantDir + path.sep) && real !== tenantDir) {
+        return null;
       }
+    } catch (_) {
+      return null;
     }
   }
 
-  // Fallback to default expected path
-  return path.resolve(UPLOADS_DIR, tId, cleanSubpath);
+  return targetPath;
 }
 
 /**
@@ -261,7 +201,12 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: { message: 'Invalid file URL', code: 'BAD_REQUEST' } });
     }
 
-    // Strip origin if full URL was provided (e.g. https://pmtmgmt.solarman.in/api/files/...)
+    // Traversal and malformed path rejection
+    if (file_url.includes('\0') || /%2e|%2f|%5c|\.\./i.test(file_url)) {
+      return res.status(403).json({ error: { message: 'Path traversal attempt rejected', code: 'FORBIDDEN' } });
+    }
+
+    // Strip origin if full URL was provided
     if (/^https?:\/\//i.test(file_url)) {
       try {
         const parsed = new URL(file_url);
@@ -292,43 +237,56 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
       tenantId = Number(parts[0]);
       subpath = parts.slice(1).join('/');
     }
-    const userTenantId = req.tenant ? Number(req.tenant.id) : null;
-    if (userTenantId && tenantId && tenantId !== userTenantId) {
-      return res.status(403).json({ error: { message: 'Access denied', code: 'FORBIDDEN' } });
+    const userTenantId = req.tenant ? Number(req.tenant.id) : 1;
+    if (tenantId && tenantId !== userTenantId) {
+      return res.status(403).json({ error: { message: 'Access denied: Cross-tenant preview forbidden', code: 'FORBIDDEN' } });
     }
 
-    const effectiveTenantId = tenantId || userTenantId || 1;
+    const effectiveTenantId = userTenantId;
 
     // Verify user authorization before issuing preview token
     const { userHasPermission } = require('../middleware/permissions');
     if (subpath.startsWith('workspaces/')) {
       const wsMatch = subpath.match(/^workspaces\/ws_(\d+)_/);
-      if (wsMatch) {
-        const wsId = Number(wsMatch[1]);
-        const hasWsView = await userHasPermission(req.user.id, wsId, 'workspace.view', req.db);
-        if (!hasWsView) {
-          return res.status(403).json({ error: { message: 'Access denied: workspace.view required', code: 'FORBIDDEN' } });
-        }
+      if (!wsMatch) {
+        return res.status(400).json({ error: { message: 'Invalid workspace reference', code: 'BAD_REQUEST' } });
+      }
+      const wsId = Number(wsMatch[1]);
+      const wsRows = await req.db.query('SELECT id FROM workspaces WHERE id = ?', [wsId]);
+      if (!wsRows || wsRows.length === 0) {
+        return res.status(404).json({ error: { message: 'Workspace not found', code: 'NOT_FOUND' } });
+      }
+      const hasWsView = await userHasPermission(req.user.id, wsId, 'workspace.view', req.db);
+      if (!hasWsView) {
+        return res.status(403).json({ error: { message: 'Access denied: workspace.view required', code: 'FORBIDDEN' } });
       }
     } else if (subpath.startsWith('cards/')) {
       const cardMatch = subpath.match(/^cards\/(\d+)\//);
-      if (cardMatch) {
-        const cardId = Number(cardMatch[1]);
-        const cardRows = await req.db.query(
-          `SELECT l.board_id, b.workspace_id FROM cards c
-           JOIN lists l ON c.list_id = l.id
-           JOIN boards b ON l.board_id = b.id
-           WHERE c.id = ?`,
-          [cardId]
-        );
-        if (cardRows.length > 0) {
-          const hasView = await userHasPermission(req.user.id, cardRows[0].workspace_id, 'file.view', req.db, cardRows[0].board_id)
-            || await userHasPermission(req.user.id, cardRows[0].workspace_id, 'attachment.view', req.db, cardRows[0].board_id);
-          if (!hasView) {
-            return res.status(403).json({ error: { message: 'Access denied: attachment.view required', code: 'FORBIDDEN' } });
-          }
-        }
+      if (!cardMatch) {
+        return res.status(400).json({ error: { message: 'Invalid card attachment reference', code: 'BAD_REQUEST' } });
       }
+      const cardId = Number(cardMatch[1]);
+      const cardRows = await req.db.query(
+        `SELECT l.board_id, b.workspace_id FROM cards c
+         JOIN lists l ON c.list_id = l.id
+         JOIN boards b ON l.board_id = b.id
+         WHERE c.id = ?`,
+        [cardId]
+      );
+      if (!cardRows || cardRows.length === 0) {
+        return res.status(404).json({ error: { message: 'Card not found', code: 'NOT_FOUND' } });
+      }
+
+      // Check user permission on this board/workspace
+      const hasView = (await userHasPermission(req.user.id, cardRows[0].workspace_id, 'file.view', req.db, cardRows[0].board_id))
+        || (await userHasPermission(req.user.id, cardRows[0].workspace_id, 'attachment.view', req.db, cardRows[0].board_id));
+      if (!hasView) {
+        return res.status(403).json({ error: { message: 'Access denied: attachment.view required', code: 'FORBIDDEN' } });
+      }
+    } else if (subpath.startsWith('avatars/')) {
+      // Valid avatar subpath in tenant
+    } else {
+      return res.status(400).json({ error: { message: 'Unsupported preview resource type', code: 'BAD_REQUEST' } });
     }
 
     const token = jwt.sign(
@@ -352,13 +310,22 @@ router.post('/preview-token', requireAuth, async (req, res, next) => {
   }
 });
 
-// Middleware: allow valid requireAuth, valid signed ?token=..., OR public avatar images
+// Router-level preflight OPTIONS handler with strict CORS validation
+router.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token');
+  return res.status(204).end();
+});
+
+// Middleware: allow valid requireAuth OR valid signed ?token=...
 async function authOrPreviewToken(req, res, next) {
   const relativeSubpath = req.params[0] ? req.params[0].replace(/^[/\\]+/, '') : '';
-  if (relativeSubpath.startsWith('avatars/')) {
-    req.isAvatarRequest = true;
-    return next();
-  }
 
   if (req.query.token) {
     try {
@@ -385,48 +352,57 @@ async function authOrPreviewToken(req, res, next) {
   return requireAuth(req, res, next);
 }
 
-// GET /api/files/avatars/:filename - Direct fallback for avatar filenames
-router.get('/avatars/:filename', (req, res) => {
+// GET /api/files/avatars/:filename - Direct avatar serving within user's active tenant
+router.get('/avatars/:filename', requireAuth, (req, res) => {
   const filename = path.basename(req.params.filename);
-  const candidateBases = [];
-  if (process.env.UPLOADS_DIR) candidateBases.push(path.resolve(process.env.UPLOADS_DIR));
-  candidateBases.push(path.resolve(__dirname, '../../uploads'));
-  candidateBases.push(path.resolve(__dirname, '../../../uploads'));
-  candidateBases.push(path.resolve(process.cwd(), 'uploads'));
-
-  for (const base of Array.from(new Set(candidateBases))) {
-    if (!fs.existsSync(base)) continue;
-    try {
-      const entries = fs.readdirSync(base, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const potentialPath = path.join(base, entry.name, 'avatars', filename);
-          if (fs.existsSync(potentialPath)) {
-            const ext = path.extname(potentialPath).toLowerCase();
-            const mimeMap = {
-              '.jpg': 'image/jpeg',
-              '.jpeg': 'image/jpeg',
-              '.png': 'image/png',
-              '.webp': 'image/webp',
-              '.gif': 'image/gif',
-              '.svg': 'image/svg+xml'
-            };
-            const contentType = mimeMap[ext] || 'image/png';
-            const stat = fs.statSync(potentialPath);
-            res.writeHead(200, {
-              'Content-Type': contentType,
-              'Content-Length': stat.size,
-              'Content-Disposition': 'inline',
-              'Cache-Control': 'public, max-age=86400',
-              'X-Content-Type-Options': 'nosniff'
-            });
-            return fs.createReadStream(potentialPath).pipe(res);
-          }
-        }
-      }
-    } catch {}
+  if (!filename || filename.includes('..') || filename.includes('\0')) {
+    return res.status(400).json({ error: { message: 'Invalid filename', code: 'BAD_REQUEST' } });
   }
+
+  // Tenant ID strictly from authenticated session
+  const tenantId = String(req.tenant?.id || req.user?.tenant_id || '1');
+
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+
+  const potentialPath = resolveUploadFilePath(tenantId, `avatars/${filename}`);
+  if (potentialPath && fs.existsSync(potentialPath)) {
+    const ext = path.extname(potentialPath).toLowerCase();
+    const mimeMap = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml'
+    };
+    const contentType = mimeMap[ext] || 'image/png';
+    const stat = fs.statSync(potentialPath);
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+      'Content-Disposition': 'inline',
+      'Cache-Control': 'private, no-cache',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    return fs.createReadStream(potentialPath).pipe(res);
+  }
+
   return res.status(404).json({ error: { message: 'Avatar not found', code: 'NOT_FOUND' } });
+});
+
+// Retired legacy download endpoint: direct ID-based download /api/files/:id/download has been retired
+router.get('/:id/download', (req, res) => {
+  return res.status(410).json({
+    error: {
+      message: 'Endpoint retired: Direct ID-based download /api/files/:id/download has been retired.',
+      code: 'ENDPOINT_RETIRED'
+    }
+  });
 });
 
 // GET /api/files/:tenantId/* - Tenant-isolated file download
@@ -434,8 +410,8 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   const requestedTenantId = Number(req.params.tenantId);
   const userTenantId = req.tenant ? Number(req.tenant.id) : null;
 
-  // Item 6: Must return 403 if :tenantId differs from the token's tenant (only for non-avatar files)
-  if (!req.isAvatarRequest && userTenantId && requestedTenantId !== userTenantId) {
+  // Enforce strict tenant isolation: cross-tenant access strictly forbidden for all files including avatars
+  if (!req.isPreviewToken && userTenantId && requestedTenantId !== userTenantId) {
     return res.status(403).json({
       error: { message: 'Access denied: Foreign tenant', code: 'FORBIDDEN' }
     });
@@ -447,12 +423,15 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
     return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
   }
 
-  // Authorize by database record using unified userHasPermission (unless validated by preview token or avatar request)
+  // Authorize by database record using unified userHasPermission
   try {
     const { userHasPermission } = require('../middleware/permissions');
 
-    if (!req.isPreviewToken && !req.isAvatarRequest) {
-      if (relativeSubpath.startsWith('workspaces/')) {
+    if (!req.isPreviewToken) {
+      if (relativeSubpath.startsWith('avatars/')) {
+        // Valid avatar within user's own company tenant: all active company members may view
+        // fellow company members' avatars. requestedTenantId === userTenantId already enforced above.
+      } else if (relativeSubpath.startsWith('workspaces/')) {
         const wsMatch = relativeSubpath.match(/^workspaces\/ws_(\d+)_/);
         if (!wsMatch) {
           return res.status(404).json({ error: { message: 'File not found', code: 'NOT_FOUND' } });
@@ -563,9 +542,10 @@ router.get('/:tenantId/*', authOrPreviewToken, async (req, res, next) => {
   const mimeType = mimeMap[ext] || 'application/octet-stream';
 
   const origin = req.headers.origin;
-  if (origin) {
+  if (origin && isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
   } else if (req.isPreviewToken) {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
@@ -613,35 +593,25 @@ function resolveValidAvatarUrl(db, tenantId, userId, currentAvatarUrl) {
     }
   }
 
-  // Not found or missing on disk: search disk
+  // Not found or missing on disk: search only within tenant's designated avatar folder
   try {
-    const candidateBases = [
-      storage.UPLOADS_DIR,
-      process.env.UPLOADS_DIR && path.resolve(process.env.UPLOADS_DIR),
-      path.resolve('/data/projects/pmt/uploads'),
-      path.resolve(__dirname, '../../uploads'),
-      path.resolve(__dirname, '../../../uploads')
-    ].filter(Boolean);
-
-    for (const base of Array.from(new Set(candidateBases))) {
-      const avatarDir = path.resolve(base, tId, 'avatars');
-      if (fs.existsSync(avatarDir)) {
-        const files = fs.readdirSync(avatarDir);
-        const userFiles = files.filter((f) => f.startsWith(`avatar_${userId}_`)).sort().reverse();
-        if (userFiles.length > 0) {
-          const healed = `/api/files/${tId}/avatars/${userFiles[0]}`;
-          if (db) {
-            db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [healed, userId]).catch(() => {});
-          }
-          return healed;
+    const avatarDir = path.resolve(UPLOADS_DIR, tId, 'avatars');
+    if (fs.existsSync(avatarDir)) {
+      const files = fs.readdirSync(avatarDir);
+      const userFiles = files.filter((f) => f.startsWith(`avatar_${userId}_`)).sort().reverse();
+      if (userFiles.length > 0) {
+        const healed = `/api/files/${tId}/avatars/${userFiles[0]}`;
+        if (db) {
+          db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [healed, userId]).catch(() => { });
         }
+        return healed;
       }
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // If currentAvatarUrl was set but nonexistent on disk, clear dead pointer in database
   if (currentAvatarUrl && db) {
-    db.query('UPDATE users SET avatar_url = NULL WHERE id = ?', [userId]).catch(() => {});
+    db.query('UPDATE users SET avatar_url = NULL WHERE id = ?', [userId]).catch(() => { });
   }
   return null;
 }

@@ -127,24 +127,24 @@ const ROUTE_NOTIFICATION_MAP = {
 
   // --- Checklists & Items ---
   'POST /api/cards/:id/checklists': {
-    noNotify: true,
-    reason: 'Checklist creation is non-notifiable (recorded in activity log)'
+    events: ['checklist.created'],
+    description: 'Notifies board members when a checklist is added'
   },
   'DELETE /api/cards/checklists/:id': {
-    noNotify: true,
-    reason: 'Checklist deletion is non-notifiable (recorded in activity log)'
+    events: ['checklist.deleted'],
+    description: 'Notifies board members when a checklist is removed'
   },
   'POST /api/cards/checklist-items': {
-    noNotify: true,
-    reason: 'Checklist item addition is non-notifiable (recorded in activity log)'
+    events: ['checklist_item.added'],
+    description: 'Notifies board members when a checklist item is added'
   },
   'PATCH /api/cards/checklist-items/:id': {
-    noNotify: true,
-    reason: 'Checklist item toggling/editing is non-notifiable (recorded in activity log)'
+    events: ['checklist_item.edited', 'checklist_item.completed', 'checklist_item.reopened', 'checklist.completed_all'],
+    description: 'Notifies board members on checklist item toggle or edit'
   },
   'DELETE /api/cards/checklist-items/:id': {
-    noNotify: true,
-    reason: 'Checklist item deletion is non-notifiable (recorded in activity log)'
+    events: ['checklist_item.deleted'],
+    description: 'Notifies board members when a checklist item is deleted'
   },
 
   // --- Attachments ---

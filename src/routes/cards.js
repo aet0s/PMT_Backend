@@ -2247,8 +2247,8 @@ router.post('/:id/checklists', requireAuth, requirePermission('checklist.create'
         boardId,
         cardId,
         eventType: 'checklist.created',
-        actorId: req.user.id,
-        data: { checklistTitle: checklist?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
+        actorUserId: req.user.id,
+        meta: { checklistTitle: checklist?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
       });
     }
 
@@ -2313,8 +2313,8 @@ router.delete('/checklists/:id', requireAuth, requirePermission('checklist.delet
           boardId,
           cardId,
           eventType: 'checklist.deleted',
-          actorId: req.user.id,
-          data: { checklistTitle: chRes[0]?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
+          actorUserId: req.user.id,
+          meta: { checklistTitle: chRes[0]?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
         });
       }
     }
@@ -2359,8 +2359,8 @@ router.post('/checklist-items', requireAuth, requirePermission('checklist.edit')
           boardId,
           cardId,
           eventType: 'checklist_item.added',
-          actorId: req.user.id,
-          data: { itemText: text, checklistTitle: chRes[0]?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
+          actorUserId: req.user.id,
+          meta: { itemText: text, checklistTitle: chRes[0]?.title || 'Checklist', cardTitle: fullCard?.title || 'Card' }
         });
       }
     }
@@ -2456,8 +2456,8 @@ router.patch('/checklist-items/:id', requireAuth, requirePermission('checklist.e
               boardId: board_id,
               cardId: card_id,
               eventType: 'checklist_item.edited',
-              actorId: req.user.id,
-              data: { itemText: sanitizePlain(text), checklistTitle: detailRes[0].checklist_title, cardTitle: detailRes[0].card_title }
+              actorUserId: req.user.id,
+              meta: { itemText: sanitizePlain(text), checklistTitle: detailRes[0].checklist_title, cardTitle: detailRes[0].card_title }
             });
           }
         }
@@ -2577,8 +2577,8 @@ router.delete('/checklist-items/:id', requireAuth, requirePermission('checklist.
         boardId: board_id,
         cardId: card_id,
         eventType: 'checklist_item.deleted',
-        actorId: req.user.id,
-        data: { itemText: text, checklistTitle: checklist_title, cardTitle: fullCard?.title || 'Card' }
+        actorUserId: req.user.id,
+        meta: { itemText: text, checklistTitle: checklist_title, cardTitle: fullCard?.title || 'Card' }
       });
     }
 

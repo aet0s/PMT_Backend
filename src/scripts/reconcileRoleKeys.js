@@ -61,7 +61,7 @@ const SECTION_4_SPEC = {
     'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
     'epic.view', 'epic.create', 'epic.edit',
     'time.view_own', 'time.log', 'time.edit_own', 'time.view_all',
-    'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
+    'report.view_project', 'report.view_team', 'dashboard.view_project',
     'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.export',
     'archive.view', 'archive.restore', 'activity.view',
     'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
@@ -167,7 +167,7 @@ async function reconcileFourSources({ cloneDbName = null, cloneConn = null } = {
   for (const role of roleOrder) {
     // (a) Section 4 Spec
     const aList = (SECTION_4_SPEC[role] || []).filter((k) => activeCatalogKeys.has(k)).sort();
-    
+
     // (b) expectedMatrix.json
     let bRaw = [];
     if (role === 'Owner') bRaw = PERMISSIONS.filter((p) => !p.planned).map((p) => p.key);

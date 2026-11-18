@@ -13,6 +13,21 @@ const boardUsersMap = new Map();
 // Store user activity heartbeat: userId -> timestamp (ms) of last visible & focused activity
 const userActiveHeartbeatMap = new Map();
 
+// Rate limiting for real-time socket events: socketId -> { count, resetAt }
+const socketRateMap = new Map();
+
+function checkSocketRate(socket, maxEvents = 40, windowMs = 1000) {
+  const now = Date.now();
+  let entry = socketRateMap.get(socket.id);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 1, resetAt: now + windowMs };
+    socketRateMap.set(socket.id, entry);
+    return true;
+  }
+  entry.count++;
+  return entry.count <= maxEvents;
+}
+
 function recordUserActivity(userId, isVisible = true) {
   if (!userId) return;
   if (isVisible) {
@@ -159,7 +174,7 @@ function initSocket(server) {
       socket.join(`user:${socket.userId}`);
     }
 
-    // Join workspace room with tenant isolation
+    // Join workspace room with tenant isolation & permission checks
     socket.on('join_workspace', async ({ workspaceId }) => {
       if (!workspaceId) return;
       const wsId = Number(workspaceId);
@@ -170,26 +185,22 @@ function initSocket(server) {
         return;
       }
 
-      if (tenantId) {
-        try {
-          const tenantDb = await getTenantDb(tenantId);
-          const wsRows = await tenantDb.query('SELECT id FROM workspaces WHERE id = ?', [wsId]);
-          if (!wsRows || wsRows.length === 0) {
-            socket.emit('error', { message: 'Workspace not found in tenant', code: 'NOT_FOUND' });
-            return;
-          }
-          const memberRows = await tenantDb.query(
-            'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
-            [wsId, socket.userId]
-          );
-          if (!memberRows || memberRows.length === 0) {
-            socket.emit('error', { message: 'You are not a member of this workspace', code: 'PERMISSION_DENIED' });
-            return;
-          }
-        } catch (err) {
-          socket.emit('error', { message: 'Failed to verify workspace access', code: 'FORBIDDEN' });
+      try {
+        const db = tenantId ? await getTenantDb(tenantId) : getDevSingleDb();
+        const wsRows = await db.query('SELECT id FROM workspaces WHERE id = ?', [wsId]);
+        if (!wsRows || wsRows.length === 0) {
+          socket.emit('error', { message: 'Workspace not found', code: 'NOT_FOUND' });
           return;
         }
+        const { userHasPermission } = require('./middleware/permissions');
+        const hasAccess = await userHasPermission(socket.userId, wsId, 'workspace.view', db);
+        if (!hasAccess) {
+          socket.emit('error', { message: 'You are not a member of this workspace', code: 'PERMISSION_DENIED' });
+          return;
+        }
+      } catch (err) {
+        socket.emit('error', { message: 'Failed to verify workspace access', code: 'FORBIDDEN' });
+        return;
       }
 
       const room = getWorkspaceRoom(wsId, tenantId);
@@ -199,6 +210,7 @@ function initSocket(server) {
       if (isSingleTenantMode()) {
         socket.join(`workspace:${wsId}`);
       }
+      (socket.joinedWorkspaces || (socket.joinedWorkspaces = new Set())).add(wsId);
     });
 
     socket.on('leave_workspace', ({ workspaceId }) => {
@@ -211,9 +223,12 @@ function initSocket(server) {
       if (isSingleTenantMode()) {
         socket.leave(`workspace:${wsId}`);
       }
+      if (socket.joinedWorkspaces) {
+        socket.joinedWorkspaces.delete(wsId);
+      }
     });
 
-    // Join board room with tenant isolation
+    // Join board room with tenant isolation & permission checks
     socket.on('join_board', async ({ boardId }) => {
       if (!boardId) return;
       const bId = Number(boardId);
@@ -224,26 +239,24 @@ function initSocket(server) {
         return;
       }
 
-      // Verify board existence and user permission in tenant DB to prevent unauthorized room joins
-      if (tenantId) {
-        try {
-          const tenantDb = await getTenantDb(tenantId);
-          const bRows = await tenantDb.query('SELECT id, workspace_id FROM boards WHERE id = ?', [bId]);
-          if (!bRows || bRows.length === 0) {
-            socket.emit('error', { message: 'Board not found in tenant', code: 'NOT_FOUND' });
-            return;
-          }
-          const workspaceId = bRows[0].workspace_id;
-          const { userHasPermission } = require('./middleware/permissions');
-          const hasAccess = await userHasPermission(socket.userId, workspaceId, 'project.view', tenantDb, bId);
-          if (!hasAccess) {
-            socket.emit('error', { message: 'You do not have permission to view this project', code: 'PERMISSION_DENIED' });
-            return;
-          }
-        } catch (err) {
-          socket.emit('error', { message: 'Failed to verify board access', code: 'FORBIDDEN' });
+      // Verify board existence and user permission in tenant or dev DB
+      try {
+        const db = tenantId ? await getTenantDb(tenantId) : getDevSingleDb();
+        const bRows = await db.query('SELECT id, workspace_id FROM boards WHERE id = ?', [bId]);
+        if (!bRows || bRows.length === 0) {
+          socket.emit('error', { message: 'Board not found', code: 'NOT_FOUND' });
           return;
         }
+        const workspaceId = bRows[0].workspace_id;
+        const { userHasPermission } = require('./middleware/permissions');
+        const hasAccess = await userHasPermission(socket.userId, workspaceId, 'project.view', db, bId);
+        if (!hasAccess) {
+          socket.emit('error', { message: 'You do not have permission to view this project', code: 'PERMISSION_DENIED' });
+          return;
+        }
+      } catch (err) {
+        socket.emit('error', { message: 'Failed to verify board access', code: 'FORBIDDEN' });
+        return;
       }
 
       const room = getBoardRoom(bId, tenantId);
@@ -317,27 +330,49 @@ function initSocket(server) {
       delete socket.currentBoardId;
     });
 
-    // Live Drag & Mouse Pointer Streaming
-    socket.on('card_drag_move', ({ boardId, cardId, cardTitle, card, x, y }) => {
-      if (!boardId) return;
-      const room = getBoardRoom(Number(boardId), socket.tenantId);
-      if (!room) return;
-      socket.to(room).emit('card:dragging', {
+    // Live Drag & Mouse Pointer Streaming - Protected with authorization, rate limiting & payload sanitization
+    socket.on('card_drag_move', (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      if (JSON.stringify(payload).length > 4096) return;
+      if (!checkSocketRate(socket, 40, 1000)) return;
+
+      const boardId = Number(payload.boardId);
+      // Strictly verify socket has joined this board room
+      if (!boardId || socket.currentBoardId !== boardId) return;
+
+      const cardId = Number(payload.cardId);
+      if (!cardId) return;
+
+      const room = getBoardRoom(boardId, socket.tenantId);
+      if (!room || room !== socket.currentBoardRoom) return;
+
+      // Sanitize fields to prevent arbitrary object injection
+      const sanitized = {
         socketId: socket.id,
         userId: socket.userId,
-        userName: socket.userName,
+        userName: String(socket.userName || 'User').slice(0, 50),
         cardId,
-        cardTitle,
-        card,
-        x,
-        y
-      });
+        cardTitle: typeof payload.cardTitle === 'string' ? payload.cardTitle.slice(0, 200) : '',
+        x: typeof payload.x === 'number' && Number.isFinite(payload.x) ? payload.x : 0,
+        y: typeof payload.y === 'number' && Number.isFinite(payload.y) ? payload.y : 0
+      };
+
+      socket.to(room).emit('card:dragging', sanitized);
     });
 
-    socket.on('card_drag_end', ({ boardId, cardId }) => {
-      if (!boardId) return;
-      const room = getBoardRoom(Number(boardId), socket.tenantId);
-      if (!room) return;
+    socket.on('card_drag_end', (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      if (!checkSocketRate(socket, 40, 1000)) return;
+
+      const boardId = Number(payload.boardId);
+      if (!boardId || socket.currentBoardId !== boardId) return;
+
+      const cardId = Number(payload.cardId);
+      if (!cardId) return;
+
+      const room = getBoardRoom(boardId, socket.tenantId);
+      if (!room || room !== socket.currentBoardRoom) return;
+
       socket.to(room).emit('card:drag_ended', {
         socketId: socket.id,
         userId: socket.userId,
@@ -345,25 +380,46 @@ function initSocket(server) {
       });
     });
 
-    socket.on('list_drag_move', ({ boardId, listId, list, x, y }) => {
-      if (!boardId) return;
-      const room = getBoardRoom(Number(boardId), socket.tenantId);
-      if (!room) return;
-      socket.to(room).emit('list:dragging', {
+    socket.on('list_drag_move', (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      if (JSON.stringify(payload).length > 4096) return;
+      if (!checkSocketRate(socket, 40, 1000)) return;
+
+      const boardId = Number(payload.boardId);
+      if (!boardId || socket.currentBoardId !== boardId) return;
+
+      const listId = Number(payload.listId);
+      if (!listId) return;
+
+      const room = getBoardRoom(boardId, socket.tenantId);
+      if (!room || room !== socket.currentBoardRoom) return;
+
+      const sanitized = {
         socketId: socket.id,
         userId: socket.userId,
-        userName: socket.userName,
+        userName: String(socket.userName || 'User').slice(0, 50),
         listId,
-        list,
-        x,
-        y
-      });
+        listTitle: typeof payload.listTitle === 'string' ? payload.listTitle.slice(0, 100) : (typeof payload.list?.title === 'string' ? payload.list.title.slice(0, 100) : ''),
+        x: typeof payload.x === 'number' && Number.isFinite(payload.x) ? payload.x : 0,
+        y: typeof payload.y === 'number' && Number.isFinite(payload.y) ? payload.y : 0
+      };
+
+      socket.to(room).emit('list:dragging', sanitized);
     });
 
-    socket.on('list_drag_end', ({ boardId, listId }) => {
-      if (!boardId) return;
-      const room = getBoardRoom(Number(boardId), socket.tenantId);
-      if (!room) return;
+    socket.on('list_drag_end', (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      if (!checkSocketRate(socket, 40, 1000)) return;
+
+      const boardId = Number(payload.boardId);
+      if (!boardId || socket.currentBoardId !== boardId) return;
+
+      const listId = Number(payload.listId);
+      if (!listId) return;
+
+      const room = getBoardRoom(boardId, socket.tenantId);
+      if (!room || room !== socket.currentBoardRoom) return;
+
       socket.to(room).emit('list:drag_ended', {
         socketId: socket.id,
         userId: socket.userId,
@@ -380,6 +436,7 @@ function initSocket(server) {
 
     // Disconnect cleanup
     socket.on('disconnect', () => {
+      socketRateMap.delete(socket.id);
       const room = socket.currentBoardRoom;
       const bId = socket.currentBoardId;
       if (room && boardUsersMap.has(room)) {

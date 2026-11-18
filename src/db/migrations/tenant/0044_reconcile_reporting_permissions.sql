@@ -30,11 +30,10 @@ WHERE r.is_system = 1
   AND r.name IN ('Owner', 'Admin', 'Project Manager', 'Team Lead')
   AND p.`key` = 'report.view_team';
 
--- 5. Grant report.export to Team Lead as well (Owner, Admin, PM already have it)
-INSERT IGNORE INTO role_permissions (role_id, permission_id)
-SELECT r.id, p.id
-FROM roles r
-CROSS JOIN permissions p
+-- 5. Revoke report.export from Team Lead (strictly restricted to Owner, Admin, Project Manager, Auditor)
+DELETE rp FROM role_permissions rp
+JOIN roles r ON rp.role_id = r.id
+JOIN permissions p ON rp.permission_id = p.id
 WHERE r.is_system = 1
   AND r.workspace_id IS NULL
   AND r.name = 'Team Lead'

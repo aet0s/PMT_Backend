@@ -520,6 +520,7 @@ registerOperation('workspaces.activity', {
 });
 
 registerOperation('workspaces.reports', {
+  permission: 'report.view_project',
   schema: z.object({
     workspace_id: z.union([z.coerce.number().positive(), z.literal('all'), z.string()]).optional(),
     board_id: z.union([z.coerce.number().positive(), z.literal('all')]).optional(),
@@ -2014,8 +2015,20 @@ registerOperation('files.download', {
       throw err;
     }
 
+    const effectiveTenantId = Number(tenantId);
     const pathTenantMatch = String(filePath).match(/(?:\/api\/files\/|\/uploads\/)(\d+)\//);
-    const effectiveTenantId = pathTenantMatch ? Number(pathTenantMatch[1]) : tenantId;
+    if (pathTenantMatch && Number(pathTenantMatch[1]) !== effectiveTenantId) {
+      const err = new Error('Access denied: Cross-tenant file download forbidden');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
+    if (data.tenant_id && Number(data.tenant_id) !== effectiveTenantId) {
+      const err = new Error('Access denied: Cross-tenant file download forbidden');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
 
     const { resolveUploadFilePath } = require('../routes/files');
     const finalPath = resolveUploadFilePath(effectiveTenantId, cleanSubpath);
@@ -2050,6 +2063,97 @@ registerOperation('files.download', {
       file_size_bytes: buffer.length,
       data_base64: buffer.toString('base64')
     };
+  }
+});
+
+registerOperation('users.profile', {
+  requireAuth: true,
+  schema: z.object({
+    user_id: z.coerce.number().optional(),
+    id: z.coerce.number().optional(),
+    email: z.string().optional()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const targetUserId = data.user_id || data.id || (data.email ? null : ctx.user.id);
+    let targetUser = null;
+
+    if (targetUserId) {
+      const rows = await ctx.db.query(
+        `SELECT id, name, email, avatar_url, timezone, locale, created_at, is_active
+         FROM users
+         WHERE id = ?`,
+        [targetUserId]
+      );
+      if (rows && rows.length > 0) {
+        targetUser = rows[0];
+      }
+    } else if (data.email) {
+      const rows = await ctx.db.query(
+        `SELECT id, name, email, avatar_url, timezone, locale, created_at, is_active
+         FROM users
+         WHERE LOWER(email) = ?`,
+        [data.email.trim().toLowerCase()]
+      );
+      if (rows && rows.length > 0) {
+        targetUser = rows[0];
+      }
+    }
+
+    if (!targetUser) {
+      const err = new Error('User not found');
+      err.status = 404;
+      err.code = 'USER_NOT_FOUND';
+      throw err;
+    }
+
+    // Company-level access: requesting user and target user belong to the same tenant DB (ctx.db).
+    // All active members of the company are permitted to view fellow active members' safe profile.
+    if (targetUser.is_active === 0) {
+      const err = new Error('User account is inactive');
+      err.status = 404;
+      err.code = 'USER_INACTIVE';
+      throw err;
+    }
+
+    // Fetch permitted non-archived workspace memberships
+    const wmRows = await ctx.db.query(
+      `SELECT wm.workspace_id, wm.role as role_name, w.name as workspace_name
+       FROM workspace_members wm
+       JOIN workspaces w ON wm.workspace_id = w.id
+       WHERE wm.user_id = ? AND w.is_archived = 0
+       ORDER BY w.name ASC`,
+      [targetUser.id]
+    ).catch(() => []);
+
+    // Strict safe company profile schema: NEVER leak password hashes, TOTP secrets, tokens, or security settings
+    return {
+      id: targetUser.id,
+      name: targetUser.name,
+      email: targetUser.email,
+      avatar_url: targetUser.avatar_url,
+      timezone: targetUser.timezone || 'Asia/Kolkata',
+      locale: targetUser.locale || 'en-US',
+      created_at: targetUser.created_at,
+      status: targetUser.is_active !== 0 ? 'active' : 'inactive',
+      workspaces: (wmRows || []).map(w => ({
+        id: w.workspace_id,
+        name: w.workspace_name,
+        role: w.role_name
+      }))
+    };
+  }
+});
+
+registerOperation('users.get', {
+  requireAuth: true,
+  schema: z.object({
+    user_id: z.coerce.number().optional(),
+    id: z.coerce.number().optional(),
+    email: z.string().optional()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const profileOp = getOperation('users.profile');
+    return await profileOp.handler(ctx, data);
   }
 });
 

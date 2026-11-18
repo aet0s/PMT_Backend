@@ -358,7 +358,7 @@ const NOTIFICATION_EVENTS = {
   },
 
   // ==========================================
-  // --- CHECKLISTS (8 events, 0 notifiable) ---
+  // --- CHECKLISTS (8 events, 8 notifiable) ---
   // ==========================================
   'checklist.created': {
     category: 'Cards',
@@ -368,7 +368,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'immediate',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist.deleted': {
     category: 'Cards',
@@ -378,7 +378,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'immediate',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist_item.added': {
     category: 'Cards',
@@ -388,7 +388,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['itemText', 'checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist_item.edited': {
     category: 'Cards',
@@ -398,7 +398,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['itemText', 'checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist_item.deleted': {
     category: 'Cards',
@@ -408,7 +408,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['itemText', 'checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist_item.completed': {
     category: 'Cards',
@@ -418,7 +418,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['itemText', 'checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist_item.reopened': {
     category: 'Cards',
@@ -428,7 +428,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['itemText', 'checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'coalesce_60s',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
   'checklist.completed_all': {
     category: 'Cards',
@@ -438,7 +438,7 @@ const NOTIFICATION_EVENTS = {
     metaFields: ['checklistTitle', 'cardTitle', 'boardName'],
     coalescingPolicy: 'immediate',
     deepLink: '/b/{boardId}?card={cardId}',
-    notifiable: false
+    notifiable: true
   },
 
   // ==========================================

@@ -310,7 +310,7 @@ const SYSTEM_ROLES = {
       'sprint.view', 'sprint.create', 'sprint.edit', 'sprint.start', 'sprint.complete', 'backlog.view', 'backlog.reorder',
       'epic.view', 'epic.create', 'epic.edit',
       'time.view_own', 'time.log', 'time.edit_own', 'time.view_all',
-      'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
+      'report.view_project', 'report.view_team', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.export',
       'archive.view', 'archive.restore', 'activity.view',
       'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'

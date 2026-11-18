@@ -68,8 +68,9 @@ function createRateLimiter({
   if (cleanupTimer.unref) cleanupTimer.unref();
 
   const middleware = async (req, res, next) => {
-    // Rate limiting may be bypassed ONLY when NODE_ENV === 'test' or DISABLE_RATE_LIMIT === 'true'
-    if (process.env.DISABLE_RATE_LIMIT === 'true' || (process.env.NODE_ENV === 'test' && process.env.DISABLE_RATE_LIMIT !== 'false')) {
+    // In production, rate limiting must NEVER be disabled.
+    // In dev/test, allow explicit bypass via DISABLE_RATE_LIMIT=1/true.
+    if (process.env.NODE_ENV !== 'production' && /^(1|true|yes)$/i.test(process.env.DISABLE_RATE_LIMIT || '')) {
       return next();
     }
 
@@ -78,27 +79,63 @@ function createRateLimiter({
       : `${keyPrefix}:${getClientIp(req)}`;
 
     const now = Date.now();
+    const db = getActiveDbForLimits();
+    let hits = 1;
+    let resetAt = now + windowMs;
 
-    let entry = memoryStore.get(key);
-    if (!entry || now > entry.resetAt) {
-      entry = {
-        hits: 1,
-        resetAt: now + windowMs
-      };
-      memoryStore.set(key, entry);
+    // Atomic distributed rate limit accounting via database rate_limits table
+    if (db && typeof db.query === 'function') {
+      try {
+        await db.query(
+          `INSERT INTO rate_limits (limiter_key, hits, reset_at, created_at, updated_at)
+           VALUES (?, 1, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE
+             hits = IF(reset_at < ?, 1, hits + 1),
+             reset_at = IF(reset_at < ?, VALUES(reset_at), reset_at),
+             updated_at = NOW()`,
+          [key, resetAt, now, now]
+        );
+        const rows = await db.query(
+          `SELECT hits, reset_at FROM rate_limits WHERE limiter_key = ?`,
+          [key]
+        );
+        if (rows && rows.length > 0 && rows[0].hits) {
+          hits = Number(rows[0].hits);
+          resetAt = Number(rows[0].reset_at);
+        }
+      } catch (dbErr) {
+        // Fallback to local sliding-window memory store if database is temporarily unavailable
+        let entry = memoryStore.get(key);
+        if (!entry || now > entry.resetAt) {
+          entry = { hits: 1, resetAt: now + windowMs };
+          memoryStore.set(key, entry);
+        } else {
+          entry.hits += 1;
+        }
+        hits = entry.hits;
+        resetAt = entry.resetAt;
+      }
     } else {
-      entry.hits += 1;
+      let entry = memoryStore.get(key);
+      if (!entry || now > entry.resetAt) {
+        entry = { hits: 1, resetAt: now + windowMs };
+        memoryStore.set(key, entry);
+      } else {
+        entry.hits += 1;
+      }
+      hits = entry.hits;
+      resetAt = entry.resetAt;
     }
 
-    const remaining = Math.max(0, maxRequests - entry.hits);
-    const resetSeconds = Math.ceil(entry.resetAt / 1000);
-    const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    const remaining = Math.max(0, maxRequests - hits);
+    const resetSeconds = Math.ceil(resetAt / 1000);
+    const retryAfter = Math.max(1, Math.ceil((resetAt - now) / 1000));
 
     res.setHeader('X-RateLimit-Limit', maxRequests);
     res.setHeader('X-RateLimit-Remaining', remaining);
     res.setHeader('X-RateLimit-Reset', resetSeconds);
 
-    if (entry.hits > maxRequests) {
+    if (hits > maxRequests) {
       res.setHeader('Retry-After', retryAfter);
       return res.status(429).json({
         error: {
@@ -110,30 +147,27 @@ function createRateLimiter({
       });
     }
 
-    // Best-effort asynchronous write to rate_limits table for multi-process sharing
-    const db = getActiveDbForLimits();
-    if (db) {
-      db.query(
-        `INSERT INTO rate_limits (limiter_key, hits, reset_at, created_at, updated_at)
-         VALUES (?, 1, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE hits = hits + 1, updated_at = NOW()`,
-        [key, entry.resetAt]
-      ).catch(() => {});
-    }
-
     return next();
   };
 
-  middleware.reset = () => {
+  middleware.reset = async () => {
     memoryStore.clear();
+    const db = getActiveDbForLimits();
+    if (db) {
+      try {
+        await db.query(`DELETE FROM rate_limits WHERE limiter_key LIKE ?`, [`${keyPrefix}:%`]);
+      } catch (_) { }
+    }
   };
 
-  middleware.resetKey = (key) => {
+  middleware.resetKey = async (key) => {
     if (key) {
       memoryStore.delete(key);
       const db = getActiveDbForLimits();
       if (db) {
-        db.query('DELETE FROM rate_limits WHERE limiter_key = ?', [key]).catch(() => {});
+        try {
+          await db.query('DELETE FROM rate_limits WHERE limiter_key = ?', [key]);
+        } catch (_) { }
       }
     }
   };
@@ -251,6 +285,25 @@ function resetAllRateLimits() {
   exportRateLimiter.reset();
 }
 
+/**
+ * Bounded batch cleanup of expired rate limits in rate_limits table.
+ */
+async function cleanupExpiredRateLimits(maxBatch = 1000) {
+  const db = getActiveDbForLimits();
+  if (!db || typeof db.query !== 'function') return 0;
+  try {
+    const nowMs = Date.now();
+    const res = await db.query(
+      'DELETE FROM rate_limits WHERE reset_at < ? ORDER BY reset_at ASC LIMIT ?',
+      [nowMs, maxBatch]
+    );
+    return res?.affectedRows || 0;
+  } catch (err) {
+    console.error('[RATE-LIMIT] Error cleaning up expired rate limits:', err.message);
+    return 0;
+  }
+}
+
 module.exports = {
   createRateLimiter,
   loginRateLimiter,
@@ -261,5 +314,6 @@ module.exports = {
   clearLoginRateLimit,
   clearAuthRateLimit,
   resetAllRateLimits,
+  cleanupExpiredRateLimits,
   getClientIp
 };

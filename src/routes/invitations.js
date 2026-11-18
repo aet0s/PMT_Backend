@@ -67,7 +67,7 @@ router.get('/verify', async (req, res, next) => {
   }
 
   try {
-    let activeDb = req.db;
+    let activeDb = (req.db && req.db !== getMasterDb()) ? req.db : null;
     if (!activeDb && tokenInfo.tenantSlug && tokenInfo.tenantSlug !== 'default') {
       const masterDb = getMasterDb();
       const [tenant] = await masterDb.query(
@@ -111,7 +111,7 @@ router.get('/verify', async (req, res, next) => {
 
     let boardNames = [];
     if (boardIds.length > 0) {
-      const boardsRes = await (req.db || getDevSingleDb()).query(
+      const boardsRes = await activeDb.query(
         'SELECT name FROM boards WHERE id IN (?)',
         [boardIds]
       );
@@ -271,73 +271,67 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
     'SELECT id, name, email FROM users WHERE email = ?',
     [normalizedEmail]
   );
-  if (existingUserRes.length > 0) {
-    const err = new Error('This email address is already registered to an existing member. Each member must have a unique email address.');
-    err.status = 400;
-    err.code = 'USER_ALREADY_MEMBER';
-    throw err;
-  }
-
-  // Enforce single active invitation per email across company
-  const anyExistingInvite = await db.query(
-    "SELECT id, workspace_id, token, expires_at FROM pending_invitations WHERE email = ? AND status = 'pending'",
-    [normalizedEmail]
-  );
-  const activePending = anyExistingInvite.find((inv) => !inv.expires_at || new Date(inv.expires_at) > new Date());
-  if (activePending) {
-    const err = new Error('An invitation has already been sent to this email address. Only one active invitation can be sent per email.');
-    err.status = 409;
-    err.code = 'INVITATION_ALREADY_EXISTS';
-    throw err;
-  }
-
-  let token;
-  let invitationId;
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  const tenantSlug = tenant?.slug || 'default';
-  const rawToken = crypto.randomBytes(20).toString('hex');
-  const signedToken = signInviteToken(rawToken, tenantSlug);
-
-  token = signedToken;
-  const insRes = await db.execute(
-    `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, role_id, status, expires_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-    [normalizedEmail, workspaceId, user.id, token, resolvedRoleId, expiresAt]
-  );
-  invitationId = insRes.insertId;
-
-  for (const bId of boardIds) {
-    await db.execute(
-      'INSERT IGNORE INTO invitation_boards (invitation_id, board_id) VALUES (?, ?)',
-      [invitationId, bId]
-    );
-  }
-
-  const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
-  const inviteUrl = `${clientBase}/invite?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
-
-  // Query workspace & company info for the invitation email
-  const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
-  const wsName = wsRes[0]?.name || 'Workspace';
-  const companyName = tenant?.name || wsName;
-
-  // Send invitation email to the member
-  let emailSent = false;
-  try {
-    const mailRes = await EmailProvider.sendInvitationEmail(normalizedEmail, {
-      inviterName: user.name || user.email,
-      companyName,
-      workspaceName: wsName,
-      roleName: resolvedRoleName,
-      inviteUrl,
-      expiresAt
-    });
-    emailSent = Boolean(mailRes && mailRes.success);
-  } catch (mailErr) {
-    console.error('[INVITATION_EMAIL_ERROR] Failed to send email to', normalizedEmail, mailErr.message);
-  }
 
   if (existingUserRes.length === 0) {
+    // Enforce single active invitation per email across company
+    const anyExistingInvite = await db.query(
+      "SELECT id, workspace_id, token, expires_at FROM pending_invitations WHERE email = ? AND status = 'pending'",
+      [normalizedEmail]
+    );
+    const activePending = anyExistingInvite.find((inv) => !inv.expires_at || new Date(inv.expires_at) > new Date());
+    if (activePending) {
+      const err = new Error('An invitation has already been sent to this email address. Only one active invitation can be sent per email.');
+      err.status = 409;
+      err.code = 'INVITATION_ALREADY_EXISTS';
+      throw err;
+    }
+
+    let token;
+    let invitationId;
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const tenantSlug = tenant?.slug || 'default';
+    const rawToken = crypto.randomBytes(20).toString('hex');
+    const signedToken = signInviteToken(rawToken, tenantSlug);
+
+    token = signedToken;
+    const insRes = await db.execute(
+      `INSERT INTO pending_invitations (email, workspace_id, invited_by_user_id, token, role_id, status, expires_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+      [normalizedEmail, workspaceId, user.id, token, resolvedRoleId, expiresAt]
+    );
+    invitationId = insRes.insertId;
+
+    for (const bId of boardIds) {
+      await db.execute(
+        'INSERT IGNORE INTO invitation_boards (invitation_id, board_id) VALUES (?, ?)',
+        [invitationId, bId]
+      );
+    }
+
+    const clientBase = (process.env.CLIENT_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).replace(/\/$/, '');
+    const inviteUrl = `${clientBase}/invite?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
+
+    // Query workspace & company info for the invitation email
+    const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
+    const wsName = wsRes[0]?.name || 'Workspace';
+    const companyName = tenant?.name || wsName;
+
+    // Send invitation email to the member
+    let emailSent = false;
+    try {
+      const mailRes = await EmailProvider.sendInvitationEmail(normalizedEmail, {
+        inviterName: user.name || user.email,
+        companyName,
+        workspaceName: wsName,
+        roleName: resolvedRoleName,
+        inviteUrl,
+        expiresAt
+      });
+      emailSent = Boolean(mailRes && mailRes.success);
+    } catch (mailErr) {
+      console.error('[INVITATION_EMAIL_ERROR] Failed to send email to', normalizedEmail, mailErr.message);
+    }
+
     broadcastWorkspaceEvent(workspaceId, 'workspace:invitation_created', {
       invitation: {
         id: invitationId,
@@ -373,6 +367,7 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
         requires_registration: true,
         invite_token: token,
         invite_url: inviteUrl,
+        workspace_id: workspaceId,
         role_id: resolvedRoleId,
         role_name: resolvedRoleName,
         email_sent: emailSent,
@@ -403,28 +398,16 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
     }
   }
 
-  await db.execute(
-    `UPDATE pending_invitations SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP(3), accepted_by_user_id = ? WHERE token = ?`,
-    [targetUser.id, token]
-  );
+  const wsRes = await db.query('SELECT name FROM workspaces WHERE id = ?', [workspaceId]);
+  const wsName = wsRes[0]?.name || 'Workspace';
 
   await notify(
     {
-      eventType: 'invite.sent',
+      eventType: 'workspace.member_added',
       actorUserId: user.id,
-      inviteeUserId: targetUser.id,
+      targetUserId: targetUser.id,
       workspaceId: workspaceId,
-      meta: { workspaceName: wsName }
-    },
-    db
-  );
-
-  await notify(
-    {
-      eventType: 'invite.accepted',
-      actorUserId: targetUser.id,
-      workspaceId: workspaceId,
-      meta: { workspaceName: wsName }
+      meta: { workspaceName: wsName, roleName: resolvedRoleName }
     },
     db
   );
@@ -444,9 +427,10 @@ async function createInvitationHelper(optionsOrReq, maybeOptions = {}) {
   return {
     status: 200,
     data: {
-      invite_token: token,
-      invite_url: inviteUrl,
-      member: memberPayload
+      requires_registration: false,
+      member: memberPayload,
+      role_name: resolvedRoleName,
+      message: `${targetUser.name || targetUser.email} was added as ${resolvedRoleName} to ${wsName}.`
     }
   };
 }
@@ -549,7 +533,24 @@ router.post('/accept', requireAuth, async (req, res, next) => {
   }
 
   try {
-    const inviteRes = await req.db.query(
+    let activeDb = (req.db && req.db !== getMasterDb()) ? req.db : null;
+    let targetTenant = req.tenant;
+    if (tokenInfo.tenantSlug && tokenInfo.tenantSlug !== 'default') {
+      const masterDb = getMasterDb();
+      const [tenant] = await masterDb.query(
+        "SELECT id, db_name, slug FROM tenants WHERE slug = ? AND status != 'deleted'",
+        [tokenInfo.tenantSlug]
+      );
+      if (tenant) {
+        activeDb = await getTenantDb(tenant.id);
+        targetTenant = tenant;
+      }
+    }
+    if (!activeDb) {
+      activeDb = getDevSingleDb();
+    }
+
+    const inviteRes = await activeDb.query(
       `SELECT pi.id, pi.workspace_id, pi.role_id, pi.status, pi.expires_at, GROUP_CONCAT(ib.board_id) as board_ids_str
        FROM pending_invitations pi
        LEFT JOIN invitation_boards ib ON pi.id = ib.invitation_id
@@ -576,7 +577,7 @@ router.post('/accept', requireAuth, async (req, res, next) => {
     let assignedRoleId = invite.role_id;
     let assignedRoleName = 'Team Member';
     if (assignedRoleId) {
-      const rRes = await req.db.query('SELECT id, name FROM roles WHERE id = ?', [assignedRoleId]);
+      const rRes = await activeDb.query('SELECT id, name FROM roles WHERE id = ?', [assignedRoleId]);
       if (rRes.length > 0) {
         assignedRoleName = rRes[0].name;
       } else {
@@ -584,14 +585,14 @@ router.post('/accept', requireAuth, async (req, res, next) => {
       }
     }
     if (!assignedRoleId) {
-      const teamMemberRoleRes = await req.db.query(
+      const teamMemberRoleRes = await activeDb.query(
         "SELECT id, name FROM roles WHERE is_system = 1 AND name = 'Team Member' AND workspace_id IS NULL"
       );
       assignedRoleId = teamMemberRoleRes[0]?.id;
       assignedRoleName = teamMemberRoleRes[0]?.name || 'Team Member';
     }
 
-    await req.db.execute(
+    await activeDb.execute(
       `INSERT INTO workspace_members (workspace_id, user_id, role, role_id)
        VALUES (?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role = VALUES(role)`,
@@ -600,7 +601,7 @@ router.post('/accept', requireAuth, async (req, res, next) => {
 
     if (boardIds.length > 0) {
       for (const boardId of boardIds) {
-        await req.db.execute(
+        await activeDb.execute(
           `INSERT INTO board_members (board_id, user_id, role, role_id)
            VALUES (?, ?, 'member', ?)
            ON DUPLICATE KEY UPDATE role = 'member', role_id = COALESCE(VALUES(role_id), role_id)`,
@@ -609,14 +610,14 @@ router.post('/accept', requireAuth, async (req, res, next) => {
       }
     }
 
-    await req.db.execute(
+    await activeDb.execute(
       `UPDATE pending_invitations
        SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP(3), accepted_by_user_id = ?
        WHERE id = ?`,
       [req.user.id, invite.id]
     );
 
-    const wsRes = await req.db.query('SELECT name FROM workspaces WHERE id = ?', [invite.workspace_id]);
+    const wsRes = await activeDb.query('SELECT name FROM workspaces WHERE id = ?', [invite.workspace_id]);
     const wsName = wsRes[0]?.name || 'Workspace';
 
     await logActivity({
@@ -624,8 +625,8 @@ router.post('/accept', requireAuth, async (req, res, next) => {
       userId: req.user.id,
       actionType: 'invitation_accepted',
       metaJson: { workspace_name: wsName, email: invite.email },
-      dbInstance: req.db,
-      tenantId: req.tenant?.id
+      dbInstance: activeDb,
+      tenantId: targetTenant?.id
     });
 
     await notify(
@@ -633,10 +634,10 @@ router.post('/accept', requireAuth, async (req, res, next) => {
         eventType: 'invite.accepted',
         actorUserId: req.user.id,
         workspaceId: invite.workspace_id,
-        tenantId: req.tenant?.id || null,
+        tenantId: targetTenant?.id || null,
         meta: { workspaceName: wsName }
       },
-      req.db
+      activeDb
     );
 
     return res.json({

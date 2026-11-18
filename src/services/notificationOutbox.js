@@ -94,16 +94,35 @@ async function processOutbox(db, tenantId = 'single') {
 
   const lockKey = `pm_notif_lock_${tenantId}`;
   let lockAcquired = false;
+  let connection = null;
 
   try {
-    const [lockRes] = await db.query('SELECT GET_LOCK(?, 0) as got_lock', [lockKey]);
+    // MySQL GET_LOCK() is connection-scoped. If db is a connection pool,
+    // calling db.query() immediately returns the connection to the pool.
+    // We MUST acquire and hold a dedicated connection throughout outbox processing.
+    if (typeof db.getConnection === 'function') {
+      connection = await db.getConnection();
+    }
+    const runner = connection || db;
+
+    const [lockRes] = await runner.query('SELECT GET_LOCK(?, 0) as got_lock', [lockKey]);
     if (!lockRes || Number(lockRes.got_lock) !== 1) {
       // Another worker process is currently processing this tenant
       return;
     }
     lockAcquired = true;
 
-    const rows = await db.query(
+    // Recover stuck processing rows where worker may have crashed (older than 5 minutes)
+    await runner.execute(
+      `UPDATE notification_outbox
+       SET status = 'failed',
+           last_error = 'Worker lease timeout: reset after 5 minutes in processing state',
+           next_retry_at = NOW(3)
+       WHERE status = 'processing'
+         AND created_at < NOW(3) - INTERVAL 5 MINUTE`
+    ).catch(() => {});
+
+    const rows = await (connection || db).query(
       `SELECT * FROM notification_outbox
        WHERE status IN ('pending', 'failed')
          AND (next_retry_at IS NULL OR next_retry_at <= NOW(3))
@@ -112,10 +131,14 @@ async function processOutbox(db, tenantId = 'single') {
     );
 
     for (const row of rows) {
-      await db.execute(
-        "UPDATE notification_outbox SET status = 'processing' WHERE id = ?",
+      // Atomic row claim: ensure only one worker claims this row even if locks overlap
+      const claimRes = await (connection || db).execute(
+        "UPDATE notification_outbox SET status = 'processing' WHERE id = ? AND status IN ('pending', 'failed')",
         [row.id]
       );
+      if (!claimRes || claimRes.affectedRows === 0) {
+        continue;
+      }
 
       try {
         const eventConfig = NOTIFICATION_EVENTS[row.event_type];
@@ -272,20 +295,20 @@ async function processOutbox(db, tenantId = 'single') {
           }
         }
 
-        await db.execute(
+        await runner.execute(
           "UPDATE notification_outbox SET status = 'completed', processed_at = NOW(3) WHERE id = ?",
           [row.id]
         );
       } catch (procErr) {
         const nextRetry = Number(row.retry_count || 0) + 1;
         if (nextRetry >= 5) {
-          await db.execute(
+          await runner.execute(
             "UPDATE notification_outbox SET status = 'dead_letter', retry_count = ?, last_error = ? WHERE id = ?",
             [nextRetry, procErr.message.slice(0, 500), row.id]
           );
         } else {
           const delaySeconds = Math.pow(2, nextRetry) * 2;
-          await db.execute(
+          await runner.execute(
             `UPDATE notification_outbox
              SET status = 'failed', retry_count = ?, last_error = ?,
                  next_retry_at = NOW(3) + INTERVAL ? SECOND
@@ -296,9 +319,15 @@ async function processOutbox(db, tenantId = 'single') {
       }
     }
   } finally {
-    if (lockAcquired) {
+    const runner = connection || db;
+    if (lockAcquired && runner) {
       try {
-        await db.query('SELECT RELEASE_LOCK(?)', [lockKey]);
+        await runner.query('SELECT RELEASE_LOCK(?)', [lockKey]);
+      } catch (e) {}
+    }
+    if (connection && typeof connection.release === 'function') {
+      try {
+        connection.release();
       } catch (e) {}
     }
   }

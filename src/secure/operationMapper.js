@@ -47,6 +47,12 @@ function mapUrlToOperation(rawUrl, rawMethod = 'GET', initialData = {}) {
   if (path === '/auth/logout' && method === 'POST') return { operation: 'auth.logout', data: mergedData };
   if (path === '/auth/logout-all' && method === 'POST') return { operation: 'auth.logout_all', data: mergedData };
   if (path === '/auth/me' && method === 'GET') return { operation: 'auth.me', data: mergedData };
+  if (path === '/auth/profile' && method === 'GET') return { operation: 'users.profile', data: mergedData };
+  if (path.startsWith('/users/') && (method === 'GET' || method === 'POST')) {
+    const userId = path.substring('/users/'.length).replace(/[^0-9]/g, '');
+    if (userId) return { operation: 'users.profile', data: { ...mergedData, user_id: Number(userId) } };
+  }
+  if (path === '/users/profile' && (method === 'GET' || method === 'POST')) return { operation: 'users.profile', data: mergedData };
   if (path === '/auth/profile' && (method === 'PUT' || method === 'PATCH')) return { operation: 'auth.profile.update', data: mergedData };
   if ((path === '/auth/password' || path === '/auth/change-password') && (method === 'PUT' || method === 'POST')) return { operation: 'auth.password.update', data: mergedData };
   if (path === '/auth/forgot-password/send-otp' && method === 'POST') return { operation: 'auth.forgot_password.send_otp', data: mergedData };

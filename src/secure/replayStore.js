@@ -56,7 +56,7 @@ async function consumeNonce(dbOverride, nonce, timestamp) {
   }
 
   // 2. Atomically insert into database replay_nonces table (Fail-Closed)
-  const db = dbOverride || getReplayDb();
+  const db = dbOverride !== undefined ? dbOverride : getReplayDb();
   if (!db || typeof db.query !== 'function') {
     const err = new Error('Replay store unavailable: No durable database connection');
     err.status = 503;
@@ -92,6 +92,27 @@ async function consumeNonce(dbOverride, nonce, timestamp) {
   memoryNonceCache.set(nonce, Number(timestamp) || Math.floor(Date.now() / 1000));
 }
 
+/**
+ * Bounded batch cleanup of expired nonces in durable replay_nonces table.
+ * Deletes nonces older than retention period (default 5 minutes = 300s).
+ */
+async function cleanupExpiredNonces(dbOverride, retentionSeconds = RETENTION_SECONDS, maxBatch = 1000) {
+  const db = dbOverride !== undefined ? dbOverride : getReplayDb();
+  if (!db || typeof db.query !== 'function') return 0;
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - retentionSeconds;
+    const res = await db.query(
+      'DELETE FROM replay_nonces WHERE timestamp < ? ORDER BY timestamp ASC LIMIT ?',
+      [cutoff, maxBatch]
+    );
+    return res?.affectedRows || 0;
+  } catch (err) {
+    console.error('[REPLAY-STORE] Error cleaning up expired nonces:', err.message);
+    return 0;
+  }
+}
+
 module.exports = {
-  consumeNonce
+  consumeNonce,
+  cleanupExpiredNonces
 };

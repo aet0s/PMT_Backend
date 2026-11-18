@@ -6,7 +6,7 @@ const { getJwtSecret } = require('../middleware/auth');
 const { getClientIp } = require('../middleware/rateLimit');
 const { logAuthEvent } = require('./authAudit');
 
-const ACCESS_TOKEN_EXPIRY = '5d'; // 5 days max
+const ACCESS_TOKEN_EXPIRY_SECONDS = 15 * 60; // 15 minutes (900 seconds)
 const REFRESH_TOKEN_DAYS = 5; // 5 days absolute ceiling
 
 function parseDeviceInfo(userAgent) {
@@ -45,7 +45,7 @@ function generateAccessToken(user, tenantId = null, sessionId = null, expiresInS
     payload.tid = Number(tenantId);
     payload.tenantId = Number(tenantId);
   }
-  const expiresIn = (expiresInSeconds && expiresInSeconds > 0) ? expiresInSeconds : (5 * 24 * 60 * 60);
+  const expiresIn = (expiresInSeconds && expiresInSeconds > 0) ? expiresInSeconds : ACCESS_TOKEN_EXPIRY_SECONDS;
   return jwt.sign(payload, getJwtSecret(), { expiresIn });
 }
 
@@ -62,7 +62,10 @@ async function createSession(db, user, req, options = {}) {
   const deviceInfo = parseDeviceInfo(userAgent);
 
   const expiresAt = options.expiresAt || new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
-  const remainingSeconds = Math.max(60, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  const remainingSeconds = Math.min(
+    ACCESS_TOKEN_EXPIRY_SECONDS,
+    Math.max(60, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000))
+  );
 
   await db.execute(
     `INSERT INTO sessions 
@@ -167,7 +170,7 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
       [session.family_id]
     );
 
-    if (activeInFamily && activeInFamily.count > 0 && elapsedSec <= 60) {
+    if (activeInFamily && activeInFamily.count > 0 && elapsedSec <= 20) {
       // Within 20-second rotation race grace window:
       // Return a fresh valid pair for the same family, DO NOT revoke.
       const [user] = await db.query(
@@ -215,7 +218,7 @@ async function rotateSession(db, rawRefreshToken, req, tenantId = null) {
       invalidateSessionCache(tenantId);
       const { disconnectUserSockets } = require('../socket');
       disconnectUserSockets(session.user_id, tenantId, 'TOKEN_REUSE_DETECTED');
-    } catch (e) {}
+    } catch (e) { }
 
     await logAuthEvent(db, {
       userId: session.user_id,
@@ -329,7 +332,7 @@ async function revokeSession(db, userId, sessionId, req = null) {
   try {
     const { invalidateSessionCache } = require('../middleware/auth');
     invalidateSessionCache(req?.tenant?.id || null, sessionId);
-  } catch (e) {}
+  } catch (e) { }
 
   await logAuthEvent(db, {
     userId,
@@ -350,7 +353,7 @@ async function revokeAllSessions(db, userId, reason = 'LOGOUT_ALL', req = null) 
     invalidateSessionCache(req?.tenant?.id || null);
     const { disconnectUserSockets } = require('../socket');
     disconnectUserSockets(userId, req?.tenant?.id || null, reason);
-  } catch (e) {}
+  } catch (e) { }
 
   await logAuthEvent(db, {
     userId,
@@ -372,7 +375,7 @@ async function revokeAllExceptCurrent(db, userId, currentSessionId, req = null) 
   try {
     const { invalidateSessionCache } = require('../middleware/auth');
     invalidateSessionCache(req?.tenant?.id || null);
-  } catch (e) {}
+  } catch (e) { }
 
   await logAuthEvent(db, {
     userId,
@@ -401,7 +404,7 @@ async function checkUserRequires2Fa(db, userId, totpEnabled) {
       if (settings?.require_2fa) return true;
       if (row.require_2fa_for_admins && Number(row.rank || 0) >= 50) return true;
     }
-  } catch (e) {}
+  } catch (e) { }
   return false;
 }
 

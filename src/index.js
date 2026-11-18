@@ -24,6 +24,7 @@ const { initSocket } = require('./socket');
 const { initReminderCron } = require('./cron/reminders');
 const { initRetentionCron } = require('./cron/retention');
 const { initAutoArchiveCron } = require('./cron/autoArchive');
+const { initOutboxCron } = require('./cron/outbox');
 
 const authRouter = require('./routes/auth');
 const workspacesRouter = require('./routes/workspaces');
@@ -49,12 +50,12 @@ const app = express();
 const isHttps = process.env.HTTPS === 'true' && process.env.SSL_CERT && fs.existsSync(process.env.SSL_CERT);
 const server = isHttps
   ? https.createServer(
-      {
-        cert: fs.readFileSync(process.env.SSL_CERT),
-        key: fs.readFileSync(process.env.SSL_KEY)
-      },
-      app
-    )
+    {
+      cert: fs.readFileSync(process.env.SSL_CERT),
+      key: fs.readFileSync(process.env.SSL_KEY)
+    },
+    app
+  )
   : http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
@@ -116,7 +117,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    
+
     // Dynamically reflect requested headers to support extensions, auth headers, and tenant IDs
     const reqHeaders = req.headers['access-control-request-headers'];
     if (reqHeaders) {
@@ -218,7 +219,7 @@ app.get(['/keys/server-public.pem', '/api/public-key'], (req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=86400');
       return res.send(pubPem);
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // 2. Candidate persistent and local public key file paths
   const candidatePubs = [
@@ -247,10 +248,6 @@ app.use('/api', secureRouter);
 
 // Direct authenticated file download, avatar serving, and preview tokens
 app.use('/api/files', filesRouter);
-
-// Card multipart file attachments, links, and direct attachment deletion
-app.use('/api/cards', cardsRouter);
-app.use('/api/attachments', attachmentsRouter);
 
 // RETIRED: Direct plaintext REST routes are permanently disabled.
 // All business operations must use POST /api/secure with hybrid encryption.
@@ -352,8 +349,8 @@ app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => 
         return res.status(403).json({ error: { message: 'Access denied: cannot upload avatar for another user', code: 'FORBIDDEN' } });
       }
 
-      if (req.file.size > 5 * 1024 * 1024) {
-        return res.status(400).json({ error: { message: 'Image must not exceed 5MB', code: 'FILE_TOO_LARGE' } });
+      if (req.file.size > 2 * 1024 * 1024) {
+        return res.status(400).json({ error: { message: 'Image must not exceed 2MB', code: 'FILE_TOO_LARGE' } });
       }
 
       const verifiedMime = detectImageMagicBytes(req.file.buffer);
@@ -380,7 +377,7 @@ app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => 
     const cardId = req.body.card_id ? Number(req.body.card_id) : null;
     if (cardId) {
       const cardRows = await req.db.query(
-        `SELECT c.id, l.board_id, b.workspace_id
+        `SELECT c.id, c.title, l.board_id, b.workspace_id
          FROM cards c
          JOIN lists l ON c.list_id = l.id
          JOIN boards b ON l.board_id = b.id
@@ -395,9 +392,60 @@ app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => 
       if (!hasUpload) {
         return res.status(403).json({ error: { message: 'Access denied: attachment.upload permission required', code: 'FORBIDDEN' } });
       }
+
+      // Check duplicate attachment on card by SHA-256 checksum
+      const checksum = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+      const [dup] = await req.db.query('SELECT id FROM attachments WHERE card_id = ? AND checksum = ?', [cardId, checksum]);
+      if (dup) {
+        return res.status(409).json({
+          error: { message: 'Duplicate attachment: this file or link already exists on this card', code: 'DUPLICATE_ATTACHMENT' }
+        });
+      }
+
+      const saved = await localStorage.save(req.file, cardId, tenantId);
+      const attExec = await req.db.execute(
+        `INSERT INTO attachments (card_id, uploaded_by_user_id, file_name, file_url, file_type, file_size_bytes, checksum)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [cardId, req.user.id, saved.file_name, saved.file_url, saved.file_type, saved.file_size_bytes, checksum]
+      );
+      const [attachment] = await req.db.query(
+        `SELECT a.*, u.name as uploader_name, u.avatar_url as uploader_avatar
+         FROM attachments a
+         LEFT JOIN users u ON a.uploaded_by_user_id = u.id
+         WHERE a.id = ?`,
+        [attExec.insertId]
+      );
+
+      const { broadcastBoardEvent } = require('./socket');
+      const { notify } = require('./services/notify');
+      const { logActivity } = require('./services/audit');
+
+      await logActivity(card.board_id, cardId, req.user.id, 'attachment_added', { file_name: attachment.file_name }, req.db);
+      await notify({
+        eventType: 'attachment.added',
+        actorUserId: req.user.id,
+        targetUserId: null,
+        tenantId,
+        cardId,
+        boardId: card.board_id,
+        workspaceId: card.workspace_id,
+        payload: { cardTitle: card.title, fileName: attachment.file_name }
+      }, req.db);
+      broadcastBoardEvent(card.board_id, 'card:updated', { id: cardId });
+
+      return res.status(201).json({
+        message: 'File uploaded successfully',
+        attachment,
+        file: {
+          file_name: saved.file_name,
+          file_url: saved.file_url,
+          file_type: saved.file_type,
+          file_size_bytes: saved.file_size_bytes
+        }
+      });
     }
 
-    const saved = await localStorage.save(req.file, cardId || 'temp', tenantId);
+    const saved = await localStorage.save(req.file, 'temp', tenantId);
     return res.status(201).json({
       message: 'File uploaded successfully',
       file: {
@@ -590,6 +638,7 @@ async function start() {
   initReminderCron();
   initRetentionCron();
   initAutoArchiveCron();
+  initOutboxCron();
   const { startCleanupWorker } = require('./utils/fileCleanupQueue');
   startCleanupWorker();
 
