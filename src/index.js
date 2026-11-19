@@ -419,7 +419,7 @@ app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => 
 
       const { broadcastBoardEvent } = require('./socket');
       const { notify } = require('./services/notify');
-      const { logActivity } = require('./services/audit');
+      const { logActivity } = require('./utils/activity');
 
       await logActivity(card.board_id, cardId, req.user.id, 'attachment_added', { file_name: attachment.file_name }, req.db);
       await notify({
