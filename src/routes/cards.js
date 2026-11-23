@@ -481,8 +481,8 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       const wsRoleNorm = wsRoleName.toLowerCase();
       if (wsRoleNorm === 'owner' || wsRoleNorm === 'super admin') wsRank = 100;
       else if (wsRoleNorm === 'admin') wsRank = Math.max(wsRank, 80);
-      else if (wsRoleNorm === 'project manager') wsRank = Math.max(wsRank, 60);
-      else if (wsRoleNorm === 'team lead' || wsRoleNorm === 'team leader') wsRank = Math.max(wsRank, 50);
+      else if (wsRoleNorm === 'project manager' || wsRoleNorm === 'project lead' || wsRoleNorm === 'pm') wsRank = Math.max(wsRank, 60);
+      else if (wsRoleNorm === 'team lead' || wsRoleNorm === 'team leader' || wsRoleNorm === 'tl' || wsRoleNorm === 'lead') wsRank = Math.max(wsRank, 50);
       callerRank = wsRank;
       callerRoleName = wsRoleName;
     }
@@ -500,20 +500,28 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
       const bRoleNorm = bRoleName.toLowerCase();
       if (bRoleNorm === 'owner' || bRoleNorm === 'super admin') bRank = 100;
       else if (bRoleNorm === 'admin') bRank = Math.max(bRank, 80);
-      else if (bRoleNorm === 'project manager') bRank = Math.max(bRank, 60);
-      else if (bRoleNorm === 'team lead' || bRoleNorm === 'team leader') bRank = Math.max(bRank, 50);
+      else if (bRoleNorm === 'project manager' || bRoleNorm === 'project lead' || bRoleNorm === 'pm') bRank = Math.max(bRank, 60);
+      else if (bRoleNorm === 'team lead' || bRoleNorm === 'team leader' || bRoleNorm === 'tl' || bRoleNorm === 'lead') bRank = Math.max(bRank, 50);
       if (bRank > callerRank) {
         callerRank = bRank;
         callerRoleName = bRoleName;
       }
     }
     const normalizedRole = String(callerRoleName || '').trim().toLowerCase();
-    const isManagerRole = callerRank >= 50 || ['owner', 'super admin', 'admin', 'project manager', 'team lead', 'team leader', 'lead'].includes(normalizedRole);
+    const isManagerRole = callerRank >= 50 || [
+      'owner',
+      'super admin',
+      'admin',
+      'project manager',
+      'project lead',
+      'pm',
+      'team lead',
+      'team leader',
+      'tl',
+      'lead'
+    ].includes(normalizedRole);
 
     let isTopLevel = isManagerRole;
-    if (!isTopLevel) {
-      isTopLevel = await userHasPermission(req.user.id, oldCard.workspace_id, 'task.bulk_edit', req.db, oldCard.board_id, req);
-    }
     if (!isTopLevel) {
       const userIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
       if (userIsCompanyOwner) isTopLevel = true;

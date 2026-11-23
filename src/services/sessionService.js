@@ -6,8 +6,8 @@ const { getJwtSecret } = require('../middleware/auth');
 const { getClientIp } = require('../middleware/rateLimit');
 const { logAuthEvent } = require('./authAudit');
 
-const ACCESS_TOKEN_EXPIRY_SECONDS = 15 * 60; // 15 minutes (900 seconds)
-const REFRESH_TOKEN_DAYS = 5; // 5 days absolute ceiling
+const ACCESS_TOKEN_EXPIRY_SECONDS = 2 * 60 * 60; // 2 hours (was 15 minutes)
+const REFRESH_TOKEN_DAYS = 30; // 30 days session ceiling (was 5 days)
 
 function parseDeviceInfo(userAgent) {
   if (!userAgent) return 'Unknown Device';

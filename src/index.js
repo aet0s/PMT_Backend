@@ -432,7 +432,7 @@ app.post(['/api/upload', '/api/files/avatar'], requireAuth, (req, res, next) => 
         workspaceId: card.workspace_id,
         payload: { cardTitle: card.title, fileName: attachment.file_name }
       }, req.db);
-      broadcastBoardEvent(card.board_id, 'card:updated', { id: cardId });
+      broadcastBoardEvent(card.board_id, 'card:updated', { id: cardId, cardId }, req.headers['x-origin-id'] || null, tenantId);
 
       return res.status(201).json({
         message: 'File uploaded successfully',

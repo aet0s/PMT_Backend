@@ -1996,10 +1996,10 @@ router.post('/refresh', async (req, res, next) => {
 
     const cookieMaxAge = (rotationResult.expiresIn && rotationResult.expiresIn > 0)
       ? rotationResult.expiresIn * 1000
-      : (5 * 24 * 60 * 60 * 1000);
+      : (2 * 60 * 60 * 1000);
 
     res.cookie('token', rotationResult.accessToken, { ...COOKIE_OPTIONS, maxAge: cookieMaxAge });
-    res.cookie('refreshToken', rotationResult.refreshToken, { ...REFRESH_COOKIE_OPTIONS, maxAge: cookieMaxAge });
+    res.cookie('refreshToken', rotationResult.refreshToken, REFRESH_COOKIE_OPTIONS);
 
     return res.json({
       user: rotationResult.user,

@@ -2852,39 +2852,49 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
       };
     });
 
-    // 6. Labels breakdown
+    // 6. Labels breakdown (aggregated by label name across boards to avoid duplicate split entries)
     const labelsBreakdownRes = await req.db.query(
       `SELECT
-        lb.id,
-        lb.name,
-        lb.color,
-        b.name as board_name,
-        w.name as workspace_name,
-        COUNT(DISTINCT cl.card_id) as task_count
+        MIN(lb.id) as id,
+        TRIM(lb.name) as name,
+        MAX(lb.color) as color,
+        COUNT(DISTINCT b.id) as board_count,
+        MAX(b.name) as board_name,
+        GROUP_CONCAT(DISTINCT b.name ORDER BY b.name SEPARATOR ', ') as board_names,
+        MAX(w.name) as workspace_name,
+        COUNT(DISTINCT c.id) as task_count
        FROM labels lb
-       JOIN boards b ON lb.board_id = b.id
+       JOIN boards b ON lb.board_id = b.id AND b.is_archived = 0
        JOIN workspaces w ON b.workspace_id = w.id
        JOIN card_labels cl ON lb.id = cl.label_id
-       JOIN cards c ON cl.card_id = c.id ${timeframeClause}
-       JOIN lists l ON c.list_id = l.id
+       JOIN cards c ON cl.card_id = c.id
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        WHERE b.workspace_id IN (?)
-         AND b.is_archived = 0
+         AND c.is_archived = 0
+         AND lb.name IS NOT NULL
+         AND TRIM(lb.name) != ''
          ${boardClause}
-       GROUP BY lb.id, lb.name, lb.color, b.name, w.name
-       ORDER BY task_count DESC`,
+         ${timeframeClause}
+       GROUP BY LOWER(TRIM(lb.name))
+       ORDER BY task_count DESC, name ASC`,
       [activeWsIds, ...boardParam]
     );
 
     const unlabeledRes = await req.db.query(
       `SELECT COUNT(DISTINCT c.id) as unlabeled_tasks
        FROM cards c
-       JOIN lists l ON c.list_id = l.id
+       JOIN lists l ON c.list_id = l.id AND l.is_archived = 0
        JOIN boards b ON l.board_id = b.id AND b.is_archived = 0
-       LEFT JOIN card_labels cl ON c.id = cl.card_id
        WHERE b.workspace_id IN (?)
-         AND cl.label_id IS NULL
+         AND b.is_archived = 0
+         AND c.is_archived = 0
          ${boardClause}
-         ${timeframeClause}`,
+         ${timeframeClause}
+         AND NOT EXISTS (
+           SELECT 1 FROM card_labels cl
+           JOIN labels lb ON cl.label_id = lb.id
+           WHERE cl.card_id = c.id
+         )`,
       [activeWsIds, ...boardParam]
     );
     const unlabeledCount = Number(unlabeledRes[0]?.unlabeled_tasks || 0);
@@ -3364,6 +3374,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           name: lb.name,
           color: lb.color,
           board_name: lb.board_name,
+          board_names: lb.board_names,
+          board_count: Number(lb.board_count || 1),
           workspace_name: lb.workspace_name,
           task_count: Number(lb.task_count || 0)
         })),

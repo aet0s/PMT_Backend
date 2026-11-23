@@ -546,12 +546,19 @@ async function record(options = {}) {
         }
       }
 
+      // For deleted entities, the row has already been removed from cards/boards,
+      // so inserting their ID as a foreign key fails MySQL constraint fk_act_card / fk_act_board.
+      const isCardDeleted = activityAction === 'deleted_card' || action === 'card.deleted';
+      const isBoardDeleted = activityAction === 'deleted_board' || action === 'board.deleted';
+      const actCardId = isCardDeleted ? null : (cardId || null);
+      const actBoardId = isBoardDeleted ? null : (boardId || null);
+
       const actRes = await db.execute(
         `INSERT INTO activity_log (board_id, card_id, user_id, workspace_id, action_type, meta_json)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [
-          boardId || null,
-          cardId || null,
+          actBoardId,
+          actCardId,
           actorUserId || null,
           workspaceId || null,
           activityAction,
