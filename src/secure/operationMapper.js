@@ -301,7 +301,10 @@ function mapUrlToOperation(rawUrl, rawMethod = 'GET', initialData = {}) {
   }
 
   m = path.match(/^\/cards\/([^/]+)\/mention-candidates$/);
-  if (m) return { operation: 'comments.candidates', data: { ...mergedData, card_id: m[1] } };
+  if (m) {
+    const qVal = mergedData.q !== undefined ? mergedData.q : (mergedData.query || '');
+    return { operation: 'comments.candidates', data: { ...mergedData, card_id: m[1], query: qVal, q: qVal } };
+  }
 
   if (path === '/cards' && method === 'POST') return { operation: 'cards.create', data: mergedData };
 

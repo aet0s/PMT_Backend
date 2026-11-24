@@ -1605,7 +1605,8 @@ registerOperation('comments.candidates', {
   permission: 'comment.view',
   schema: z.object({
     card_id: z.coerce.number().positive(),
-    query: z.string().optional().default(''),
+    query: z.string().optional(),
+    q: z.string().optional(),
     limit: z.coerce.number().max(50).optional().default(10)
   }),
   handler: async (ctx, data) => {
@@ -1619,9 +1620,10 @@ registerOperation('comments.candidates', {
       err.code = 'NOT_FOUND';
       throw err;
     }
+    const searchQuery = (data.query !== undefined ? data.query : data.q) || '';
     const candidates = await commentService.searchMentionCandidates(ctx.db, {
       boardId: cardRows[0].board_id,
-      query: data.query,
+      query: searchQuery,
       limit: data.limit
     });
     return { candidates };

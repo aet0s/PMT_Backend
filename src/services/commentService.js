@@ -84,12 +84,8 @@ async function searchMentionCandidates(db, { boardId, query = '', limit = 10 }) 
     FROM users u
     JOIN workspace_members wm ON wm.user_id = u.id AND wm.status = 'active'
     JOIN boards b ON b.id = ? AND b.workspace_id = wm.workspace_id
-    LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = u.id
-    LEFT JOIN roles r ON wm.role_id = r.id
-    LEFT JOIN role_permissions rp ON r.id = rp.role_id
-    LEFT JOIN permissions p ON rp.permission_id = p.id AND p.key = 'project.access_all'
+    JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = u.id
     WHERE b.id = ?
-      AND (bm.user_id IS NOT NULL OR p.id IS NOT NULL)
   `;
   const params = [boardId, boardId];
 

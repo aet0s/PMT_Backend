@@ -20,6 +20,80 @@ const auditService = require('../services/audit');
 
 const router = express.Router();
 
+async function checkIsManagerOrOwner(db, userId, workspaceId = null, boardId = null, tenant = null) {
+  if (!userId) return false;
+
+  // 1. Authoritative Company Owner check (Owner can do anything)
+  const isOwner = await isCompanyOwner(db, userId);
+  if (isOwner) return true;
+
+  // 2. Tenant owner check
+  if (tenant && Number(tenant.owner_id) === Number(userId)) return true;
+
+  let callerRank = 30;
+  let callerRoleName = '';
+
+  // 3. Check workspace role
+  if (workspaceId) {
+    const wsRows = await db.query(
+      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank
+       FROM workspace_members wm
+       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
+       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
+      [workspaceId, userId]
+    );
+    if (wsRows.length > 0) {
+      const wsRoleName = wsRows[0].role_name || '';
+      let wsRank = Number(wsRows[0].rank || 30);
+      const wsRoleNorm = wsRoleName.toLowerCase();
+      if (wsRoleNorm === 'owner' || wsRoleNorm === 'super admin') wsRank = 100;
+      else if (wsRoleNorm === 'admin') wsRank = Math.max(wsRank, 80);
+      else if (wsRoleNorm === 'project manager' || wsRoleNorm === 'project lead' || wsRoleNorm === 'pm') wsRank = Math.max(wsRank, 60);
+      else if (wsRoleNorm === 'team lead' || wsRoleNorm === 'team leader' || wsRoleNorm === 'tl' || wsRoleNorm === 'lead') wsRank = Math.max(wsRank, 50);
+      callerRank = wsRank;
+      callerRoleName = wsRoleName;
+    }
+  }
+
+  // 4. Check board role
+  if (boardId) {
+    const boardMemberRows = await db.query(
+      `SELECT bm.role_id, bm.role as bm_role, r.name as role_name, r.rank
+       FROM board_members bm
+       LEFT JOIN roles r ON bm.role_id = r.id OR (bm.role_id IS NULL AND bm.role = r.name)
+       WHERE bm.board_id = ? AND bm.user_id = ?`,
+      [boardId, userId]
+    );
+    if (boardMemberRows.length > 0) {
+      const bRoleName = boardMemberRows[0].role_name || boardMemberRows[0].bm_role || '';
+      let bRank = Number(boardMemberRows[0].rank || 30);
+      const bRoleNorm = bRoleName.toLowerCase();
+      if (bRoleNorm === 'owner' || bRoleNorm === 'super admin') bRank = 100;
+      else if (bRoleNorm === 'admin') bRank = Math.max(bRank, 80);
+      else if (bRoleNorm === 'project manager' || bRoleNorm === 'project lead' || bRoleNorm === 'pm') bRank = Math.max(bRank, 60);
+      else if (bRoleNorm === 'team lead' || bRoleNorm === 'team leader' || bRoleNorm === 'tl' || bRoleNorm === 'lead') bRank = Math.max(bRank, 50);
+      if (bRank > callerRank) {
+        callerRank = bRank;
+        callerRoleName = bRoleName;
+      }
+    }
+  }
+
+  const normalizedRole = String(callerRoleName || '').trim().toLowerCase();
+  return callerRank >= 50 || [
+    'owner',
+    'super admin',
+    'admin',
+    'project manager',
+    'project lead',
+    'pm',
+    'team lead',
+    'team leader',
+    'tl',
+    'lead'
+  ].includes(normalizedRole);
+}
+
 function formatSqlDateTime(dateVal) {
   if (dateVal === null || dateVal === undefined || dateVal === '') return null;
   if (typeof dateVal === 'string') {
@@ -464,68 +538,8 @@ router.patch('/:id', requireAuth, requirePermissionForBody(async (req) => {
     }
     const oldCard = oldCardRes[0];
 
-    // Fetch caller's board or workspace role to determine rank and authority
-    let callerRank = 30;
-    let callerRoleName = '';
-    // Check workspace role first
-    const wsRows = await req.db.query(
-      `SELECT wm.role_id, COALESCE(r.name, wm.role) as role_name, r.rank
-       FROM workspace_members wm
-       LEFT JOIN roles r ON wm.role_id = r.id OR (wm.role_id IS NULL AND wm.role = r.name)
-       WHERE wm.workspace_id = ? AND wm.user_id = ?`,
-      [oldCard.workspace_id, req.user.id]
-    );
-    if (wsRows.length > 0) {
-      const wsRoleName = wsRows[0].role_name || '';
-      let wsRank = Number(wsRows[0].rank || 30);
-      const wsRoleNorm = wsRoleName.toLowerCase();
-      if (wsRoleNorm === 'owner' || wsRoleNorm === 'super admin') wsRank = 100;
-      else if (wsRoleNorm === 'admin') wsRank = Math.max(wsRank, 80);
-      else if (wsRoleNorm === 'project manager' || wsRoleNorm === 'project lead' || wsRoleNorm === 'pm') wsRank = Math.max(wsRank, 60);
-      else if (wsRoleNorm === 'team lead' || wsRoleNorm === 'team leader' || wsRoleNorm === 'tl' || wsRoleNorm === 'lead') wsRank = Math.max(wsRank, 50);
-      callerRank = wsRank;
-      callerRoleName = wsRoleName;
-    }
-    // Check board role and take the highest rank
-    const boardMemberRows = await req.db.query(
-      `SELECT bm.role_id, bm.role as bm_role, r.name as role_name, r.rank
-       FROM board_members bm
-       LEFT JOIN roles r ON bm.role_id = r.id OR (bm.role_id IS NULL AND bm.role = r.name)
-       WHERE bm.board_id = ? AND bm.user_id = ?`,
-      [oldCard.board_id, req.user.id]
-    );
-    if (boardMemberRows.length > 0) {
-      const bRoleName = boardMemberRows[0].role_name || boardMemberRows[0].bm_role || '';
-      let bRank = Number(boardMemberRows[0].rank || 30);
-      const bRoleNorm = bRoleName.toLowerCase();
-      if (bRoleNorm === 'owner' || bRoleNorm === 'super admin') bRank = 100;
-      else if (bRoleNorm === 'admin') bRank = Math.max(bRank, 80);
-      else if (bRoleNorm === 'project manager' || bRoleNorm === 'project lead' || bRoleNorm === 'pm') bRank = Math.max(bRank, 60);
-      else if (bRoleNorm === 'team lead' || bRoleNorm === 'team leader' || bRoleNorm === 'tl' || bRoleNorm === 'lead') bRank = Math.max(bRank, 50);
-      if (bRank > callerRank) {
-        callerRank = bRank;
-        callerRoleName = bRoleName;
-      }
-    }
-    const normalizedRole = String(callerRoleName || '').trim().toLowerCase();
-    const isManagerRole = callerRank >= 50 || [
-      'owner',
-      'super admin',
-      'admin',
-      'project manager',
-      'project lead',
-      'pm',
-      'team lead',
-      'team leader',
-      'tl',
-      'lead'
-    ].includes(normalizedRole);
-
-    let isTopLevel = isManagerRole;
-    if (!isTopLevel) {
-      const userIsCompanyOwner = await isCompanyOwner(req.db, req.user.id);
-      if (userIsCompanyOwner) isTopLevel = true;
-    }
+    // Fetch caller's board or workspace role and authoritative Company Owner status
+    const isTopLevel = await checkIsManagerOrOwner(req.db, req.user.id, oldCard.workspace_id, oldCard.board_id, req.tenant);
 
     const isCreator = Number(oldCard.created_by) === Number(req.user.id);
 
@@ -1306,9 +1320,9 @@ router.post(
     );
     const isCallerAssigner = assignerRows.some((a) => Number(a.user_id) === Number(req.user.id));
     const isCreator = Number(cardRes[0]?.created_by) === Number(req.user.id);
+    const isManagerOrOwner = await checkIsManagerOrOwner(req.db, req.user.id, workspaceId, boardId, req.tenant);
     const hasBulkEdit = await userHasPermission(req.user.id, workspaceId, 'task.bulk_edit', req.db, boardId, req);
-    const isTenantOwner = Boolean(req.tenant && Number(req.tenant.owner_id) === Number(req.user.id));
-    const isAuthorizedAssigner = isCallerAssigner || isCreator || hasBulkEdit || isTenantOwner;
+    const isAuthorizedAssigner = isCallerAssigner || isCreator || hasBulkEdit || isManagerOrOwner;
 
     if (!isAuthorizedAssigner) {
       if (existing.length > 0) {
@@ -1432,12 +1446,12 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
       [cardId]
     )).map((u) => ({ id: u.id, name: u.name }));
 
-    // Authorization check: Only existing assigners of this card, creator, or managers can modify card assigners
+    // Authorization check: Only existing assigners of this card, creator, or managers/owners can modify card assigners
     const isCallerAssigner = beforeAssigners.some((a) => Number(a.id) === Number(req.user.id));
     const isCreator = Number(cardRes[0]?.created_by) === Number(req.user.id);
+    const isManagerOrOwner = await checkIsManagerOrOwner(req.db, req.user.id, workspaceId, boardId, req.tenant);
     const hasBulkEdit = await userHasPermission(req.user.id, workspaceId, 'task.bulk_edit', req.db, boardId, req);
-    const isTenantOwner = Boolean(req.tenant && Number(req.tenant.owner_id) === Number(req.user.id));
-    const isAuthorized = isCallerAssigner || isCreator || hasBulkEdit || isTenantOwner;
+    const isAuthorized = isCallerAssigner || isCreator || hasBulkEdit || isManagerOrOwner;
 
     if (!isAuthorized) {
       return res.status(403).json({

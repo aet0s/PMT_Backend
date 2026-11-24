@@ -2894,6 +2894,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
            SELECT 1 FROM card_labels cl
            JOIN labels lb ON cl.label_id = lb.id
            WHERE cl.card_id = c.id
+             AND lb.name IS NOT NULL
+             AND TRIM(lb.name) != ''
          )`,
       [activeWsIds, ...boardParam]
     );
