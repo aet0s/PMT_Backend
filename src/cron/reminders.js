@@ -185,7 +185,7 @@ async function checkDailyCheckinReminders(firstArg = null, secondArg = null, thi
   try {
     cardRows = await activeDb.query(
       `SELECT c.id, c.title, c.created_at, c.first_moved_or_assigned_at, c.due_date,
-              cm.user_id, cm.created_at AS assigned_at, l.board_id, b.name as board_name, b.workspace_id,
+              cm.user_id, l.board_id, b.name as board_name, b.workspace_id,
               w.settings as settings_json,
               clt.is_long_task, clt.expected_finish_date, clt.last_noted_at
        FROM cards c

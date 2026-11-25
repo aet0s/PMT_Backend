@@ -262,6 +262,49 @@ async function resolveWorkspaceId(req) {
     } else if (routePath.includes('/workspaces')) {
       derivedWorkspaceId = paramId;
       resourceMatched = true;
+    } else if (routePath.includes('/daily-update-reviews') || subPath.includes('/daily-update-reviews')) {
+      const res = await db.query(
+        `SELECT r.id, du.workspace_id, l.board_id
+         FROM check_in_reviews r
+         JOIN daily_updates du ON r.daily_update_id = du.id
+         LEFT JOIN daily_update_items dui ON dui.daily_update_id = du.id
+         LEFT JOIN cards c ON dui.card_id = c.id
+         LEFT JOIN lists l ON c.list_id = l.id
+         WHERE r.id = ?
+         LIMIT 1`,
+        [paramId]
+      );
+      if (res[0]) {
+        derivedProjectId = res[0].board_id || null;
+        derivedWorkspaceId = res[0].workspace_id;
+        resourceMatched = true;
+      } else {
+        const err = new Error('Daily update review not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+    } else if (routePath.includes('/daily-updates') || subPath.includes('/daily-updates')) {
+      const res = await db.query(
+        `SELECT du.id, du.workspace_id, l.board_id
+         FROM daily_updates du
+         LEFT JOIN daily_update_items dui ON dui.daily_update_id = du.id
+         LEFT JOIN cards c ON dui.card_id = c.id
+         LEFT JOIN lists l ON c.list_id = l.id
+         WHERE du.id = ?
+         LIMIT 1`,
+        [paramId]
+      );
+      if (res[0]) {
+        derivedProjectId = res[0].board_id || null;
+        derivedWorkspaceId = res[0].workspace_id;
+        resourceMatched = true;
+      } else {
+        const err = new Error('Daily update not found');
+        err.status = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
     } else if (routePath.includes('/checkin-reviews') || subPath.includes('/checkin-reviews')) {
       const res = await db.query(
         `SELECT r.id, ci.card_id, l.board_id, b.workspace_id

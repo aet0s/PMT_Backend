@@ -53,15 +53,15 @@ router.post(
         [result.insertId]
       );
 
-      await auditService.record(req.db, {
-        userId: req.user.id,
+      await auditService.record({
+        db: req.db,
+        actorUserId: req.user.id,
         workspaceId: du.workspace_id,
         category: 'checkin',
         action: 'checkin.reviewed',
         entityType: 'daily_update',
         entityId: dailyUpdateId,
-        meta: { target_user_id: du.user_id, review_action: dbAction, review_id: review.id },
-        req
+        meta: { target_user_id: du.user_id, review_action: dbAction, review_id: review.id }
       });
 
       return res.status(201).json({ review });
@@ -110,15 +110,15 @@ router.post(
 
       const [updatedReview] = await req.db.query('SELECT * FROM check_in_reviews WHERE id = ?', [reviewId]);
 
-      await auditService.record(req.db, {
-        userId: req.user.id,
+      await auditService.record({
+        db: req.db,
+        actorUserId: req.user.id,
         workspaceId: review.workspace_id,
         category: 'checkin',
         action: 'checkin.answered',
         entityType: 'check_in_review',
         entityId: reviewId,
-        meta: { daily_update_id: review.du_id, has_evidence: Boolean(evidence_url) },
-        req
+        meta: { daily_update_id: review.du_id, has_evidence: Boolean(evidence_url) }
       });
 
       return res.json({ review: updatedReview });
@@ -174,15 +174,15 @@ router.post(
         [result.insertId]
       );
 
-      await auditService.record(req.db, {
-        userId: req.user.id,
+      await auditService.record({
+        db: req.db,
+        actorUserId: req.user.id,
         workspaceId: checkin.workspace_id,
         category: 'checkin',
         action: 'checkin.reviewed',
         entityType: 'checkin',
         entityId: checkinId,
-        meta: { target_user_id: checkin.user_id, review_action: dbAction, review_id: review.id },
-        req
+        meta: { target_user_id: checkin.user_id, review_action: dbAction, review_id: review.id }
       });
 
       return res.status(201).json({ review });

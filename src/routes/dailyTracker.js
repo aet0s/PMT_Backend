@@ -69,7 +69,6 @@ async function getUserActiveCards(db, workspaceId, userId) {
   return await db.query(
     `SELECT c.id, c.title, c.created_at, c.created_by, c.first_moved_or_assigned_at, c.due_date, c.list_id,
             l.name AS list_name, l.board_id, b.name AS board_title,
-            cm.created_at AS assigned_at,
             clt.is_long_task, clt.expected_finish_date, clt.last_noted_at
      FROM cards c
      JOIN card_members cm ON c.id = cm.card_id
@@ -557,8 +556,9 @@ router.post('/:id/daily-update', requireAuth, requirePermission('checkin.create'
     const [savedRow] = await req.db.query('SELECT * FROM daily_updates WHERE id = ?', [dailyUpdateId]);
     const dailyUpdate = await loadDailyUpdateWithItems(req.db, savedRow);
 
-    await auditService.record(req.db, {
-      userId: req.user.id,
+    await auditService.record({
+      db: req.db,
+      actorUserId: req.user.id,
       workspaceId,
       category: 'checkin',
       action: isEdit ? 'checkin.updated' : 'checkin.created',
@@ -569,8 +569,7 @@ router.post('/:id/daily-update', requireAuth, requirePermission('checkin.create'
         status: overallStatus,
         items_count: sanitizedItems.length,
         version: dailyUpdate.version
-      },
-      req
+      }
     });
 
     return res.status(isEdit ? 200 : 201).json({ daily_update: dailyUpdate });
@@ -760,8 +759,9 @@ router.patch('/:id/daily-update/:updateId', requireAuth, requirePermission('chec
     const [savedRow] = await req.db.query('SELECT * FROM daily_updates WHERE id = ?', [updateId]);
     const dailyUpdate = await loadDailyUpdateWithItems(req.db, savedRow);
 
-    await auditService.record(req.db, {
-      userId: req.user.id,
+    await auditService.record({
+      db: req.db,
+      actorUserId: req.user.id,
       workspaceId,
       category: 'checkin',
       action: 'checkin.updated',
@@ -772,8 +772,7 @@ router.patch('/:id/daily-update/:updateId', requireAuth, requirePermission('chec
         status: overallStatus,
         items_count: sanitizedItems.length,
         version: dailyUpdate.version
-      },
-      req
+      }
     });
 
     return res.json({ daily_update: dailyUpdate });
@@ -807,15 +806,15 @@ router.post('/:id/daily-tracker/snooze', requireAuth, requirePermission('checkin
       [workspaceId, req.user.id, todayStr, untilStr]
     );
 
-    await auditService.record(req.db, {
-      userId: req.user.id,
+    await auditService.record({
+      db: req.db,
+      actorUserId: req.user.id,
       workspaceId,
       category: 'checkin',
       action: 'checkin.updated',
       entityType: 'daily_tracker_snooze',
       entityId: req.user.id,
-      meta: { action: 'snooze_until_tomorrow', snoozed_date: todayStr, snoozed_until_date: untilStr },
-      req
+      meta: { action: 'snooze_until_tomorrow', snoozed_date: todayStr, snoozed_until_date: untilStr }
     });
 
     return res.json({ success: true, snoozed_date: todayStr, snoozed_until_date: untilStr });
@@ -851,15 +850,15 @@ router.post('/:id/daily-tracker/leave-today', requireAuth, requirePermission('le
 
     const [row] = await req.db.query('SELECT * FROM leave_days WHERE user_id = ? AND date = ?', [req.user.id, todayStr]);
 
-    await auditService.record(req.db, {
-      userId: req.user.id,
+    await auditService.record({
+      db: req.db,
+      actorUserId: req.user.id,
       workspaceId,
       category: 'leave',
       action: 'leave.requested',
       entityType: 'leave_day',
       entityId: row?.id || req.user.id,
-      meta: { date: todayStr, self_declared_today: true, status: 'approved', reason },
-      req
+      meta: { date: todayStr, self_declared_today: true, status: 'approved', reason }
     });
 
     return res.status(201).json({ leave_day: row, date: todayStr });
