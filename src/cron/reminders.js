@@ -2,6 +2,13 @@
 // Multi-tenant due-date reminder and overdue notification cron job.
 const cron = require('node-cron');
 const { notify } = require('../services/notify');
+const { sendPushNotification } = require('../services/pushService');
+const {
+  getWorkspaceCalendarConfig,
+  getWorkspaceNowParts,
+  isWorkingDayDate,
+  isLongTaskCovered
+} = require('../services/dailyTrackerService');
 const { getMasterDb, getTenantDb, getDevSingleDb } = require('../services/tenantPools');
 
 async function checkDueSoonCards(firstArg = null, secondArg = null, thirdArg = null) {
@@ -174,18 +181,19 @@ async function checkDailyCheckinReminders(firstArg = null, secondArg = null, thi
     if (thirdArg instanceof Date) now = thirdArg;
   }
 
-  // Get open assigned cards with board and workspace info
   let cardRows = [];
   try {
     cardRows = await activeDb.query(
       `SELECT c.id, c.title, c.created_at, c.first_moved_or_assigned_at, c.due_date,
-              cm.user_id, l.board_id, b.name as board_name, b.workspace_id,
-              w.settings as settings_json
+              cm.user_id, cm.created_at AS assigned_at, l.board_id, b.name as board_name, b.workspace_id,
+              w.settings as settings_json,
+              clt.is_long_task, clt.expected_finish_date, clt.last_noted_at
        FROM cards c
        JOIN card_members cm ON c.id = cm.card_id
        JOIN lists l ON c.list_id = l.id
        JOIN boards b ON l.board_id = b.id
        JOIN workspaces w ON b.workspace_id = w.id
+       LEFT JOIN card_long_tasks clt ON clt.card_id = c.id AND clt.user_id = cm.user_id
        WHERE (l.is_done_list = 0 OR l.is_done_list IS NULL)
          AND LOWER(TRIM(l.name)) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved', 'archive', 'archived')
          AND (c.is_complete = 0 OR c.is_complete IS NULL)
@@ -200,122 +208,101 @@ async function checkDailyCheckinReminders(firstArg = null, secondArg = null, thi
 
   if (cardRows.length === 0) return 0;
 
-  // Track members already reminded this run
-  const remindedMembers = new Set();
+  // Group by workspace_id + user_id
+  const groups = new Map();
+  for (const row of cardRows) {
+    const key = `${row.workspace_id}:${row.user_id}`;
+    if (!groups.has(key)) {
+      groups.set(key, { workspaceId: row.workspace_id, userId: row.user_id, settingsJson: row.settings_json, cards: [] });
+    }
+    groups.get(key).cards.push(row);
+  }
+
+  const recentCutoffMs = now.getTime() - 3 * 60 * 60 * 1000; // Suppress cards assigned in last 3 hours
   let remindedCount = 0;
 
-  for (const card of cardRows) {
-    if (remindedMembers.has(card.user_id)) continue;
+  for (const grp of groups.values()) {
+    const { workspaceId, userId, settingsJson, cards } = grp;
+    const { timezone, workingDays, holidays, cutoffTime } = getWorkspaceCalendarConfig(settingsJson);
+    const { dateStr, hour, minute } = getWorkspaceNowParts(timezone, now);
 
-    let settings = {};
-    if (card.settings_json) {
-      try {
-        settings = typeof card.settings_json === 'string' ? JSON.parse(card.settings_json) : card.settings_json;
-      } catch { }
-    }
+    // 1. Suppress on non-working days & holidays
+    if (!isWorkingDayDate(dateStr, workingDays, holidays)) continue;
 
-    const tz = settings.timezone || 'Asia/Kolkata';
-    const workingDays = settings.working_days || [1, 2, 3, 4, 5]; // Mon-Fri
-    const holidays = Array.isArray(settings.holidays) ? settings.holidays : [];
-    const cutoffStr = settings.cutoff_time || '17:00'; // Default 17:00 Asia/Kolkata
-    const [cutoffHour, cutoffMinute] = cutoffStr.split(':').map(Number);
+    // 2. Must be at or past workspace end-of-day cutoff
+    const [cutH, cutM] = cutoffTime.split(':').map(Number);
+    const pastCutoff = (hour > cutH) || (hour === cutH && minute >= (cutM || 0));
+    if (!pastCutoff) continue;
 
-    // Get current date and time in workspace timezone
-    let dateStr, hour, minute, isoDay;
-    try {
-      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-      dateStr = formatter.format(now); // YYYY-MM-DD
-      const timeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false });
-      const parts = timeFormatter.formatToParts(now);
-      hour = Number(parts.find(p => p.type === 'hour')?.value || 0);
-      minute = Number(parts.find(p => p.type === 'minute')?.value || 0);
+    // 3. Filter out recently assigned cards and long-task covered cards
+    const eligibleCards = cards.filter((c) => {
+      const assignedTime = new Date(c.assigned_at || c.first_moved_or_assigned_at || c.created_at).getTime();
+      if (assignedTime > recentCutoffMs) return false;
+      if (isLongTaskCovered(c, dateStr, workingDays, holidays)) return false;
+      return true;
+    });
+    if (eligibleCards.length === 0) continue;
 
-      const dayFormatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' });
-      const dayShort = dayFormatter.format(now);
-      const dayMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-      isoDay = dayMap[dayShort] ?? 1;
-    } catch {
-      dateStr = now.toISOString().slice(0, 10);
-      hour = now.getUTCHours();
-      minute = now.getUTCMinutes();
-      const jsDay = now.getUTCDay();
-      isoDay = jsDay === 0 ? 7 : jsDay;
-    }
-
-    // Must be a working day
-    if (!workingDays.includes(isoDay)) continue;
-
-    // Check holidays
-    if (holidays.includes(dateStr)) continue;
-
-    // Check if card needs an update:
-    // (has been open for at least 1 working day since first assignment or first move, OR its due date is 2 or more working days away)
-    const startRef = card.first_moved_or_assigned_at || card.created_at;
-    const daysOpen = calculateWorkingDaysOpen(startRef, dateStr, workingDays, holidays);
-    const daysUntilDue = card.due_date ? getWorkingDaysUntilDue(card.due_date, dateStr, workingDays, holidays) : 0;
-    const needsUpdate = (daysOpen >= 1 || daysUntilDue >= 2);
-    if (!needsUpdate) continue;
-
-    // Check if user is on approved leave today
+    // 4. Suppress if user is on approved leave today
     const [leave] = await activeDb.query(
       "SELECT id FROM leave_days WHERE user_id = ? AND date = ? AND status = 'approved'",
-      [card.user_id, dateStr]
+      [userId, dateStr]
     );
     if (leave) continue;
 
-    // Must be at or past cutoff time
-    const pastCutoff = (hour > cutoffHour) || (hour === cutoffHour && minute >= (cutoffMinute || 0));
-    if (!pastCutoff) continue;
+    // 5. Suppress if user snoozed today on server
+    const [snooze] = await activeDb.query(
+      'SELECT id FROM daily_tracker_snoozes WHERE workspace_id = ? AND user_id = ? AND snoozed_date = ?',
+      [workspaceId, userId, dateStr]
+    );
+    if (snooze) continue;
 
-    // Check if member already checked in today on ANY card
-    const [checkin] = await activeDb.query(
+    // 6. Suppress if user already submitted daily_update today (or legacy check-in)
+    const [existingUpdate] = await activeDb.query(
+      'SELECT id FROM daily_updates WHERE workspace_id = ? AND user_id = ? AND work_date = ?',
+      [workspaceId, userId, dateStr]
+    );
+    if (existingUpdate) continue;
+
+    const [legacyCheckin] = await activeDb.query(
       'SELECT id FROM check_ins WHERE user_id = ? AND work_date = ?',
-      [card.user_id, dateStr]
+      [userId, dateStr]
     );
-    if (checkin) continue;
+    if (legacyCheckin) continue;
 
-    // Check if reminder was already sent or enqueued today for this member
-    const dedupeKey = `checkin_due_${card.user_id}_${dateStr}`;
-    const [existingNotif] = await activeDb.query(
-      `SELECT id FROM notifications 
-       WHERE user_id = ? 
-         AND (type = 'checkin.due' OR event_type = 'checkin.due') 
-         AND (DATE(created_at) = ? OR (meta IS NOT NULL AND meta LIKE ?))`,
-      [card.user_id, dateStr, `%"workDate":"${dateStr}"%`]
-    );
+    // 7. Atomic idempotency check (at most 1 web push per user per workspace per day, NO bell notification)
+    const dedupeKey = `daily_push_${workspaceId}_${userId}_${dateStr}`;
     const [existingOutbox] = await activeDb.query(
-      `SELECT id FROM notification_outbox 
-       WHERE (target_user_id = ? OR dedupe_key = ?) 
-         AND event_type = 'checkin.due' 
-         AND (dedupe_key LIKE ? OR status IN ('pending', 'processing', 'completed'))`,
-      [card.user_id, dedupeKey, `%_${dateStr}%`]
+      `SELECT id FROM notification_outbox WHERE dedupe_key = ? LIMIT 1`,
+      [dedupeKey]
     );
-    if (existingNotif || existingOutbox) {
-      remindedMembers.add(card.user_id);
+    if (existingOutbox) continue;
+
+    try {
+      await activeDb.execute(
+        `INSERT INTO notification_outbox (event_type, target_user_id, dedupe_key, payload, status, created_at, updated_at)
+         VALUES ('checkin.due', ?, ?, ?, 'completed', NOW(3), NOW(3))`,
+        [userId, dedupeKey, JSON.stringify({ workspaceId, workDate: dateStr, cardCount: eligibleCards.length })]
+      );
+    } catch {
+      // Duplicate key under concurrent cron instance -> already handled
       continue;
     }
 
-    // Send single personal notification (no sound, notifiable)
-    await notify(
-      {
+    // Send web push ONLY (never insert into notifications bell table)
+    try {
+      await sendPushNotification(activeDb, {
+        notification: null,
+        recipientId: userId,
         eventType: 'checkin.due',
-        actorUserId: null,
-        targetUserId: card.user_id,
-        boardId: card.board_id,
-        cardId: card.id,
-        tenantId,
-        dedupeKey,
-        meta: {
-          cardTitle: card.title,
-          cardId: card.id,
-          boardName: card.board_name,
-          workDate: dateStr
-        }
-      },
-      activeDb
-    );
+        message: `Quick 30-second daily update for your ${eligibleCards.length} active task(s)`,
+        meta: { workspaceId, workDate: dateStr, cardCount: eligibleCards.length },
+        tenantId: tenantId || 'single'
+      });
+    } catch (pushErr) {
+      // Non-fatal if push not configured
+    }
 
-    remindedMembers.add(card.user_id);
     remindedCount++;
   }
 
