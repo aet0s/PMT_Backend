@@ -475,18 +475,30 @@ const ROUTE_NOTIFICATION_MAP = {
     reason: 'Leave day cancellation is tracked administratively in Daily Tracker and audit log'
   },
 
-  // --- Daily Tracker Focus & Check-ins ---
-  'POST /api/cards/:id/focus': {
+  // --- Daily Tracker & Check-ins ---
+  'POST /api/workspaces/:id/daily-update': {
     noNotify: true,
-    reason: 'Personal focus selection is productivity state; not a noise event'
+    reason: 'Daily update submission is recorded in Daily Tracker; not a bell event'
   },
-  'DELETE /api/cards/:id/focus': {
+  'PATCH /api/workspaces/:id/daily-update/:updateId': {
     noNotify: true,
-    reason: 'Ending personal focus is productivity state; not a noise event'
+    reason: 'Daily update edit within day; not a bell event'
   },
-  'POST /api/cards/:id/focus/deep-work': {
+  'POST /api/workspaces/:id/daily-tracker/snooze': {
     noNotify: true,
-    reason: 'Designating deep-work card is productivity metadata; not a noise event'
+    reason: 'Personal reminder snooze; not a bell event'
+  },
+  'POST /api/workspaces/:id/daily-tracker/leave-today': {
+    noNotify: true,
+    reason: 'One-click leave today is tracked in Daily Tracker and audit log'
+  },
+  'POST /api/daily-updates/:id/review': {
+    noNotify: true,
+    reason: 'Daily update review questions/acknowledgments are handled in Daily Tracker'
+  },
+  'POST /api/daily-update-reviews/:id/answer': {
+    noNotify: true,
+    reason: 'Daily update review answer is recorded in Daily Tracker'
   },
   'POST /api/cards/:id/checkins': {
     noNotify: true,
@@ -494,7 +506,7 @@ const ROUTE_NOTIFICATION_MAP = {
   },
   'PATCH /api/cards/:id/checkins/:checkinId': {
     noNotify: true,
-    reason: 'Check-in 15-minute edit window update; not a noise event'
+    reason: 'Check-in edit within day; not a noise event'
   },
   'POST /api/checkins/:id/review': {
     noNotify: true,

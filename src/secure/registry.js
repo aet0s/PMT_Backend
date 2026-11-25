@@ -680,6 +680,84 @@ registerOperation('workspaces.checkins_pending', {
   }
 });
 
+registerOperation('workspaces.daily_update.today', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${data.workspace_id}/daily-update/today` });
+  }
+});
+
+registerOperation('workspaces.daily_update.submit', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/workspaces/${workspace_id}/daily-update`, body });
+  }
+});
+
+registerOperation('workspaces.daily_update.edit', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive(),
+    update_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, update_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'PATCH', url: `/api/workspaces/${workspace_id}/daily-update/${update_id}`, body });
+  }
+});
+
+registerOperation('workspaces.daily_tracker.snooze', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/workspaces/${workspace_id}/daily-tracker/snooze`, body });
+  }
+});
+
+registerOperation('workspaces.daily_tracker.leave_today', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/workspaces/${workspace_id}/daily-tracker/leave-today`, body });
+  }
+});
+
+registerOperation('workspaces.daily_tracker.people_timeline', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive(),
+    user_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, user_id, ...query } = data;
+    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${workspace_id}/daily-tracker/people/${user_id}/timeline`, query });
+  }
+});
+
+registerOperation('workspaces.daily_tracker.people_export', {
+  permission: 'workspace.view',
+  schema: z.object({
+    workspace_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { workspace_id, ...query } = data;
+    return await dispatchInternal(ctx, { method: 'GET', url: `/api/workspaces/${workspace_id}/daily-tracker/people/export`, query });
+  }
+});
+
 registerOperation('workspaces.audit_events.list', {
   permission: 'audit.view',
   schema: z.object({
@@ -1475,6 +1553,28 @@ registerOperation('cards.checkins.answer', {
   handler: async (ctx, data) => {
     const { review_id, ...body } = data;
     return await dispatchInternal(ctx, { method: 'POST', url: `/api/checkin-reviews/${review_id}/answer`, body });
+  }
+});
+
+registerOperation('daily_updates.review', {
+  permission: 'workspace.view',
+  schema: z.object({
+    update_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { update_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/daily-updates/${update_id}/review`, body });
+  }
+});
+
+registerOperation('daily_updates.review_answer', {
+  permission: 'workspace.view',
+  schema: z.object({
+    review_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    const { review_id, ...body } = data;
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/daily-update-reviews/${review_id}/answer`, body });
   }
 });
 

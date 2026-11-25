@@ -6,6 +6,7 @@ const express = require('express');
 const { URLSearchParams } = require('url');
 
 const internalApiRouter = express.Router();
+internalApiRouter.use('/workspaces', require('../routes/dailyTracker'));
 internalApiRouter.use('/workspaces', require('../routes/workspaces'));
 internalApiRouter.use('/boards', require('../routes/boards'));
 internalApiRouter.use('/lists', require('../routes/lists'));

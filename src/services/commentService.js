@@ -241,7 +241,7 @@ async function dispatchCommentNotifications({
       for (const m of muteRows) {
         unmutedSet.delete(Number(m.user_id));
       }
-    } catch (_) {}
+    } catch (_) { }
 
     const snippet = formatCommentSnippet(commentBody, 75);
 
@@ -284,7 +284,7 @@ async function dispatchCommentNotifications({
       if (nRow) {
         nRow.actor_name = actorName;
         nRow.card_title = cardTitle;
-        try { nRow.meta = JSON.parse(nRow.meta); } catch (_) {}
+        try { nRow.meta = JSON.parse(nRow.meta); } catch (_) { }
         sendUserNotification(recipientId, nRow, tenantId);
       }
     };

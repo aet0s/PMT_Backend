@@ -477,6 +477,18 @@
     {
       "file": "checkins.js",
       "method": "POST",
+      "subpath": "/daily-updates/:id/review",
+      "fullPath": "/api/checkins/daily-updates/:id/review"
+    },
+    {
+      "file": "checkins.js",
+      "method": "POST",
+      "subpath": "/daily-update-reviews/:id/answer",
+      "fullPath": "/api/checkins/daily-update-reviews/:id/answer"
+    },
+    {
+      "file": "checkins.js",
+      "method": "POST",
       "subpath": "/checkins/:id/review",
       "fullPath": "/api/checkins/checkins/:id/review"
     },
@@ -485,6 +497,60 @@
       "method": "POST",
       "subpath": "/checkin-reviews/:id/answer",
       "fullPath": "/api/checkins/checkin-reviews/:id/answer"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "GET",
+      "subpath": "/:id/daily-update/today",
+      "fullPath": "/api/dailyTracker/:id/daily-update/today"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "GET",
+      "subpath": "/:id/checkins/pending",
+      "fullPath": "/api/dailyTracker/:id/checkins/pending"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "POST",
+      "subpath": "/:id/daily-update",
+      "fullPath": "/api/dailyTracker/:id/daily-update"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "PATCH",
+      "subpath": "/:id/daily-update/:updateId",
+      "fullPath": "/api/dailyTracker/:id/daily-update/:updateId"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "POST",
+      "subpath": "/:id/daily-tracker/snooze",
+      "fullPath": "/api/dailyTracker/:id/daily-tracker/snooze"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "POST",
+      "subpath": "/:id/daily-tracker/leave-today",
+      "fullPath": "/api/dailyTracker/:id/daily-tracker/leave-today"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "GET",
+      "subpath": "/:id/daily-tracker/people",
+      "fullPath": "/api/dailyTracker/:id/daily-tracker/people"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "GET",
+      "subpath": "/:id/daily-tracker/people/export",
+      "fullPath": "/api/dailyTracker/:id/daily-tracker/people/export"
+    },
+    {
+      "file": "dailyTracker.js",
+      "method": "GET",
+      "subpath": "/:id/daily-tracker/people/:userId/timeline",
+      "fullPath": "/api/dailyTracker/:id/daily-tracker/people/:userId/timeline"
     },
     {
       "file": "files.js",
@@ -503,6 +569,12 @@
       "method": "GET",
       "subpath": "/avatars/:filename",
       "fullPath": "/api/files/avatars/:filename"
+    },
+    {
+      "file": "files.js",
+      "method": "GET",
+      "subpath": "/:id/download",
+      "fullPath": "/api/files/:id/download"
     },
     {
       "file": "files.js",
@@ -1009,5 +1081,5 @@
       "fullPath": "/api/workspaces/:id/leave-days/:leaveId"
     }
   ],
-  "count": 168
+  "count": 180
 }

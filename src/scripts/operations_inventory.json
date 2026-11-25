@@ -94,8 +94,11 @@
     "requireAuth": false,
     "permission": "(object-level / internal)",
     "schemaFields": [
+      "email",
       "token",
-      "password"
+      "reset_token",
+      "password",
+      "new_password"
     ],
     "tenantScope": "tenant",
     "isPublic": true
@@ -812,6 +815,7 @@
     "schemaFields": [
       "card_id",
       "query",
+      "q",
       "limit"
     ],
     "tenantScope": "tenant",
@@ -861,6 +865,28 @@
     "schemaFields": [
       "comment_id",
       "body"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "daily_updates.review",
+    "domain": "daily_updates",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "update_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "daily_updates.review_answer",
+    "domain": "daily_updates",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "review_id"
     ],
     "tenantScope": "tenant",
     "isPublic": false
@@ -1256,6 +1282,32 @@
     "isPublic": false
   },
   {
+    "name": "users.get",
+    "domain": "users",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "user_id",
+      "id",
+      "email"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "users.profile",
+    "domain": "users",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "user_id",
+      "id",
+      "email"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
     "name": "workspaces.activity",
     "domain": "workspaces",
     "requireAuth": true,
@@ -1381,7 +1433,7 @@
     "name": "workspaces.company_members.assign_boards",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.invite",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1393,7 +1445,7 @@
     "name": "workspaces.company_members.assign_workspaces",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.invite",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1428,7 +1480,7 @@
     "name": "workspaces.company_members.update_credentials",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.assign_role",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1440,7 +1492,7 @@
     "name": "workspaces.company_members.update_role",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.role_assign",
+    "permission": "member.assign_role",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1472,7 +1524,86 @@
     "isPublic": false
   },
   {
+    "name": "workspaces.daily_tracker.leave_today",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_tracker.people_export",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_tracker.people_timeline",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id",
+      "user_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_tracker.snooze",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
     "name": "workspaces.daily_tracker_people",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_update.edit",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id",
+      "update_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_update.submit",
+    "domain": "workspaces",
+    "requireAuth": true,
+    "permission": "workspace.view",
+    "schemaFields": [
+      "workspace_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "workspaces.daily_update.today",
     "domain": "workspaces",
     "requireAuth": true,
     "permission": "workspace.view",
@@ -1521,7 +1652,8 @@
     "requireAuth": true,
     "permission": "workspace.edit",
     "schemaFields": [
-      "workspace_id"
+      "workspace_id",
+      "icon_url"
     ],
     "tenantScope": "tenant",
     "isPublic": false
@@ -1631,7 +1763,7 @@
     "name": "workspaces.members.deactivate",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.deactivate",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1654,7 +1786,7 @@
     "name": "workspaces.members.reactivate",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.deactivate",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1678,7 +1810,7 @@
     "name": "workspaces.members.reset_2fa",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.reset_2fa",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1690,7 +1822,7 @@
     "name": "workspaces.members.reset_password",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.manage",
+    "permission": "member.reset_password",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1702,7 +1834,7 @@
     "name": "workspaces.members.update_role",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "member.role_assign",
+    "permission": "member.assign_role",
     "schemaFields": [
       "workspace_id",
       "user_id"
@@ -1725,7 +1857,7 @@
     "name": "workspaces.my_tasks",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "workspace.view",
+    "permission": "(object-level / internal)",
     "schemaFields": [
       "workspace_id"
     ],
@@ -1736,9 +1868,11 @@
     "name": "workspaces.reports",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "reports.view",
+    "permission": "report.view_project",
     "schemaFields": [
-      "workspace_id"
+      "workspace_id",
+      "board_id",
+      "timeframe"
     ],
     "tenantScope": "tenant",
     "isPublic": false
@@ -1813,7 +1947,7 @@
     "name": "workspaces.security.get",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "workspace.security_manage",
+    "permission": "company.manage_security",
     "schemaFields": [
       "workspace_id"
     ],
@@ -1824,7 +1958,7 @@
     "name": "workspaces.security.update",
     "domain": "workspaces",
     "requireAuth": true,
-    "permission": "workspace.security_manage",
+    "permission": "company.manage_security",
     "schemaFields": [
       "workspace_id"
     ],

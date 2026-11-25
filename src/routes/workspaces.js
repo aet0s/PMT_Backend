@@ -5350,7 +5350,6 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
     const cardCommentsMap = {};
     const cardAttachmentsMap = {};
     const cardChecklistsMap = {};
-    const cardFocusMap = {};
     const cardCheckinsMap = {};
 
     if (cardIds.length > 0) {
@@ -5496,7 +5495,6 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
       const comments = cardCommentsMap[c.id] || [];
       const attachments = cardAttachmentsMap[c.id] || [];
       const checklistItems = cardChecklistsMap[c.id] || [];
-      const focusList = cardFocusMap[c.id] || [];
       const allCardCheckins = cardCheckinsMap[c.id] || [];
       const checkinsToday = allCardCheckins.filter((ci) => ci.work_date === targetDate);
 
@@ -5835,8 +5833,6 @@ router.get('/:id/daily-tracker', requireAuth, requirePermission('daily_tracker.v
         flags: Array.from(new Set(flags)),
         verified_checklist_count: creditedChecklistCount,
         comments_count: creditedCommentsCount,
-        has_focus: false,
-        is_deep_work: false,
         checkin_today: topCheckin,
         latest_checkin: topCheckin,
         checkins: allCardCheckins,
@@ -6372,7 +6368,7 @@ router.get('/:id/checkins/pending', requireAuth, requirePermission('checkin.crea
     const isoDay = jsDay === 0 ? 7 : jsDay;
     const isWorkingDay = workingDays.includes(isoDay) && !holidays.includes(todayStr);
 
-    // Cards assigned to user in workspace, not in done list, no check-in today
+    // Cards assigned to user in workspace, not complete/archived/in done list, no check-in today
     const cardRows = await req.db.query(
       `SELECT c.id, c.title, c.created_at, c.first_moved_or_assigned_at, c.due_date, c.list_id,
               l.name as list_name, l.board_id, b.name as board_title
@@ -6382,7 +6378,12 @@ router.get('/:id/checkins/pending', requireAuth, requirePermission('checkin.crea
        JOIN boards b ON l.board_id = b.id
        WHERE b.workspace_id = ?
          AND cm.user_id = ?
+         AND (c.is_complete = 0 OR c.is_complete IS NULL)
+         AND (c.is_archived = 0 OR c.is_archived IS NULL)
+         AND (l.is_archived = 0 OR l.is_archived IS NULL)
+         AND (b.is_archived = 0 OR b.is_archived IS NULL)
          AND (l.is_done_list = 0 OR l.is_done_list IS NULL)
+         AND LOWER(TRIM(l.name)) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved', 'archive', 'archived')
          AND c.id NOT IN (
            SELECT card_id FROM check_ins WHERE user_id = ? AND work_date = ?
          )

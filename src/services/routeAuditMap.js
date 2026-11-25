@@ -267,8 +267,32 @@ const ROUTE_AUDIT_MAP = {
   },
 
   // ==========================================
-  // --- CHECKINS ---
+  // --- CHECKINS & DAILY UPDATES ---
   // ==========================================
+  'POST /api/workspaces/:id/daily-update': {
+    auditEvents: ['checkin.created', 'checkin.updated'],
+    description: 'Submits or updates unified daily update'
+  },
+  'PATCH /api/workspaces/:id/daily-update/:updateId': {
+    auditEvents: ['checkin.updated'],
+    description: 'Edits unified daily update within same day'
+  },
+  'POST /api/workspaces/:id/daily-tracker/snooze': {
+    auditEvents: ['checkin.updated'],
+    description: 'Snoozes daily tracker reminder until tomorrow'
+  },
+  'POST /api/workspaces/:id/daily-tracker/leave-today': {
+    auditEvents: ['leave.requested'],
+    description: 'Marks member on leave today in one click'
+  },
+  'POST /api/daily-updates/:id/review': {
+    auditEvents: ['checkin.reviewed'],
+    description: 'Submits daily update review'
+  },
+  'POST /api/daily-update-reviews/:id/answer': {
+    auditEvents: ['checkin.answered'],
+    description: 'Answers daily update review question'
+  },
   'POST /api/checkins/:id/review': {
     auditEvents: ['checkin.reviewed'],
     description: 'Submits checkin review'

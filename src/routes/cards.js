@@ -288,10 +288,6 @@ async function getFullCard(cardId, dbInstance = null) {
       card.checkins = [];
     }
 
-    card.active_focus = null;
-    card.is_focus = false;
-    card.is_deep_work = false;
-
     try {
       const boardRes = await db.query(
         'SELECT l.board_id, b.workspace_id FROM cards c JOIN lists l ON c.list_id = l.id JOIN boards b ON l.board_id = b.id WHERE c.id = ?',
@@ -2679,44 +2675,28 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
     }
     const workDate = todayServer;
 
-    // 3. Validation: did >= 30 chars & >= 6 words
-    const didText = String(did || '').trim();
-    const didWords = didText.split(/\s+/).filter(Boolean);
-    if (didText.length < 30 || didWords.length < 6) {
-      return res.status(400).json({
-        error: { message: 'Check-in did must be at least 30 characters and at least 6 words', code: 'CHECKIN_DID_TOO_SHORT' }
-      });
-    }
+    // 3. Sanitize optional note (max 500 chars, no minimum)
+    const didText = sanitizePlain(String(did || '').trim()).slice(0, 500);
 
-    // 3b. Blocked checkbox requires a note
+    // 3b. Blocked requires a note
     const isBlocked = status === 'blocked' || req.body.is_blocked === true;
     const dbStatus = isBlocked ? 'blocked' : (status === 'need_help' ? 'need_help' : 'on_track');
-    const blockerText = blocker ? String(blocker).trim() : null;
+    const blockerText = blocker ? sanitizePlain(String(blocker).trim()).slice(0, 500) : null;
     if (isBlocked && (!blockerText || blockerText.length === 0)) {
       return res.status(400).json({
         error: { message: 'A note is required when marking a check-in as blocked', code: 'BLOCKER_NOTE_REQUIRED' }
       });
     }
 
-    // 4. Validation: next_step >= 10 chars
-    const nextStepText = String(next_step || '').trim();
-    if (nextStepText.length < 10) {
-      return res.status(400).json({
-        error: { message: 'Check-in next_step must be at least 10 characters', code: 'CHECKIN_NEXT_STEP_TOO_SHORT' }
-      });
-    }
+    // 4. Next step is optional (no minimum)
+    const nextStepText = sanitizePlain(String(next_step || '').trim()).slice(0, 500);
 
-    // 5. Progress drop requires blocker note
+    // 5. Optional progress (no drop blocker rule)
     const progress = Math.min(100, Math.max(0, parseInt(progress_pct, 10) || 0));
     const [prevCheckin] = await req.db.query(
       'SELECT progress_pct FROM check_ins WHERE card_id = ? AND user_id = ? ORDER BY work_date DESC, id DESC LIMIT 1',
       [cardId, req.user.id]
     );
-    if (prevCheckin && progress < prevCheckin.progress_pct && !blockerText) {
-      return res.status(400).json({
-        error: { message: 'Progress cannot drop without a blocker note', code: 'BLOCKER_REQUIRED_FOR_PROGRESS_DROP' }
-      });
-    }
 
     // 6. Token similarity >= 70% with last 3 check-ins flagged repeat
     const pastCheckins = await req.db.query(
@@ -2758,7 +2738,7 @@ router.post('/:id/checkins', requireAuth, requirePermission('checkin.create'), a
     );
     if (existingToday) {
       return res.status(400).json({
-        error: { message: 'A check-in for this card has already been submitted today. Please edit within 15 minutes if needed.', code: 'CHECKIN_ALREADY_EXISTS_TODAY' }
+        error: { message: 'A check-in for this card has already been submitted today. You can edit it until end of day.', code: 'CHECKIN_ALREADY_EXISTS_TODAY' }
       });
     }
 
@@ -2804,46 +2784,36 @@ router.patch('/:id/checkins/:checkinId', requireAuth, requirePermission('checkin
       return res.status(403).json({ error: { message: 'Only author can edit check-in', code: 'FORBIDDEN' } });
     }
 
-    const minutesSinceCreated = (Date.now() - new Date(ci.created_at).getTime()) / (1000 * 60);
-    if (minutesSinceCreated > 15) {
+    const todayServer = new Date().toISOString().slice(0, 10);
+    const ciWorkDate = typeof ci.work_date === 'string' ? ci.work_date.slice(0, 10) : new Date(ci.work_date).toISOString().slice(0, 10);
+    if (ciWorkDate !== todayServer) {
       return res.status(400).json({
-        error: { message: 'Check-ins can only be edited within 15 minutes of creation', code: 'EDIT_WINDOW_EXPIRED' }
+        error: { message: 'Check-ins can only be edited until the end of the day.', code: 'EDIT_WINDOW_EXPIRED' }
       });
     }
 
     const updates = ['edited_at = NOW()'];
     const values = [];
 
-    // Keep original text on edit (Bug 4 fix)
+    // Keep original text on edit
     if (ci.original_did === null) {
       updates.push('original_did = ?', 'original_next_step = ?');
       values.push(ci.did, ci.next_step);
     }
 
     if (did !== undefined) {
-      const didText = String(did).trim();
-      const didWords = didText.split(/\s+/).filter(Boolean);
-      if (didText.length < 30 || didWords.length < 6) {
-        return res.status(400).json({
-          error: { message: 'Check-in did must be at least 30 characters and at least 6 words', code: 'CHECKIN_DID_TOO_SHORT' }
-        });
-      }
+      const didText = sanitizePlain(String(did).trim()).slice(0, 500);
       updates.push('did = ?');
       values.push(didText);
     }
     if (next_step !== undefined) {
-      const nextStepText = String(next_step).trim();
-      if (nextStepText.length < 10) {
-        return res.status(400).json({
-          error: { message: 'Check-in next_step must be at least 10 characters', code: 'CHECKIN_NEXT_STEP_TOO_SHORT' }
-        });
-      }
+      const nextStepText = sanitizePlain(String(next_step).trim()).slice(0, 500);
       updates.push('next_step = ?');
       values.push(nextStepText);
     }
     if (blocker !== undefined) {
       updates.push('blocker = ?');
-      values.push(blocker ? String(blocker).trim() : null);
+      values.push(blocker ? sanitizePlain(String(blocker).trim()).slice(0, 500) : null);
     }
     if (status !== undefined || req.body.is_blocked !== undefined) {
       const isBlocked = status === 'blocked' || req.body.is_blocked === true;
@@ -2853,12 +2823,6 @@ router.patch('/:id/checkins/:checkinId', requireAuth, requirePermission('checkin
     }
     if (progress_pct !== undefined) {
       const progress = Math.min(100, Math.max(0, parseInt(progress_pct, 10) || 0));
-      const blockerText = blocker !== undefined ? (blocker ? String(blocker).trim() : null) : ci.blocker;
-      if (progress < ci.progress_pct && !blockerText) {
-        return res.status(400).json({
-          error: { message: 'Progress cannot drop without a blocker note', code: 'BLOCKER_REQUIRED_FOR_PROGRESS_DROP' }
-        });
-      }
       updates.push('progress_pct = ?');
       values.push(progress);
     }

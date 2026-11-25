@@ -187,8 +187,11 @@ async function checkDailyCheckinReminders(firstArg = null, secondArg = null, thi
        JOIN boards b ON l.board_id = b.id
        JOIN workspaces w ON b.workspace_id = w.id
        WHERE (l.is_done_list = 0 OR l.is_done_list IS NULL)
-         AND c.is_complete = 0
-         AND c.is_archived = 0
+         AND LOWER(TRIM(l.name)) NOT IN ('done', 'completed', 'complete', 'closed', 'finished', 'resolved', 'archive', 'archived')
+         AND (c.is_complete = 0 OR c.is_complete IS NULL)
+         AND (c.is_archived = 0 OR c.is_archived IS NULL)
+         AND (l.is_archived = 0 OR l.is_archived IS NULL)
+         AND (b.is_archived = 0 OR b.is_archived IS NULL)
        ORDER BY COALESCE(c.first_moved_or_assigned_at, c.created_at) ASC, c.id ASC`
     );
   } catch (err) {
@@ -208,7 +211,7 @@ async function checkDailyCheckinReminders(firstArg = null, secondArg = null, thi
     if (card.settings_json) {
       try {
         settings = typeof card.settings_json === 'string' ? JSON.parse(card.settings_json) : card.settings_json;
-      } catch {}
+      } catch { }
     }
 
     const tz = settings.timezone || 'Asia/Kolkata';

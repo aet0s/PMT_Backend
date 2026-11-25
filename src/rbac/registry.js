@@ -115,7 +115,7 @@ const PERMISSIONS = [
   { key: 'attachment.version', module: 'attachment', label: 'Manage Versions', description: 'Upload and restore attachment versions', scope: 'project', dangerous: false, planned: true },
 
   // --- Check-in ---
-  { key: 'checkin.create', module: 'checkin', label: 'Submit Daily Check-in', description: 'Submit daily progress check-in on focused tasks', scope: 'project', dangerous: false },
+  { key: 'checkin.create', module: 'checkin', label: 'Submit Daily Check-in', description: 'Submit daily progress update on assigned tasks', scope: 'project', dangerous: false },
   { key: 'checkin.view', module: 'checkin', label: 'View Check-ins', description: 'View member check-ins and evidence on boards', scope: 'project', dangerous: false },
   { key: 'checkin.review', module: 'checkin', label: 'Review Check-ins', description: 'Acknowledge, question, or request evidence on member check-ins', scope: 'project', dangerous: false },
 

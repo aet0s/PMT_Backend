@@ -156,6 +156,27 @@ function mapUrlToOperation(rawUrl, rawMethod = 'GET', initialData = {}) {
   m = path.match(/^\/workspaces\/([^/]+)\/daily-tracker\/people$/);
   if (m) return { operation: 'workspaces.daily_tracker_people', data: { ...mergedData, workspace_id: m[1] } };
 
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-tracker\/people\/export$/);
+  if (m) return { operation: 'workspaces.daily_tracker.people_export', data: { ...mergedData, workspace_id: m[1] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-tracker\/people\/([^/]+)\/timeline$/);
+  if (m) return { operation: 'workspaces.daily_tracker.people_timeline', data: { ...mergedData, workspace_id: m[1], user_id: m[2] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-update\/today$/);
+  if (m) return { operation: 'workspaces.daily_update.today', data: { ...mergedData, workspace_id: m[1] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-update$/);
+  if (m && method === 'POST') return { operation: 'workspaces.daily_update.submit', data: { ...mergedData, workspace_id: m[1] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-update\/([^/]+)$/);
+  if (m && (method === 'PATCH' || method === 'PUT')) return { operation: 'workspaces.daily_update.edit', data: { ...mergedData, workspace_id: m[1], update_id: m[2] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-tracker\/snooze$/);
+  if (m && method === 'POST') return { operation: 'workspaces.daily_tracker.snooze', data: { ...mergedData, workspace_id: m[1] } };
+
+  m = path.match(/^\/workspaces\/([^/]+)\/daily-tracker\/leave-today$/);
+  if (m && method === 'POST') return { operation: 'workspaces.daily_tracker.leave_today', data: { ...mergedData, workspace_id: m[1] } };
+
   m = path.match(/^\/workspaces\/([^/]+)\/leave-days$/);
   if (m) {
     if (method === 'GET') return { operation: 'workspaces.leave_days.list', data: { ...mergedData, workspace_id: m[1] } };
@@ -373,6 +394,12 @@ function mapUrlToOperation(rawUrl, rawMethod = 'GET', initialData = {}) {
 
   m = path.match(/^\/checkin-reviews\/([^/]+)\/answer$/);
   if (m) return { operation: 'cards.checkins.answer', data: { ...mergedData, review_id: m[1] } };
+
+  m = path.match(/^\/daily-updates\/([^/]+)\/review$/);
+  if (m) return { operation: 'daily_updates.review', data: { ...mergedData, update_id: m[1] } };
+
+  m = path.match(/^\/daily-update-reviews\/([^/]+)\/answer$/);
+  if (m) return { operation: 'daily_updates.review_answer', data: { ...mergedData, review_id: m[1] } };
 
   // --- 6. NOTIFICATIONS ---
   if (path === '/notifications' && method === 'GET') return { operation: 'notifications.list', data: mergedData };
