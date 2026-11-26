@@ -3033,6 +3033,8 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         FROM (
           SELECT user_id, card_id FROM card_assigners
           UNION
+          SELECT assigned_by_user_id AS user_id, card_id FROM card_members WHERE assigned_by_user_id IS NOT NULL
+          UNION
           SELECT user_id, card_id FROM activity_log WHERE action_type = 'created_card' AND card_id IS NOT NULL AND user_id IS NOT NULL
         ) ca
         JOIN cards c ON ca.card_id = c.id
@@ -3091,9 +3093,26 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
         const createdCompletedCount = userCreatedCards.filter((t) => t.is_complete).length;
         const createdArchivedCount = userCreatedCards.filter((t) => t.is_archived).length;
         const createdTodoCount = userCreatedCards.filter((t) => t.stage === 'todo' && !t.is_complete && !t.is_archived).length;
-        const createdInProgressCount = userCreatedCards.filter((t) => (t.stage === 'in_progress' || t.stage === 'review') && !t.is_complete && !t.is_archived).length;
+        const createdReviewCount = userCreatedCards.filter((t) => t.stage === 'review' && !t.is_complete && !t.is_archived).length;
+        const createdInProgressCount = userCreatedCards.filter((t) => t.stage === 'in_progress' && !t.is_complete && !t.is_archived).length;
         const createdOverdueCount = userCreatedCards.filter((t) => t.is_overdue).length;
         const createdResolutionRate = createdTasksCount > 0 ? Math.round((createdCompletedCount / createdTasksCount) * 100) : 0;
+
+        // Combined unique involvement (assigned + delegated/created without double-counting)
+        const combinedMap = new Map();
+        userTasks.forEach((t) => combinedMap.set(t.id, t));
+        userCreatedCards.forEach((t) => {
+          if (!combinedMap.has(t.id)) combinedMap.set(t.id, t);
+        });
+        const combinedCards = Array.from(combinedMap.values());
+        const combinedTasksCount = combinedCards.length;
+        const combinedCompletedCount = combinedCards.filter((t) => t.is_complete).length;
+        const combinedArchivedCount = combinedCards.filter((t) => t.is_archived).length;
+        const combinedTodoCount = combinedCards.filter((t) => t.stage === 'todo' && !t.is_complete && !t.is_archived).length;
+        const combinedReviewCount = combinedCards.filter((t) => t.stage === 'review' && !t.is_complete && !t.is_archived).length;
+        const combinedInProgressCount = combinedCards.filter((t) => t.stage === 'in_progress' && !t.is_complete && !t.is_archived).length;
+        const combinedOverdueCount = combinedCards.filter((t) => t.is_overdue).length;
+        const combinedCompletionRate = combinedTasksCount > 0 ? Math.round((combinedCompletedCount / combinedTasksCount) * 100) : 0;
 
         // Board distribution for this user
         const userBoardsMap = {};
@@ -3136,8 +3155,17 @@ router.get('/:id/reports', requireAuth, async (req, res, next) => {
           created_archived_tasks: createdArchivedCount,
           created_todo_tasks: createdTodoCount,
           created_in_progress_tasks: createdInProgressCount,
+          created_review_tasks: createdReviewCount,
           created_overdue_tasks: createdOverdueCount,
           created_resolution_rate: createdResolutionRate,
+          combined_tasks: combinedTasksCount,
+          combined_completed_tasks: combinedCompletedCount,
+          combined_archived_tasks: combinedArchivedCount,
+          combined_todo_tasks: combinedTodoCount,
+          combined_in_progress_tasks: combinedInProgressCount,
+          combined_review_tasks: combinedReviewCount,
+          combined_overdue_tasks: combinedOverdueCount,
+          combined_completion_rate: combinedCompletionRate,
           created_cards: userCreatedCards,
           boards: userBoards,
           tasks: userTasks
