@@ -1433,7 +1433,16 @@ router.post('/:id/assigners', requireAuth, requirePermission('task.edit'), async
     const workspaceId = cardRes[0]?.workspace_id;
     const cardTitle = cardRes[0]?.title || 'Card';
 
-    const targetUserRes = await req.db.query('SELECT name, email FROM users WHERE id = ?', [user_id]);
+    const targetUserRes = await req.db.query(
+      `SELECT u.id, u.name, u.email
+       FROM users u
+       JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = ?
+       WHERE u.id = ?`,
+      [workspaceId, user_id]
+    );
+    if (targetUserRes.length === 0) {
+      return res.status(404).json({ error: { message: 'User is not a member of this workspace', code: 'NOT_FOUND' } });
+    }
     const targetUser = targetUserRes[0];
     const targetUserName = targetUser?.name || 'User';
 
