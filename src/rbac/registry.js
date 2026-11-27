@@ -196,6 +196,10 @@ const PERMISSIONS = [
   { key: 'notification.view_own', module: 'notification', label: 'View Notifications', description: 'Read in-app notifications', scope: 'company', dangerous: false },
   { key: 'notification.manage_own', module: 'notification', label: 'Manage Notifications', description: 'Configure personal alert preferences', scope: 'company', dangerous: false },
 
+  // --- Personal (Notes) ---
+  { key: 'notes.view_own', module: 'personal', label: 'View Personal Notes', description: 'Open the Notes page and read own sticky notes', scope: 'company', dangerous: false },
+  { key: 'notes.manage_own', module: 'personal', label: 'Manage Personal Notes', description: 'Create, edit, move, resize, pin, and delete own sticky notes', scope: 'company', dangerous: false },
+
   // --- Audit ---
   { key: 'audit.view', module: 'audit', label: 'View Audit Log', description: 'Inspect security and data mutation logs', scope: 'company', dangerous: true },
   { key: 'audit.export', module: 'audit', label: 'Export Audit Log', description: 'Download CSV of compliance audit logs', scope: 'company', dangerous: true },
@@ -286,7 +290,7 @@ const SYSTEM_ROLES = {
       'report.view_project', 'report.view_team', 'report.export', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.import', 'import_export.export',
       'archive.view', 'archive.restore', 'activity.view', 'daily_tracker.view', 'daily_tracker.view_people',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   'Team Lead': {
@@ -313,7 +317,7 @@ const SYSTEM_ROLES = {
       'report.view_project', 'report.view_team', 'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete', 'import_export.export',
       'archive.view', 'archive.restore', 'activity.view',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   'Team Member': {
@@ -338,7 +342,7 @@ const SYSTEM_ROLES = {
       'dashboard.view_project',
       'view.view', 'view.create', 'view.edit', 'view.delete',
       'archive.view', 'archive.restore', 'activity.view',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   Viewer: {
@@ -353,7 +357,7 @@ const SYSTEM_ROLES = {
       'project.view', 'task.view', 'task.watch', 'comment.view', 'attachment.view', 'file.view', 'label.view',
       'custom_field.view', 'milestone.view', 'sprint.view', 'backlog.view', 'epic.view',
       'dashboard.view_project', 'view.view', 'activity.view',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   Auditor: {
@@ -370,7 +374,7 @@ const SYSTEM_ROLES = {
       'audit.view', 'audit.export', 'archive.view', 'activity.view',
       'report.view_project', 'report.view_all', 'report.export',
       'dashboard.view_project', 'dashboard.view_executive', 'time.view_all',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   },
   Guest: {
@@ -384,7 +388,7 @@ const SYSTEM_ROLES = {
       'project.view', 'view.view', 'task.view', 'task.watch',
       'comment.view', 'comment.create', 'comment.edit_own', 'comment.delete_own',
       'attachment.view', 'file.view', 'label.view', 'member.view',
-      'notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
+      'notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own', 'search.use'
     ]
   }
 };
@@ -526,7 +530,10 @@ const PREREQUISITE_PERMISSIONS = {
 
   // Archive
   'archive.restore': ['archive.view', 'workspace.view', 'project.view'],
-  'archive.permanent_delete': ['archive.view', 'workspace.view', 'project.view']
+  'archive.permanent_delete': ['archive.view', 'workspace.view', 'project.view'],
+
+  // Personal Notes
+  'notes.manage_own': ['notes.view_own']
 };
 
 function getPrerequisites(permissionKey) {
@@ -635,6 +642,8 @@ const TRANSFERABLE_CUSTOM_ROLE_PERMISSIONS = new Set([
   'leave.request',
   'notification.view_own',
   'notification.manage_own',
+  'notes.view_own',
+  'notes.manage_own',
   'session.view_own',
   'session.revoke_own'
 ]);

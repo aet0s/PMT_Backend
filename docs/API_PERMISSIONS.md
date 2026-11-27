@@ -84,6 +84,14 @@ Every API endpoint in the platform is declared with either an explicit RBAC perm
 | **POST** | `/api/lists` | `list.create` | project | RBAC middleware (`requirePermission`) |
 | **DELETE** | `/api/lists/:id` | `list.delete` | project | RBAC middleware (`requirePermission`) |
 | **PATCH** | `/api/lists/:id` | `list.edit` | project | RBAC middleware (fine-grained: list.edit or list.reorder) |
+| **GET** | `/api/notes` | `notes.view_own` | company | RBAC middleware (`requirePermission`) — user reads own notes/trash |
+| **POST** | `/api/notes` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user creates own note |
+| **PATCH** | `/api/notes/:id` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user updates own note |
+| **POST** | `/api/notes/:id/duplicate` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user duplicates own note |
+| **DELETE** | `/api/notes/:id` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user soft-deletes own note |
+| **POST** | `/api/notes/:id/restore` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user restores own note |
+| **DELETE** | `/api/notes/:id/purge` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user permanently deletes own note |
+| **POST** | `/api/notes/batch-positions` | `notes.manage_own` | company | RBAC middleware (`requirePermission`) — user batch-updates own note positions |
 | **GET** | `/api/notifications` | *(self-scoped)* | company | Auth only (`requireAuth`) — notification.view_own — user reads their own notifications |
 | **DELETE** | `/api/notifications/:id` | *(self-scoped)* | company | Auth only (`requireAuth`) — notification.manage_own — user deletes their own notification |
 | **PATCH** | `/api/notifications/:id/read` | *(self-scoped)* | company | Auth only (`requireAuth`) — notification.manage_own — user marks their own notification read |

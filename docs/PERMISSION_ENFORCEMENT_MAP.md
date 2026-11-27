@@ -78,6 +78,8 @@ This document maps all 140 permissions defined in the system registry (`server/s
 | `audit.export` | `audit` | company | `GET /api/workspaces/:id/audit-logs/export`, Export Audit CSV button | Category (a) |
 | `notification.view_own`| `notification` | company | `GET /api/notifications`, Notification dropdown & list | Currently Enforced |
 | `notification.manage_own`| `notification` | company | `PATCH /api/notifications/preferences`, Preferences toggles | Currently Enforced |
+| `notes.view_own`| `personal` | company | `GET /api/notes`, Sidebar Notes link & NotesPage | Currently Enforced |
+| `notes.manage_own`| `personal` | company | `POST/PATCH/DELETE /api/notes/*`, StickyNote create/edit/drag/delete/restore/purge | Currently Enforced |
 | `archive.view` | `archive` | company | `GET /api/workspaces/:id/archived`, Workspace archive drawer | Category (a) |
 | `archive.restore` | `archive` | company | `POST /api/boards/:id/restore`, `PATCH /api/cards/:id` (`is_archived: false`) | Category (a) |
 | `archive.permanent_delete`| `archive`| company | `DELETE /api/boards/:id`, `DELETE /api/cards/:id` | Category (a) |
