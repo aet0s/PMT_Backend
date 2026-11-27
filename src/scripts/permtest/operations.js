@@ -867,6 +867,20 @@ const PROBES = {
     path: '/api/notifications/read-all',
     execute: (client) => client.patch('/api/notifications/read-all', {})
   },
+  'notes.view_own': {
+    module: 'personal',
+    scope: 'company',
+    method: 'GET',
+    path: '/api/notes',
+    execute: (client) => client.get('/api/notes')
+  },
+  'notes.manage_own': {
+    module: 'personal',
+    scope: 'company',
+    method: 'POST',
+    path: '/api/notes',
+    execute: (client) => client.post('/api/notes', { content: 'Permtest sticky note', color: 'yellow', x: 120, y: 120 })
+  },
 
   // === LABEL MODULE ===
   'label.view': {

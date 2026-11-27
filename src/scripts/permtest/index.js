@@ -85,7 +85,7 @@ async function runHttpMatrixSuite(fixture) {
         } else {
           // Cross-workspace: Board C in W2
           // Tenant-level keys still hold for tenant members:
-          if (['notification.view_own', 'notification.manage_own', 'session.view_own', 'session.revoke_own'].includes(key)) {
+          if (['notification.view_own', 'notification.manage_own', 'notes.view_own', 'notes.manage_own', 'session.view_own', 'session.revoke_own'].includes(key)) {
             expectedGranted = true;
           } else if (key === 'workspace.create' && ['Owner', 'Admin'].includes(roleName)) {
             expectedGranted = true;
