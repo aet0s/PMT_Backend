@@ -417,6 +417,36 @@ const ROUTE_NOTIFICATION_MAP = {
     reason: 'Self notification cleanup for read items'
   },
 
+  // --- Personal Notes (strictly private, zero notifications) ---
+  'POST /api/notes': {
+    noNotify: true,
+    reason: 'Private personal sticky note creation'
+  },
+  'POST /api/notes/batch-positions': {
+    noNotify: true,
+    reason: 'Private personal sticky note position batch update'
+  },
+  'PATCH /api/notes/:id': {
+    noNotify: true,
+    reason: 'Private personal sticky note update'
+  },
+  'POST /api/notes/:id/duplicate': {
+    noNotify: true,
+    reason: 'Private personal sticky note duplicate'
+  },
+  'DELETE /api/notes/:id': {
+    noNotify: true,
+    reason: 'Private personal sticky note soft delete'
+  },
+  'POST /api/notes/:id/restore': {
+    noNotify: true,
+    reason: 'Private personal sticky note restore'
+  },
+  'DELETE /api/notes/:id/purge': {
+    noNotify: true,
+    reason: 'Private personal sticky note purge'
+  },
+
   // --- Push Notifications ---
   'POST /api/push/subscriptions': {
     noNotify: true,

@@ -214,6 +214,16 @@ const ROUTE_PERMISSIONS = new Map([
   ['DELETE /api/notifications/:id',         { selfScoped: 'notification.manage_own — user deletes their own notification',       scope: 'company' }],
   ['DELETE /api/notifications/clear/read',  { selfScoped: 'notification.manage_own — user clears all read notifications',        scope: 'company' }],
 
+  // ─── Personal Notes (strictly owner-private) ───────────────────────────────
+  ['GET /api/notes',                        { permission: 'notes.view_own',   scope: 'company' }],
+  ['POST /api/notes',                       { permission: 'notes.manage_own', scope: 'company' }],
+  ['POST /api/notes/batch-positions',       { permission: 'notes.manage_own', scope: 'company' }],
+  ['PATCH /api/notes/:id',                  { permission: 'notes.manage_own', scope: 'company' }],
+  ['POST /api/notes/:id/duplicate',         { permission: 'notes.manage_own', scope: 'company' }],
+  ['DELETE /api/notes/:id',                 { permission: 'notes.manage_own', scope: 'company' }],
+  ['POST /api/notes/:id/restore',           { permission: 'notes.manage_own', scope: 'company' }],
+  ['DELETE /api/notes/:id/purge',           { permission: 'notes.manage_own', scope: 'company' }],
+
   // ─── Web Push Notifications ────────────────────────────────────────────────
   ['POST /api/push/subscriptions',          { selfScoped: 'notification.manage_own — user registers or updates push device subscription', scope: 'company' }],
   ['GET /api/push/subscriptions',           { selfScoped: 'notification.manage_own — user lists own push device subscriptions',          scope: 'company' }],

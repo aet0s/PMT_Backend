@@ -2,8 +2,8 @@
 -- Adds personal private user_notes table and notes.view_own / notes.manage_own RBAC permissions
 
 CREATE TABLE IF NOT EXISTS user_notes (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
   content TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   color ENUM('yellow', 'peach', 'blush', 'lilac', 'sky', 'mint', 'sage') NOT NULL DEFAULT 'yellow',
   x INT NOT NULL DEFAULT 100,

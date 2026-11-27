@@ -425,6 +425,24 @@ function mapUrlToOperation(rawUrl, rawMethod = 'GET', initialData = {}) {
   m = path.match(/^\/notifications\/([^/]+)$/);
   if (m && method === 'DELETE') return { operation: 'notifications.delete', data: { ...mergedData, notification_id: m[1] } };
 
+  // --- 6B. PERSONAL NOTES ---
+  if (path === '/notes' && method === 'GET') return { operation: 'notes.list', data: mergedData };
+  if (path === '/notes' && method === 'POST') return { operation: 'notes.create', data: mergedData };
+  if (path === '/notes/batch-positions' && method === 'POST') return { operation: 'notes.batch_positions', data: mergedData };
+
+  m = path.match(/^\/notes\/([^/]+)\/duplicate$/);
+  if (m && method === 'POST') return { operation: 'notes.duplicate', data: { ...mergedData, note_id: m[1] } };
+
+  m = path.match(/^\/notes\/([^/]+)\/restore$/);
+  if (m && method === 'POST') return { operation: 'notes.restore', data: { ...mergedData, note_id: m[1] } };
+
+  m = path.match(/^\/notes\/([^/]+)\/purge$/);
+  if (m && method === 'DELETE') return { operation: 'notes.purge', data: { ...mergedData, note_id: m[1] } };
+
+  m = path.match(/^\/notes\/([^/]+)$/);
+  if (m && method === 'PATCH') return { operation: 'notes.update', data: { ...mergedData, note_id: m[1] } };
+  if (m && method === 'DELETE') return { operation: 'notes.delete', data: { ...mergedData, note_id: m[1] } };
+
   // --- 7. INVITATIONS ---
   if (path === '/invitations' && method === 'GET') return { operation: 'invitations.list', data: mergedData };
   if (path === '/invitations' && method === 'POST') return { operation: 'invitations.create', data: mergedData };

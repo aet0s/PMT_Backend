@@ -1840,6 +1840,77 @@ registerOperation('notifications.clear_read', {
 });
 
 // ============================================================================
+// 8B. PERSONAL NOTES
+// ============================================================================
+registerOperation('notes.list', {
+  schema: z.object({}).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'GET', url: '/api/notes', query: data });
+  }
+});
+
+registerOperation('notes.create', {
+  schema: z.object({}).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'POST', url: '/api/notes', body: data });
+  }
+});
+
+registerOperation('notes.batch_positions', {
+  schema: z.object({
+    positions: z.array(z.any())
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'POST', url: '/api/notes/batch-positions', body: data });
+  }
+});
+
+registerOperation('notes.update', {
+  schema: z.object({
+    note_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'PATCH', url: `/api/notes/${data.note_id}`, body: data });
+  }
+});
+
+registerOperation('notes.duplicate', {
+  schema: z.object({
+    note_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/notes/${data.note_id}/duplicate`, body: data });
+  }
+});
+
+registerOperation('notes.delete', {
+  schema: z.object({
+    note_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'DELETE', url: `/api/notes/${data.note_id}`, body: data });
+  }
+});
+
+registerOperation('notes.restore', {
+  schema: z.object({
+    note_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'POST', url: `/api/notes/${data.note_id}/restore`, body: data });
+  }
+});
+
+registerOperation('notes.purge', {
+  schema: z.object({
+    note_id: z.coerce.number().positive()
+  }).passthrough(),
+  handler: async (ctx, data) => {
+    return await dispatchInternal(ctx, { method: 'DELETE', url: `/api/notes/${data.note_id}/purge`, body: data });
+  }
+});
+
+// ============================================================================
 // 9. INVITATIONS
 // ============================================================================
 registerOperation('invitations.list', {

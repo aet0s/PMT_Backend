@@ -118,6 +118,16 @@ const ROUTE_MANIFEST = [
   { method: 'DELETE', path: '/api/notifications/:id', permission: 'notification.manage_own', scope: 'company' },
   { method: 'DELETE', path: '/api/notifications/clear/read', permission: 'notification.manage_own', scope: 'company' },
 
+  // --- Personal Notes ---
+  { method: 'GET', path: '/api/notes', permission: 'notes.view_own', scope: 'company' },
+  { method: 'POST', path: '/api/notes', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'POST', path: '/api/notes/batch-positions', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'PATCH', path: '/api/notes/:id', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'POST', path: '/api/notes/:id/duplicate', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'DELETE', path: '/api/notes/:id', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'POST', path: '/api/notes/:id/restore', permission: 'notes.manage_own', scope: 'company' },
+  { method: 'DELETE', path: '/api/notes/:id/purge', permission: 'notes.manage_own', scope: 'company' },
+
   // --- Permissions Catalog & Self Evaluation ---
   { method: 'GET', path: '/api/permissions', permission: 'role.view', scope: 'company' },
   { method: 'GET', path: '/api/permissions/me', publicReason: 'Authenticated user permission check for project/workspace', scope: 'project' },

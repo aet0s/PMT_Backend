@@ -12,6 +12,10 @@ async function runTenantRetention(db, tenantId = null) {
     const { cleanOldPushData } = require('../services/pushService');
     await cleanOldPushData(db);
   } catch (_) {}
+  try {
+    const { cleanOldTrashedNotes } = require('../routes/notes');
+    await cleanOldTrashedNotes(db);
+  } catch (_) {}
   return notifPurged;
 }
 

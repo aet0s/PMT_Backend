@@ -1051,6 +1051,94 @@
     "isPublic": false
   },
   {
+    "name": "notes.batch_positions",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "positions"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.create",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.delete",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "note_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.duplicate",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "note_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.list",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "(passthrough / empty)"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.purge",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "note_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.restore",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "note_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
+    "name": "notes.update",
+    "domain": "notes",
+    "requireAuth": true,
+    "permission": "(object-level / internal)",
+    "schemaFields": [
+      "note_id"
+    ],
+    "tenantScope": "tenant",
+    "isPublic": false
+  },
+  {
     "name": "notifications.board_mark_all_read",
     "domain": "notifications",
     "requireAuth": true,

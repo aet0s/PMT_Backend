@@ -16,6 +16,7 @@ internalApiRouter.use('/archived', require('../routes/archive'));
 internalApiRouter.use('/attachments', require('../routes/attachments'));
 internalApiRouter.use('/invitations', require('../routes/invitations'));
 internalApiRouter.use('/notifications', require('../routes/notifications'));
+internalApiRouter.use('/notes', require('../routes/notes'));
 internalApiRouter.use('/permissions', require('../routes/permissions'));
 internalApiRouter.use('/roles', require('../routes/roles'));
 internalApiRouter.use('/files', require('../routes/files'));

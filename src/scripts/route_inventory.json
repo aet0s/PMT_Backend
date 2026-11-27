@@ -643,6 +643,54 @@
       "fullPath": "/api/lists/:id"
     },
     {
+      "file": "notes.js",
+      "method": "GET",
+      "subpath": "/",
+      "fullPath": "/api/notes"
+    },
+    {
+      "file": "notes.js",
+      "method": "POST",
+      "subpath": "/",
+      "fullPath": "/api/notes"
+    },
+    {
+      "file": "notes.js",
+      "method": "POST",
+      "subpath": "/batch-positions",
+      "fullPath": "/api/notes/batch-positions"
+    },
+    {
+      "file": "notes.js",
+      "method": "PATCH",
+      "subpath": "/:id",
+      "fullPath": "/api/notes/:id"
+    },
+    {
+      "file": "notes.js",
+      "method": "POST",
+      "subpath": "/:id/duplicate",
+      "fullPath": "/api/notes/:id/duplicate"
+    },
+    {
+      "file": "notes.js",
+      "method": "DELETE",
+      "subpath": "/:id",
+      "fullPath": "/api/notes/:id"
+    },
+    {
+      "file": "notes.js",
+      "method": "POST",
+      "subpath": "/:id/restore",
+      "fullPath": "/api/notes/:id/restore"
+    },
+    {
+      "file": "notes.js",
+      "method": "DELETE",
+      "subpath": "/:id/purge",
+      "fullPath": "/api/notes/:id/purge"
+    },
+    {
       "file": "notifications.js",
       "method": "GET",
       "subpath": "/",
@@ -1081,5 +1129,5 @@
       "fullPath": "/api/workspaces/:id/leave-days/:leaveId"
     }
   ],
-  "count": 180
+  "count": 188
 }

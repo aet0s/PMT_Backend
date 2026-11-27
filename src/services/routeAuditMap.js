@@ -396,6 +396,38 @@ const ROUTE_AUDIT_MAP = {
   },
 
   // ==========================================
+  // --- PERSONAL NOTES (STRICTLY PRIVATE) ---
+  // ==========================================
+  'POST /api/notes': {
+    exemption: true,
+    reason: 'Private personal sticky note creation (no note content in shared audit logs)'
+  },
+  'POST /api/notes/batch-positions': {
+    exemption: true,
+    reason: 'Private personal sticky note canvas layout update'
+  },
+  'PATCH /api/notes/:id': {
+    exemption: true,
+    reason: 'Private personal sticky note update (no note content in shared audit logs)'
+  },
+  'POST /api/notes/:id/duplicate': {
+    exemption: true,
+    reason: 'Private personal sticky note duplication'
+  },
+  'DELETE /api/notes/:id': {
+    exemption: true,
+    reason: 'Private personal sticky note soft delete'
+  },
+  'POST /api/notes/:id/restore': {
+    exemption: true,
+    reason: 'Private personal sticky note restore'
+  },
+  'DELETE /api/notes/:id/purge': {
+    exemption: true,
+    reason: 'Private personal sticky note permanent purge'
+  },
+
+  // ==========================================
   // --- PUSH NOTIFICATIONS ---
   // ==========================================
   'POST /api/push/subscriptions': {
