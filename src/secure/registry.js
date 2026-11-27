@@ -2010,7 +2010,12 @@ registerOperation('push.subscriptions.create', {
 registerOperation('push.subscriptions.delete_current', {
   schema: z.object({}).passthrough(),
   handler: async (ctx, data) => {
-    return await dispatchInternal(ctx, { method: 'DELETE', url: '/api/push/subscriptions/current' });
+    return await dispatchInternal(ctx, {
+      method: 'DELETE',
+      url: '/api/push/subscriptions/current',
+      body: data,
+      query: data
+    });
   }
 });
 
